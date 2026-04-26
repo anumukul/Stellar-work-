@@ -51,6 +51,7 @@ pub enum Error {
     InsufficientFunds = 4,
     JobAlreadyAccepted = 5,
     DeadlinePassed = 6,
+    AlreadyInitialized = 7,
 }
 
 #[contract]
@@ -60,7 +61,7 @@ pub struct EscrowContract;
 impl EscrowContract {
     pub fn initialize(e: Env, admin: Address, native_token: Address) {
         if e.storage().instance().has(&DataKey::Admin) {
-            return;
+            panic_with_error!(&e, Error::AlreadyInitialized);
         }
         admin.require_auth();
         e.storage().instance().set(&DataKey::Admin, &admin);
@@ -370,5 +371,35 @@ mod test {
         let (env, client, user, _, _) = setup();
         let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64);
         client.approve_work(&user, &job_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::{Env, Address};
+
+    #[test]
+    #[should_panic]
+    fn test_double_initialize_fails() {
+        let e = Env::default();
+        let admin = Address::generate(&e);
+        let token = Address::generate(&e);
+
+        EscrowContract::initialize(e.clone(), admin.clone(), token.clone());
+        // second call should panic
+        EscrowContract::initialize(e.clone(), admin, token);
+    }
+
+    #[test]
+    fn test_initialize_once_works() {
+        let e = Env::default();
+        let admin = Address::generate(&e);
+        let token = Address::generate(&e);
+
+        EscrowContract::initialize(e.clone(), admin.clone(), token.clone());
+
+        let stored_admin: Address = e.storage().instance().get(&DataKey::Admin).unwrap();
+        assert_eq!(stored_admin, admin);
     }
 }
