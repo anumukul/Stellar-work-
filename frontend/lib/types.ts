@@ -14,4 +14,5 @@ export interface Job {
   status: JobStatus;
   created_at: string;
   deadline: string;
+  token: string;
 }

@@ -2,11 +2,17 @@
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, BytesN,
-    Env,
+    Env, Symbol,
 };
 
 const FEE_BPS: i128 = 250;
 const BPS_DENOMINATOR: i128 = 10_000;
+
+const INSTANCE_LIFETIME_THRESHOLD: u32 = 17_280;
+const INSTANCE_BUMP_AMOUNT: u32 = 518_400;
+const ACTIVE_JOB_LIFETIME_THRESHOLD: u32 = 17_280;
+const ACTIVE_JOB_BUMP_AMOUNT: u32 = 518_400;
+const ARCHIVAL_JOB_BUMP_AMOUNT: u32 = 120_960;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -29,6 +35,7 @@ pub struct Job {
     pub status: JobStatus,
     pub created_at: u64,
     pub deadline: u64,
+    pub token: Address,
 }
 
 #[contracttype]
@@ -39,6 +46,8 @@ pub enum DataKey {
     Admin,
     NativeToken,
     FeesAccrued,
+    AllowedToken(Address),
+    TokenFees(Address),
 }
 
 #[contracterror]
@@ -52,6 +61,8 @@ pub enum Error {
     JobAlreadyAccepted = 5,
     DeadlinePassed = 6,
     AlreadyInitialized = 7,
+    DeadlineNotExpired = 7,
+    TokenNotAllowed = 8,
 }
 
 #[contract]
@@ -65,37 +76,67 @@ impl EscrowContract {
         }
         admin.require_auth();
         e.storage().instance().set(&DataKey::Admin, &admin);
-        e.storage().instance().set(&DataKey::NativeToken, &native_token);
+        e.storage()
+            .instance()
+            .set(&DataKey::NativeToken, &native_token);
         e.storage().instance().set(&DataKey::JobsCount, &0u64);
-        e.storage().instance().set(&DataKey::FeesAccrued, &0i128);
+        e.storage()
+            .persistent()
+            .set(&DataKey::AllowedToken(native_token.clone()), &true);
+        e.storage().persistent().extend_ttl(
+            &DataKey::AllowedToken(native_token),
+            ACTIVE_JOB_LIFETIME_THRESHOLD,
+            INSTANCE_BUMP_AMOUNT,
+        );
+        bump_instance_ttl(&e);
     }
 
-    pub fn post_job(e: Env, client: Address, amount: i128, desc_hash: BytesN<32>, deadline: u64) -> u64 {
+    pub fn post_job(
+        e: Env,
+        client: Address,
+        amount: i128,
+        desc_hash: BytesN<32>,
+        deadline: u64,
+        token: Address,
+    ) -> u64 {
         if amount <= 0 {
             panic_with_error!(&e, Error::InsufficientFunds);
         }
-
         client.require_auth();
         if deadline != 0 && e.ledger().timestamp() > deadline {
             panic_with_error!(&e, Error::DeadlinePassed);
         }
+        if !e
+            .storage()
+            .persistent()
+            .has(&DataKey::AllowedToken(token.clone()))
+        {
+            panic_with_error!(&e, Error::TokenNotAllowed);
+        }
 
-        let native_token = get_native_token(&e);
-        let token_client = token::Client::new(&e, &native_token);
+        let token_client = token::Client::new(&e, &token);
         token_client.transfer(&client, &e.current_contract_address(), &amount);
 
         let job_id = next_job_id(&e);
         let job = Job {
-            client,
+            client: client.clone(),
             freelancer: Option::None,
             amount,
             description_hash: desc_hash,
             status: JobStatus::Open,
             created_at: e.ledger().timestamp(),
             deadline,
+            token: token.clone(),
         };
 
         set_job(&e, job_id, &job);
+        bump_instance_ttl(&e);
+
+        e.events().publish(
+            (Symbol::new(&e, "job_created"),),
+            (job_id, client, amount, token),
+        );
+
         job_id
     }
 
@@ -116,9 +157,15 @@ impl EscrowContract {
             panic_with_error!(&e, Error::DeadlinePassed);
         }
 
-        job.freelancer = Option::Some(freelancer);
+        job.freelancer = Option::Some(freelancer.clone());
         job.status = JobStatus::InProgress;
         set_job(&e, job_id, &job);
+        bump_instance_ttl(&e);
+
+        e.events().publish(
+            (Symbol::new(&e, "job_accepted"),),
+            (job_id, freelancer),
+        );
     }
 
     pub fn submit_work(e: Env, freelancer: Address, job_id: u64) {
@@ -128,12 +175,21 @@ impl EscrowContract {
         if job.status != JobStatus::InProgress {
             panic_with_error!(&e, Error::InvalidStatus);
         }
-        if job.freelancer != Option::Some(freelancer) {
+        if job.freelancer != Option::Some(freelancer.clone()) {
             panic_with_error!(&e, Error::Unauthorized);
+        }
+        if job.deadline != 0 && e.ledger().timestamp() > job.deadline {
+            panic_with_error!(&e, Error::DeadlinePassed);
         }
 
         job.status = JobStatus::SubmittedForReview;
         set_job(&e, job_id, &job);
+        bump_instance_ttl(&e);
+
+        e.events().publish(
+            (Symbol::new(&e, "job_submitted"),),
+            (job_id, freelancer),
+        );
     }
 
     pub fn approve_work(e: Env, client: Address, job_id: u64) {
@@ -154,15 +210,24 @@ impl EscrowContract {
 
         let fee = checked_mul_div(&e, job.amount, FEE_BPS, BPS_DENOMINATOR);
         let payout = checked_sub(&e, job.amount, fee);
-        let updated_fees = checked_add(&e, get_fees_accrued(&e), fee);
+        let current_fees = get_token_fees(&e, &job.token);
+        let updated_fees = checked_add(&e, current_fees, fee);
 
         job.status = JobStatus::Completed;
         set_job(&e, job_id, &job);
-        e.storage().instance().set(&DataKey::FeesAccrued, &updated_fees);
+        e.storage()
+            .persistent()
+            .set(&DataKey::TokenFees(job.token.clone()), &updated_fees);
+        bump_token_fees_ttl(&e, &job.token);
+        bump_instance_ttl(&e);
 
-        let native_token = get_native_token(&e);
-        let token_client = token::Client::new(&e, &native_token);
+        let token_client = token::Client::new(&e, &job.token);
         token_client.transfer(&e.current_contract_address(), &freelancer, &payout);
+
+        e.events().publish(
+            (Symbol::new(&e, "job_approved"),),
+            (job_id, client, freelancer, payout),
+        );
     }
 
     pub fn cancel_job(e: Env, client: Address, job_id: u64) {
@@ -178,10 +243,124 @@ impl EscrowContract {
 
         job.status = JobStatus::Cancelled;
         set_job(&e, job_id, &job);
+        bump_instance_ttl(&e);
 
-        let native_token = get_native_token(&e);
-        let token_client = token::Client::new(&e, &native_token);
-        token_client.transfer(&e.current_contract_address(), &job.client, &job.amount);
+        let token_client = token::Client::new(&e, &job.token);
+        token_client.transfer(&e.current_contract_address(), &client, &job.amount);
+
+        e.events().publish(
+            (Symbol::new(&e, "job_cancelled"),),
+            (job_id, client),
+        );
+    }
+
+    pub fn enforce_deadline(e: Env, client: Address, job_id: u64) {
+        let mut job = get_job_or_panic(&e, job_id);
+        client.require_auth();
+
+        if job.client != client {
+            panic_with_error!(&e, Error::Unauthorized);
+        }
+        if job.status != JobStatus::InProgress {
+            panic_with_error!(&e, Error::InvalidStatus);
+        }
+        if job.deadline == 0 {
+            panic_with_error!(&e, Error::InvalidStatus);
+        }
+        if e.ledger().timestamp() <= job.deadline {
+            panic_with_error!(&e, Error::DeadlineNotExpired);
+        }
+
+        job.status = JobStatus::Cancelled;
+        set_job(&e, job_id, &job);
+        bump_instance_ttl(&e);
+
+        let token_client = token::Client::new(&e, &job.token);
+        token_client.transfer(&e.current_contract_address(), &client, &job.amount);
+
+        e.events().publish(
+            (Symbol::new(&e, "deadline_enforced"),),
+            (job_id, client),
+        );
+    }
+
+    pub fn extend_job_ttl(e: Env, caller: Address, job_id: u64) {
+        caller.require_auth();
+        let job = get_job_or_panic(&e, job_id);
+        if job.client != caller && job.freelancer != Option::Some(caller.clone()) {
+            panic_with_error!(&e, Error::Unauthorized);
+        }
+        bump_job_ttl(&e, job_id, &job);
+        bump_instance_ttl(&e);
+    }
+
+    pub fn raise_dispute(e: Env, caller: Address, job_id: u64) {
+        let mut job = get_job_or_panic(&e, job_id);
+        caller.require_auth();
+
+        if job.status != JobStatus::InProgress && job.status != JobStatus::SubmittedForReview {
+            panic_with_error!(&e, Error::InvalidStatus);
+        }
+        if job.client != caller && job.freelancer != Option::Some(caller.clone()) {
+            panic_with_error!(&e, Error::Unauthorized);
+        }
+
+        job.status = JobStatus::Disputed;
+        set_job(&e, job_id, &job);
+        bump_instance_ttl(&e);
+
+        e.events().publish(
+            (Symbol::new(&e, "job_disputed"),),
+            (job_id, caller),
+        );
+    }
+
+    pub fn resolve_dispute(e: Env, job_id: u64, winner: Address) {
+        let admin = get_admin(&e);
+        admin.require_auth();
+
+        let mut job = get_job_or_panic(&e, job_id);
+        if job.status != JobStatus::Disputed {
+            panic_with_error!(&e, Error::InvalidStatus);
+        }
+
+        let freelancer = match job.freelancer.clone() {
+            Option::Some(addr) => addr,
+            Option::None => panic_with_error!(&e, Error::InvalidStatus),
+        };
+
+        if winner == job.client {
+            job.status = JobStatus::Cancelled;
+            set_job(&e, job_id, &job);
+
+            let token_client = token::Client::new(&e, &job.token);
+            token_client.transfer(&e.current_contract_address(), &job.client, &job.amount);
+        } else if winner == freelancer {
+            let fee = checked_mul_div(&e, job.amount, FEE_BPS, BPS_DENOMINATOR);
+            let payout = checked_sub(&e, job.amount, fee);
+            let current_fees = get_token_fees(&e, &job.token);
+            let updated_fees = checked_add(&e, current_fees, fee);
+
+            e.storage()
+                .persistent()
+                .set(&DataKey::TokenFees(job.token.clone()), &updated_fees);
+            bump_token_fees_ttl(&e, &job.token);
+
+            job.status = JobStatus::Completed;
+            set_job(&e, job_id, &job);
+
+            let token_client = token::Client::new(&e, &job.token);
+            token_client.transfer(&e.current_contract_address(), &freelancer, &payout);
+        } else {
+            panic_with_error!(&e, Error::Unauthorized);
+        }
+
+        bump_instance_ttl(&e);
+
+        e.events().publish(
+            (Symbol::new(&e, "dispute_resolved"),),
+            (job_id, winner),
+        );
     }
 
     pub fn get_job(e: Env, job_id: u64) -> Job {
@@ -192,31 +371,64 @@ impl EscrowContract {
         get_jobs_count(&e)
     }
 
-    pub fn raise_dispute(_e: Env, _job_id: u64) {
-        panic!("not implemented");
+    pub fn get_native_token(e: Env) -> Address {
+        load_native_token(&e)
     }
 
-    pub fn resolve_dispute(_e: Env, _job_id: u64, _winner: Address) {
-        panic!("not implemented");
-    }
-
-    pub fn withdraw_fees(e: Env) {
+    pub fn withdraw_fees(e: Env, token: Address) {
         let admin = get_admin(&e);
         admin.require_auth();
 
-        let fees = get_fees_accrued(&e);
+        let fees = get_token_fees(&e, &token);
         if fees <= 0 {
             return;
         }
-        e.storage().instance().set(&DataKey::FeesAccrued, &0i128);
+        e.storage()
+            .persistent()
+            .set(&DataKey::TokenFees(token.clone()), &0i128);
+        bump_token_fees_ttl(&e, &token);
+        bump_instance_ttl(&e);
 
-        let native_token = get_native_token(&e);
-        let token_client = token::Client::new(&e, &native_token);
+        let token_client = token::Client::new(&e, &token);
         token_client.transfer(&e.current_contract_address(), &admin, &fees);
+
+        e.events().publish(
+            (Symbol::new(&e, "fees_withdrawn"),),
+            (token, fees),
+        );
     }
 
-    pub fn get_fees(e: Env) -> i128 {
-        get_fees_accrued(&e)
+    pub fn get_fees(e: Env, token: Address) -> i128 {
+        get_token_fees(&e, &token)
+    }
+
+    pub fn add_allowed_token(e: Env, token: Address) {
+        let admin = get_admin(&e);
+        admin.require_auth();
+        e.storage()
+            .persistent()
+            .set(&DataKey::AllowedToken(token.clone()), &true);
+        e.storage().persistent().extend_ttl(
+            &DataKey::AllowedToken(token),
+            ACTIVE_JOB_LIFETIME_THRESHOLD,
+            INSTANCE_BUMP_AMOUNT,
+        );
+        bump_instance_ttl(&e);
+    }
+
+    pub fn remove_allowed_token(e: Env, token: Address) {
+        let admin = get_admin(&e);
+        admin.require_auth();
+        e.storage()
+            .persistent()
+            .remove(&DataKey::AllowedToken(token));
+        bump_instance_ttl(&e);
+    }
+
+    pub fn is_token_allowed(e: Env, token: Address) -> bool {
+        e.storage()
+            .persistent()
+            .has(&DataKey::AllowedToken(token))
     }
 }
 
@@ -229,6 +441,36 @@ fn get_job_or_panic(e: &Env, job_id: u64) -> Job {
 
 fn set_job(e: &Env, job_id: u64, job: &Job) {
     e.storage().persistent().set(&DataKey::Job(job_id), job);
+    bump_job_ttl(e, job_id, job);
+}
+
+fn bump_job_ttl(e: &Env, job_id: u64, job: &Job) {
+    let bump = match job.status {
+        JobStatus::Completed | JobStatus::Cancelled => ARCHIVAL_JOB_BUMP_AMOUNT,
+        _ => ACTIVE_JOB_BUMP_AMOUNT,
+    };
+    e.storage().persistent().extend_ttl(
+        &DataKey::Job(job_id),
+        ACTIVE_JOB_LIFETIME_THRESHOLD,
+        bump,
+    );
+}
+
+fn bump_instance_ttl(e: &Env) {
+    e.storage()
+        .instance()
+        .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+}
+
+fn bump_token_fees_ttl(e: &Env, token: &Address) {
+    let key = DataKey::TokenFees(token.clone());
+    if e.storage().persistent().has(&key) {
+        e.storage().persistent().extend_ttl(
+            &key,
+            ACTIVE_JOB_LIFETIME_THRESHOLD,
+            INSTANCE_BUMP_AMOUNT,
+        );
+    }
 }
 
 fn get_jobs_count(e: &Env) -> u64 {
@@ -245,7 +487,7 @@ fn next_job_id(e: &Env) -> u64 {
     next
 }
 
-fn get_native_token(e: &Env) -> Address {
+fn load_native_token(e: &Env) -> Address {
     e.storage()
         .instance()
         .get::<DataKey, Address>(&DataKey::NativeToken)
@@ -259,10 +501,10 @@ fn get_admin(e: &Env) -> Address {
         .unwrap_or_else(|| panic!("admin not configured"))
 }
 
-fn get_fees_accrued(e: &Env) -> i128 {
+fn get_token_fees(e: &Env, token: &Address) -> i128 {
     e.storage()
-        .instance()
-        .get::<DataKey, i128>(&DataKey::FeesAccrued)
+        .persistent()
+        .get::<DataKey, i128>(&DataKey::TokenFees(token.clone()))
         .unwrap_or(0)
 }
 
@@ -287,10 +529,17 @@ mod test {
     extern crate std;
 
     use super::*;
-    use soroban_sdk::testutils::{Address as _, Ledger};
+    use soroban_sdk::testutils::{Address as _, Events, Ledger};
     use soroban_sdk::{Address, BytesN, Env};
 
-    fn setup() -> (Env, EscrowContractClient<'static>, Address, Address, Address) {
+    fn setup() -> (
+        Env,
+        EscrowContractClient<'static>,
+        Address,
+        Address,
+        Address,
+        Address,
+    ) {
         let env = Env::default();
         env.mock_all_auths();
         env.ledger().with_mut(|li| {
@@ -313,7 +562,7 @@ mod test {
         let asset = token::StellarAssetClient::new(&env, &native_token);
         asset.mint(&user, &10_000_000_000);
 
-        (env, client, user, freelancer, native_token)
+        (env, client, admin, user, freelancer, native_token)
     }
 
     fn hash(env: &Env) -> BytesN<32> {
@@ -322,19 +571,20 @@ mod test {
 
     #[test]
     fn post_job_increments_count() {
-        let (env, client, user, _, _) = setup();
-        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64);
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
         assert_eq!(job_id, 1);
         assert_eq!(client.get_job_count(), 1);
         let posted = client.get_job(&job_id);
         assert_eq!(posted.status, JobStatus::Open);
         assert_eq!(posted.client, user);
+        assert_eq!(posted.token, native_token);
     }
 
     #[test]
     fn accept_and_approve_happy_path() {
-        let (env, client, user, freelancer, native_token) = setup();
-        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64);
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
 
@@ -345,7 +595,7 @@ mod test {
 
         let post_balance = token_client.balance(&freelancer);
         assert_eq!(post_balance - pre_balance, 975_000);
-        assert_eq!(client.get_fees(), 25_000);
+        assert_eq!(client.get_fees(&native_token), 25_000);
 
         let job = client.get_job(&job_id);
         assert_eq!(job.status, JobStatus::Completed);
@@ -353,11 +603,11 @@ mod test {
 
     #[test]
     fn cancel_job_refunds_client() {
-        let (env, client, user, _, native_token) = setup();
+        let (env, client, _, user, _, native_token) = setup();
         let token_client = token::Client::new(&env, &native_token);
         let pre_balance = token_client.balance(&user);
 
-        let job_id = client.post_job(&user, &500_000i128, &hash(&env), &0u64);
+        let job_id = client.post_job(&user, &500_000i128, &hash(&env), &0u64, &native_token);
         client.cancel_job(&user, &job_id);
 
         let post_balance = token_client.balance(&user);
@@ -368,9 +618,342 @@ mod test {
     #[test]
     #[should_panic]
     fn approve_fails_in_wrong_status() {
-        let (env, client, user, _, _) = setup();
-        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64);
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
         client.approve_work(&user, &job_id);
+    }
+
+    #[test]
+    fn ttl_bumped_on_state_transitions() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Completed);
+    }
+
+    #[test]
+    fn extend_job_ttl_by_client() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.extend_job_ttl(&user, &job_id);
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Open);
+    }
+
+    #[test]
+    fn extend_job_ttl_by_freelancer() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.extend_job_ttl(&freelancer, &job_id);
+        assert_eq!(client.get_job(&job_id).status, JobStatus::InProgress);
+    }
+
+    #[test]
+    #[should_panic]
+    fn extend_job_ttl_unauthorized() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        let stranger = Address::generate(&env);
+        client.extend_job_ttl(&stranger, &job_id);
+    }
+
+    #[test]
+    #[should_panic]
+    fn submit_work_past_deadline() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let deadline = 1_710_000_000 + 3600;
+        let job_id =
+            client.post_job(&user, &1_000_000i128, &hash(&env), &deadline, &native_token);
+        client.accept_job(&freelancer, &job_id);
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = deadline + 1;
+        });
+
+        client.submit_work(&freelancer, &job_id);
+    }
+
+    #[test]
+    fn submit_work_no_deadline_always_allowed() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = 9_999_999_999;
+        });
+
+        client.submit_work(&freelancer, &job_id);
+        assert_eq!(
+            client.get_job(&job_id).status,
+            JobStatus::SubmittedForReview
+        );
+    }
+
+    #[test]
+    fn enforce_deadline_reclaims_funds() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let deadline = 1_710_000_000 + 3600;
+        let token_client = token::Client::new(&env, &native_token);
+        let pre_balance = token_client.balance(&user);
+
+        let job_id =
+            client.post_job(&user, &1_000_000i128, &hash(&env), &deadline, &native_token);
+        client.accept_job(&freelancer, &job_id);
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = deadline + 1;
+        });
+
+        client.enforce_deadline(&user, &job_id);
+
+        let post_balance = token_client.balance(&user);
+        assert_eq!(post_balance, pre_balance);
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Cancelled);
+    }
+
+    #[test]
+    #[should_panic]
+    fn enforce_deadline_before_expiry_fails() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let deadline = 1_710_000_000 + 3600;
+        let job_id =
+            client.post_job(&user, &1_000_000i128, &hash(&env), &deadline, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.enforce_deadline(&user, &job_id);
+    }
+
+    #[test]
+    #[should_panic]
+    fn enforce_deadline_no_deadline_fails() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = 9_999_999_999;
+        });
+
+        client.enforce_deadline(&user, &job_id);
+    }
+
+    #[test]
+    #[should_panic]
+    fn enforce_deadline_wrong_status_fails() {
+        let (env, client, _, user, _, native_token) = setup();
+        let deadline = 1_710_000_000 + 3600;
+        let job_id =
+            client.post_job(&user, &1_000_000i128, &hash(&env), &deadline, &native_token);
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = deadline + 1;
+        });
+
+        client.enforce_deadline(&user, &job_id);
+    }
+
+    #[test]
+    fn events_emitted_on_post_job() {
+        let (env, client, _, user, _, native_token) = setup();
+        client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+
+        let events = env.events().all();
+        assert!(events.len() > 0);
+    }
+
+    #[test]
+    fn events_emitted_on_full_lifecycle() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
+
+        let events = env.events().all();
+        assert!(events.len() >= 4);
+    }
+
+    #[test]
+    fn post_job_with_custom_token() {
+        let (env, client, _, user, _, _) = setup();
+        let custom_token_admin = Address::generate(&env);
+        let custom_token = env
+            .register_stellar_asset_contract_v2(custom_token_admin)
+            .address();
+        client.add_allowed_token(&custom_token);
+
+        let asset = token::StellarAssetClient::new(&env, &custom_token);
+        asset.mint(&user, &5_000_000_000);
+
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &custom_token);
+        let job = client.get_job(&job_id);
+        assert_eq!(job.token, custom_token);
+    }
+
+    #[test]
+    fn approve_with_custom_token() {
+        let (env, client, _, user, freelancer, _) = setup();
+        let custom_token_admin = Address::generate(&env);
+        let custom_token = env
+            .register_stellar_asset_contract_v2(custom_token_admin)
+            .address();
+        client.add_allowed_token(&custom_token);
+
+        let asset = token::StellarAssetClient::new(&env, &custom_token);
+        asset.mint(&user, &5_000_000_000);
+
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &custom_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+
+        let token_client = token::Client::new(&env, &custom_token);
+        let pre_balance = token_client.balance(&freelancer);
+        client.approve_work(&user, &job_id);
+        let post_balance = token_client.balance(&freelancer);
+        assert_eq!(post_balance - pre_balance, 975_000);
+        assert_eq!(client.get_fees(&custom_token), 25_000);
+    }
+
+    #[test]
+    fn cancel_with_custom_token() {
+        let (env, client, _, user, _, _) = setup();
+        let custom_token_admin = Address::generate(&env);
+        let custom_token = env
+            .register_stellar_asset_contract_v2(custom_token_admin)
+            .address();
+        client.add_allowed_token(&custom_token);
+
+        let asset = token::StellarAssetClient::new(&env, &custom_token);
+        asset.mint(&user, &5_000_000_000);
+
+        let token_client = token::Client::new(&env, &custom_token);
+        let pre_balance = token_client.balance(&user);
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &custom_token);
+        client.cancel_job(&user, &job_id);
+
+        let post_balance = token_client.balance(&user);
+        assert_eq!(post_balance, pre_balance);
+    }
+
+    #[test]
+    #[should_panic]
+    fn token_not_allowed_fails() {
+        let (env, client, _, user, _, _) = setup();
+        let rogue_token_admin = Address::generate(&env);
+        let rogue_token = env
+            .register_stellar_asset_contract_v2(rogue_token_admin)
+            .address();
+
+        let asset = token::StellarAssetClient::new(&env, &rogue_token);
+        asset.mint(&user, &5_000_000_000);
+
+        client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &rogue_token);
+    }
+
+    #[test]
+    fn withdraw_fees_per_token() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
+
+        assert_eq!(client.get_fees(&native_token), 25_000);
+
+        let token_client = token::Client::new(&env, &native_token);
+        let pre_balance = token_client.balance(&admin);
+        client.withdraw_fees(&native_token);
+        let post_balance = token_client.balance(&admin);
+
+        assert_eq!(post_balance - pre_balance, 25_000);
+        assert_eq!(client.get_fees(&native_token), 0);
+    }
+
+    #[test]
+    fn token_whitelist_management() {
+        let (env, client, _, _, _, native_token) = setup();
+        assert!(client.is_token_allowed(&native_token));
+
+        let new_token_admin = Address::generate(&env);
+        let new_token = env
+            .register_stellar_asset_contract_v2(new_token_admin)
+            .address();
+        assert!(!client.is_token_allowed(&new_token));
+
+        client.add_allowed_token(&new_token);
+        assert!(client.is_token_allowed(&new_token));
+
+        client.remove_allowed_token(&new_token);
+        assert!(!client.is_token_allowed(&new_token));
+    }
+
+    #[test]
+    fn raise_and_resolve_dispute_client_wins() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let token_client = token::Client::new(&env, &native_token);
+        let pre_balance = token_client.balance(&user);
+
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.raise_dispute(&user, &job_id);
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Disputed);
+
+        client.resolve_dispute(&job_id, &user);
+        let post_balance = token_client.balance(&user);
+        assert_eq!(post_balance, pre_balance);
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Cancelled);
+    }
+
+    #[test]
+    fn raise_and_resolve_dispute_freelancer_wins() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+        client.raise_dispute(&user, &job_id);
+
+        let token_client = token::Client::new(&env, &native_token);
+        let pre_balance = token_client.balance(&freelancer);
+
+        client.resolve_dispute(&job_id, &freelancer);
+
+        let post_balance = token_client.balance(&freelancer);
+        assert_eq!(post_balance - pre_balance, 975_000);
+        assert_eq!(client.get_fees(&native_token), 25_000);
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Completed);
+    }
+
+    #[test]
+    fn events_emitted_on_cancel_and_dispute() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.raise_dispute(&freelancer, &job_id);
+        client.resolve_dispute(&job_id, &user);
+
+        let events = env.events().all();
+        assert!(events.len() >= 4);
+    }
+
+    #[test]
+    fn events_emitted_on_withdraw_fees() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
+        client.withdraw_fees(&native_token);
+
+        let events = env.events().all();
+        assert!(events.len() >= 5);
+    }
+
+    #[test]
+    fn get_native_token_returns_configured() {
+        let (_, client, _, _, _, native_token) = setup();
+        assert_eq!(client.get_native_token(), native_token);
     }
 }
 
