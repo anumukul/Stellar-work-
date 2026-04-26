@@ -17,6 +17,9 @@ export default function PostJobPage() {
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
   const [deadline, setDeadline] = useState("");
+  const [tokenAddress, setTokenAddress] = useState(
+    process.env.NEXT_PUBLIC_NATIVE_TOKEN ?? "",
+  );
   const [status, setStatus] = useState<string | null>(null);
 
   return (
@@ -49,7 +52,7 @@ export default function PostJobPage() {
             : "0";
 
           localStorage.setItem(`job-desc:${hashHex}`, description);
-          await postJob(wallet, String(amountStroops), hashHex, deadlineUnix);
+          await postJob(wallet, String(amountStroops), hashHex, deadlineUnix, tokenAddress);
           setStatus("Job submitted to contract.");
           setAmount("");
           setDescription("");
@@ -86,6 +89,17 @@ export default function PostJobPage() {
             type="date"
             value={deadline}
             onChange={(e) => setDeadline(e.target.value)}
+          />
+        </label>
+
+        <label className="block text-sm font-medium">
+          Token Address
+          <input
+            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 font-mono text-xs"
+            type="text"
+            value={tokenAddress}
+            onChange={(e) => setTokenAddress(e.target.value)}
+            required
           />
         </label>
 
