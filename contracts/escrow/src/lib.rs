@@ -1055,4 +1055,44 @@ mod test {
         client.accept_job(&freelancer, &job_id);
         client.approve_work(&user, &job_id);
     }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #2)")]
+    fn client_cannot_submit_work() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&user, &job_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #2)")]
+    fn random_address_cannot_submit_work() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+
+        let random = Address::generate(&env);
+        client.submit_work(&random, &job_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn submit_work_on_open_job_panics() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.submit_work(&freelancer, &job_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn submit_work_on_completed_job_panics() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
+
+        client.submit_work(&freelancer, &job_id);
+    }
 }
