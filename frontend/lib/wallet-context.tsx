@@ -56,6 +56,7 @@ export function useWallet() {
 
 export function WalletButton() {
   const { wallet, connectWallet, disconnectWallet } = useWallet();
+  const [connecting, setConnecting] = useState(false);
 
   if (wallet) {
     return (
@@ -76,15 +77,20 @@ export function WalletButton() {
   return (
     <button
       onClick={async () => {
+        setConnecting(true);
         try {
           await connectWallet();
         } catch {
           /* user cancelled or Freighter unavailable */
+        } finally {
+          setConnecting(false);
         }
       }}
-      className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+      className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+      disabled={connecting}
+      aria-busy={connecting}
     >
-      Connect Wallet
+      {connecting ? "Connecting..." : "Connect Wallet"}
     </button>
   );
 }

@@ -41,8 +41,8 @@ export function Navigation() {
         </Link>
 
         <div className="hidden items-center gap-6 md:flex">
-          <nav className="flex items-center gap-4 text-sm">
-            {links.map(({ href, label }) => (
+          <nav aria-label="Main navigation" className="flex items-center gap-4 text-sm">
+             {links.map(({ href, label }) => (
               <Link
                 key={href}
                 href={href}
@@ -91,8 +91,8 @@ export function Navigation() {
 
       {menuOpen && (
         <div className="border-t border-slate-200 px-4 py-3 md:hidden">
-          <nav className="flex flex-col gap-3 text-sm">
-            {links.map(({ href, label }) => (
+          <nav aria-label="Main navigation" className="flex flex-col gap-3 text-sm">
+             {links.map(({ href, label }) => (
               <Link
                 key={href}
                 href={href}

@@ -15,6 +15,7 @@ export default function HomePage() {
   const [jobs, setJobs] = useState<Array<{ id: number; job: Job }>>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [actionLoading, setActionLoading] = useState<number | null>(null);
 
   const refresh = async () => {
     setLoading(true);
@@ -80,28 +81,33 @@ export default function HomePage() {
               >
                 View Details
               </Link>
-              <button
-                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
-                onClick={async () => {
-                  if (!wallet) {
-                    try {
-                      await connectWallet();
-                    } catch {
-                      setError("Failed to connect wallet. Is Freighter installed?");
-                      return;
-                    }
-                    return;
-                  }
-                  try {
-                    await acceptJob(wallet, String(id));
-                    await refresh();
-                  } catch (e) {
-                    setError(e instanceof Error ? e.message : "Failed to accept job.");
-                  }
-                }}
-              >
-                Accept Job
-              </button>
+             <button
+                 className="rounded-md border border-slate-300 px-3 py-1.5 text-sm disabled:opacity-50"
+                 onClick={async () => {
+                   if (!wallet) {
+                     try {
+                       await connectWallet();
+                     } catch {
+                       setError("Failed to connect wallet. Is Freighter installed?");
+                       return;
+                     }
+                     return;
+                   }
+                   setActionLoading(id);
+                   try {
+                     await acceptJob(wallet, String(id));
+                     await refresh();
+                   } catch (e) {
+                     setError(e instanceof Error ? e.message : "Failed to accept job.");
+                   } finally {
+                     setActionLoading(null);
+                   }
+                 }}
+                 disabled={actionLoading === id}
+                 aria-busy={actionLoading === id}
+               >
+                 {actionLoading === id ? "Processing..." : "Accept Job"}
+               </button>
             </div>
           </article>
         ))}

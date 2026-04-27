@@ -81,43 +81,47 @@ export default function JobDetailPage() {
 
           <div className="mt-4 flex flex-wrap gap-2">
             {wallet && job.status === "Open" && (
-              <button
-                className="rounded-md border border-slate-300 px-3 py-1.5 disabled:opacity-50"
-                onClick={() => handleAction(() => acceptJob(wallet, id))}
-                disabled={loading}
-              >
-                {loading ? "Processing..." : "Accept Job"}
-              </button>
+               <button
+                 className="rounded-md border border-slate-300 px-3 py-1.5 disabled:opacity-50"
+                 onClick={() => handleAction(() => acceptJob(wallet, id))}
+                 disabled={loading}
+                 aria-busy={loading}
+               >
+                 {loading ? "Processing..." : "Accept Job"}
+               </button>
             )}
 
             {isFreelancer && job.status === "InProgress" && (
-              <button
-                className="rounded-md border border-slate-300 px-3 py-1.5 disabled:opacity-50"
-                onClick={() => handleAction(() => submitWork(wallet, id))}
-                disabled={loading}
-              >
-                {loading ? "Processing..." : "Submit Work"}
-              </button>
+               <button
+                 className="rounded-md border border-slate-300 px-3 py-1.5 disabled:opacity-50"
+                 onClick={() => handleAction(() => submitWork(wallet, id))}
+                 disabled={loading}
+                 aria-busy={loading}
+               >
+                 {loading ? "Processing..." : "Submit Work"}
+               </button>
             )}
 
             {isClient && job.status === "SubmittedForReview" && (
-              <button
-                className="rounded-md border border-slate-300 px-3 py-1.5 disabled:opacity-50"
-                onClick={() => handleAction(() => approveWork(wallet, id))}
-                disabled={loading}
-              >
-                {loading ? "Processing..." : "Approve Work"}
-              </button>
+               <button
+                 className="rounded-md border border-slate-300 px-3 py-1.5 disabled:opacity-50"
+                 onClick={() => handleAction(() => approveWork(wallet, id))}
+                 disabled={loading}
+                 aria-busy={loading}
+               >
+                 {loading ? "Processing..." : "Approve Work"}
+               </button>
             )}
 
             {isClient && job.status === "Open" && (
-              <button
-                className="rounded-md border border-slate-300 px-3 py-1.5 disabled:opacity-50"
-                onClick={() => handleAction(() => cancelJob(wallet, id))}
-                disabled={loading}
-              >
-                {loading ? "Processing..." : "Cancel Job"}
-              </button>
+               <button
+                 className="rounded-md border border-slate-300 px-3 py-1.5 disabled:opacity-50"
+                 onClick={() => handleAction(() => cancelJob(wallet, id))}
+                 disabled={loading}
+                 aria-busy={loading}
+               >
+                 {loading ? "Processing..." : "Cancel Job"}
+               </button>
             )}
           </div>
         </article>
