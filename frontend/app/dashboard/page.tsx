@@ -8,7 +8,7 @@ import {
   submitWork,
   enforceDeadline,
 } from "@/lib/contract";
-import { connectWallet, getPublicKey } from "@/lib/stellar";
+import { useWallet } from "@/lib/wallet-context";
 import type { Job, JobStatus } from "@/lib/types";
 import { useEffect, useState, useCallback } from "react";
 
@@ -48,7 +48,7 @@ function formatDeadline(deadline: string) {
 }
 
 export default function DashboardPage() {
-  const [wallet, setWallet] = useState<string | null>(null);
+  const { wallet, connectWallet } = useWallet();
   const [allJobs, setAllJobs] = useState<Array<{ id: number; job: Job }>>([]);
   const [statusFilter, setStatusFilter] = useState<JobStatus | "All">("All");
   const [loading, setLoading] = useState(false);
@@ -75,14 +75,6 @@ export default function DashboardPage() {
       setLoading(false);
     }
   }, [wallet]);
-
-  useEffect(() => {
-    async function checkWallet() {
-      const key = await getPublicKey();
-      if (key) setWallet(key);
-    }
-    checkWallet();
-  }, []);
 
   useEffect(() => {
     fetchJobs();
@@ -119,7 +111,9 @@ export default function DashboardPage() {
           <p className="text-slate-600">Connect your wallet to view your jobs.</p>
           <button
             className="mt-4 rounded-md bg-slate-900 px-5 py-2.5 text-sm font-medium text-white"
-            onClick={async () => setWallet(await connectWallet())}
+            onClick={async () => {
+              try { await connectWallet(); } catch { /* cancelled */ }
+            }}
           >
             Connect Wallet
           </button>
@@ -130,15 +124,7 @@ export default function DashboardPage() {
 
   return (
     <section className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">Dashboard</h1>
-        <button
-          className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white"
-          onClick={async () => setWallet(await connectWallet())}
-        >
-          {wallet.slice(0, 6)}...{wallet.slice(-4)}
-        </button>
-      </div>
+      <h1 className="text-2xl font-semibold">Dashboard</h1>
 
       <div className="flex flex-wrap gap-2">
         <button

@@ -1,7 +1,7 @@
 "use client";
 
 import { postJob } from "@/lib/contract";
-import { connectWallet } from "@/lib/stellar";
+import { useWallet } from "@/lib/wallet-context";
 import { useState } from "react";
 
 async function sha256Hex(input: string): Promise<string> {
@@ -13,7 +13,7 @@ async function sha256Hex(input: string): Promise<string> {
 }
 
 export default function PostJobPage() {
-  const [wallet, setWallet] = useState<string | null>(null);
+  const { wallet } = useWallet();
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
   const [deadline, setDeadline] = useState("");
@@ -24,17 +24,7 @@ export default function PostJobPage() {
 
   return (
     <section className="mx-auto max-w-2xl space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Post Job</h1>
-        <button
-          className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white"
-          onClick={async () => {
-            setWallet(await connectWallet());
-          }}
-        >
-          {wallet ? `${wallet.slice(0, 6)}...${wallet.slice(-4)}` : "Connect Wallet"}
-        </button>
-      </div>
+      <h1 className="text-2xl font-semibold">Post Job</h1>
 
       <form
         className="space-y-4 rounded-lg border border-slate-200 bg-white p-5"

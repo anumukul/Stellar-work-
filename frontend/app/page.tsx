@@ -1,7 +1,7 @@
 "use client";
 
 import { acceptJob, getJob, getJobCount } from "@/lib/contract";
-import { connectWallet } from "@/lib/stellar";
+import { useWallet } from "@/lib/wallet-context";
 import type { Job } from "@/lib/types";
 import { useEffect, useState } from "react";
 
@@ -10,7 +10,7 @@ function toXlm(stroops: string) {
 }
 
 export default function HomePage() {
-  const [wallet, setWallet] = useState<string | null>(null);
+  const { wallet } = useWallet();
   const [jobs, setJobs] = useState<Array<{ id: number; job: Job }>>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -43,18 +43,7 @@ export default function HomePage() {
 
   return (
     <section className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">Open Jobs</h1>
-        <button
-          onClick={async () => {
-            const key = await connectWallet();
-            setWallet(key);
-          }}
-          className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white"
-        >
-          {wallet ? `${wallet.slice(0, 6)}...${wallet.slice(-4)}` : "Connect Wallet"}
-        </button>
-      </div>
+      <h1 className="text-2xl font-semibold">Open Jobs</h1>
 
       {error && <p className="rounded-md bg-red-100 p-3 text-sm text-red-700">{error}</p>}
       {loading && <p className="text-sm text-slate-600">Loading jobs...</p>}

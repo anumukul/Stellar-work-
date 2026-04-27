@@ -1,7 +1,7 @@
 "use client";
 
 import { acceptJob, approveWork, cancelJob, getJob, submitWork } from "@/lib/contract";
-import { connectWallet } from "@/lib/stellar";
+import { useWallet } from "@/lib/wallet-context";
 import type { Job } from "@/lib/types";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -9,7 +9,7 @@ import { useEffect, useState } from "react";
 export default function JobDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
-  const [wallet, setWallet] = useState<string | null>(null);
+  const { wallet } = useWallet();
   const [job, setJob] = useState<Job | null>(null);
 
   const load = async () => {
@@ -26,15 +26,7 @@ export default function JobDetailPage() {
 
   return (
     <section className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Job #{id}</h1>
-        <button
-          className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white"
-          onClick={async () => setWallet(await connectWallet())}
-        >
-          {wallet ? `${wallet.slice(0, 6)}...${wallet.slice(-4)}` : "Connect Wallet"}
-        </button>
-      </div>
+      <h1 className="text-2xl font-semibold">Job #{id}</h1>
 
       {!job && <p className="text-sm text-slate-600">Loading...</p>}
       {job && (

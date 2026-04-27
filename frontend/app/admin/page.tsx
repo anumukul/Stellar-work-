@@ -7,7 +7,7 @@ import {
   getNativeToken,
   withdrawFees,
 } from "@/lib/contract";
-import { connectWallet, getPublicKey } from "@/lib/stellar";
+import { useWallet } from "@/lib/wallet-context";
 import type { Job, JobStatus } from "@/lib/types";
 import { useEffect, useState, useCallback } from "react";
 
@@ -34,7 +34,7 @@ function toXlm(stroops: number) {
 }
 
 export default function AdminPage() {
-  const [wallet, setWallet] = useState<string | null>(null);
+  const { wallet, connectWallet } = useWallet();
   const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
   const [fees, setFees] = useState<number>(0);
   const [nativeToken, setNativeToken] = useState<string>("");
@@ -78,17 +78,12 @@ export default function AdminPage() {
   }, []);
 
   useEffect(() => {
-    async function checkWallet() {
-      const key = await getPublicKey();
-      if (key) {
-        setWallet(key);
-        fetchAdminData(key);
-      } else {
-        setLoading(false);
-      }
+    if (wallet) {
+      fetchAdminData(wallet);
+    } else {
+      setLoading(false);
     }
-    checkWallet();
-  }, [fetchAdminData]);
+  }, [wallet, fetchAdminData]);
 
   const handleWithdraw = async () => {
     if (!nativeToken) return;
@@ -121,9 +116,7 @@ export default function AdminPage() {
           <button
             className="mt-4 rounded-md bg-slate-900 px-5 py-2.5 text-sm font-medium text-white"
             onClick={async () => {
-              const key = await connectWallet();
-              setWallet(key);
-              fetchAdminData(key);
+              try { await connectWallet(); } catch { /* cancelled */ }
             }}
           >
             Connect Wallet
@@ -164,19 +157,7 @@ export default function AdminPage() {
 
   return (
     <section className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">Admin Panel</h1>
-        <button
-          className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white"
-          onClick={async () => {
-            const key = await connectWallet();
-            setWallet(key);
-            fetchAdminData(key);
-          }}
-        >
-          {wallet.slice(0, 6)}...{wallet.slice(-4)}
-        </button>
-      </div>
+      <h1 className="text-2xl font-semibold">Admin Panel</h1>
 
       {error && (
         <p className="rounded-md bg-red-100 p-3 text-sm text-red-700">{error}</p>
