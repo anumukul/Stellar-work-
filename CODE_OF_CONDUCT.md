@@ -2,7 +2,7 @@
 
 ## Our Pledge
 
-In the interest of fostering an open and welcoming environment, we as contributors and maintainers of **[PROJECT NAME]** pledge to make participation in our community a harassment‑free experience for everyone, regardless of age, body size, disability, ethnicity, sex characteristics, gender identity and expression, level of experience, education, socio‑economic status, nationality, personal appearance, race, religion, or sexual identity and orientation.
+In the interest of fostering an open and welcoming environment, we as contributors and maintainers of **StellarWork** pledge to make participation in our community a harassment‑free experience for everyone, regardless of age, body size, disability, ethnicity, sex characteristics, gender identity and expression, level of experience, education, socio‑economic status, nationality, personal appearance, race, religion, or sexual identity and orientation.
 
 ## Our Standards
 
@@ -24,25 +24,25 @@ Examples of unacceptable behavior include:
 
 ## Our Responsibilities
 
-Project maintainers are responsible for clarifying the standards of acceptable behavior and are expected to take appropriate and fair corrective action in response to any instances of unacceptable behavior. [web:2]
+Project maintainers are responsible for clarifying the standards of acceptable behavior and are expected to take appropriate and fair corrective action in response to any instances of unacceptable behavior.
 
 Project maintainers have the right and responsibility to remove, edit, or reject comments, commits, code, wiki edits, issues, and other contributions that are not aligned with this Code of Conduct, or to ban temporarily or permanently any contributor for other behaviors they deem inappropriate, threatening, offensive, or harmful.
 
 ## Scope
 
-This Code of Conduct applies both within project spaces and in public spaces when an individual is representing **[PROJECT NAME]** or its community. Examples include:
+This Code of Conduct applies both within project spaces and in public spaces when an individual is representing **StellarWork** or its community. Examples include:
 
 - Using an official project email address.
 - Posting via an official social media account.
-- Act­ing as an appointed representative at an online or offline event.
+- Acting as an appointed representative at an online or offline event.
 
 Representation of the project may be further defined and clarified by project maintainers.
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting the project team at **[CONTACT EMAIL / ISSUE LABEL / ETC.]**.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting the project team at **[INSERT CONTACT EMAIL OR ISSUE REPORT METHOD HERE]**.
 
-All complaints will be reviewed and investigated promptly and fairly. Maintain­ers are obligated to respect the privacy and security of the reporter of any incident. [web:1]
+All complaints will be reviewed and investigated promptly and fairly. Maintainers are obligated to respect the privacy and security of the reporter of any incident.
 
 Enforcement outcomes may include, but are not limited to:
 
@@ -51,8 +51,8 @@ Enforcement outcomes may include, but are not limited to:
 
 ## Attribution
 
-This Code of Conduct is adapted from the [Contributor Covenant][covenant], version 2.1, available at https://www.contributor-covenant.org/version/2/1/code_of_conduct.html. [web:2][web:6]
+This Code of Conduct is adapted from the [Contributor Covenant][covenant], version 2.1, available at https://www.contributor-covenant.org/version/2/1/code_of_conduct.html.
 
-For answers to common questions and translations, see https://www.contributor-covenant.org/faq.
+For answers to common questions and available translations, see https://www.contributor-covenant.org/faq.
 
 [covenant]: https://www.contributor-covenant.org
