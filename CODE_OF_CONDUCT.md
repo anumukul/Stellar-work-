@@ -40,7 +40,7 @@ Representation of the project may be further defined and clarified by project ma
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting the project team at **[INSERT CONTACT EMAIL OR ISSUE REPORT METHOD HERE]**.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting the project team at **[@anumukul]**.
 
 All complaints will be reviewed and investigated promptly and fairly. Maintainers are obligated to respect the privacy and security of the reporter of any incident.
 
