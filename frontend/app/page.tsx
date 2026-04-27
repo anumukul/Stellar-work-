@@ -3,6 +3,7 @@
 import { acceptJob, getJob, getJobCount } from "@/lib/contract";
 import { useWallet } from "@/lib/wallet-context";
 import type { Job } from "@/lib/types";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 function toXlm(stroops: string) {
@@ -10,13 +11,12 @@ function toXlm(stroops: string) {
 }
 
 export default function HomePage() {
-  const { wallet } = useWallet();
+  const { wallet, connectWallet } = useWallet();
   const [jobs, setJobs] = useState<Array<{ id: number; job: Job }>>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const refresh = async () => {
-    if (!wallet) return;
     setLoading(true);
     setError(null);
     try {
@@ -38,8 +38,7 @@ export default function HomePage() {
 
   useEffect(() => {
     void refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wallet]);
+  }, []);
 
   return (
     <section className="space-y-6">
@@ -48,10 +47,16 @@ export default function HomePage() {
       {error && <p className="rounded-md bg-red-100 p-3 text-sm text-red-700">{error}</p>}
       {loading && <p className="text-sm text-slate-600">Loading jobs...</p>}
 
+      {!loading && jobs.length === 0 && !error && (
+        <p className="text-sm text-slate-600">No open jobs found.</p>
+      )}
+
       <div className="grid gap-4 md:grid-cols-2">
         {jobs.map(({ id, job }) => (
           <article key={id} className="rounded-lg border border-slate-200 bg-white p-4">
-            <h2 className="text-lg font-medium">Job #{id}</h2>
+            <Link href={`/job/${id}`} className="block">
+              <h2 className="text-lg font-medium hover:underline">Job #{id}</h2>
+            </Link>
             <p className="mt-2 text-sm text-slate-700">{toXlm(job.amount)} XLM</p>
             <p className="mt-1 text-xs text-slate-600">
               Hash: {job.description_hash.slice(0, 12)}...
@@ -59,16 +64,31 @@ export default function HomePage() {
             <p className="mt-1 text-xs text-slate-600">
               Deadline: {job.deadline === "0" ? "No deadline" : new Date(Number(job.deadline) * 1000).toLocaleString()}
             </p>
-            <button
-              className="mt-3 rounded-md border border-slate-300 px-3 py-1.5 text-sm"
-              onClick={async () => {
-                if (!wallet) return;
-                await acceptJob(wallet, String(id));
-                await refresh();
-              }}
-            >
-              Accept Job
-            </button>
+            <div className="mt-3 flex items-center gap-2">
+              <Link
+                href={`/job/${id}`}
+                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+              >
+                View Details
+              </Link>
+              <button
+                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+                onClick={async () => {
+                  if (!wallet) {
+                    try {
+                      await connectWallet();
+                    } catch {
+                      return;
+                    }
+                    return;
+                  }
+                  await acceptJob(wallet, String(id));
+                  await refresh();
+                }}
+              >
+                Accept Job
+              </button>
+            </div>
           </article>
         ))}
       </div>

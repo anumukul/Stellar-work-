@@ -1,8 +1,10 @@
 "use client";
 
 import {
+  Account,
   BASE_FEE,
   Contract,
+  Keypair,
   Networks,
   nativeToScVal,
   Operation,
@@ -53,21 +55,33 @@ export async function signTransaction(xdrValue: string): Promise<string> {
   return "signedTxXdr" in signed ? signed.signedTxXdr : signed;
 }
 
+const READONLY_SOURCE = Keypair.random().publicKey();
+
 export async function callContract(
   contractId: string,
   method: string,
   args: xdr.ScVal[],
   options?: { readOnly?: boolean },
 ): Promise<unknown> {
-  const source = await getPublicKey();
-  if (!source) {
-    throw new Error("Connect Freighter before calling contract.");
-  }
-
   const server = new rpc.Server(getRpcUrl());
-  const account = await server.getAccount(source);
   const networkPassphrase = getNetworkPassphrase();
   const contract = new Contract(contractId);
+
+  let account;
+  if (options?.readOnly) {
+    const source = await getPublicKey();
+    if (source) {
+      account = await server.getAccount(source);
+    } else {
+      account = new Account(READONLY_SOURCE, "0");
+    }
+  } else {
+    const source = await getPublicKey();
+    if (!source) {
+      throw new Error("Connect Freighter before calling contract.");
+    }
+    account = await server.getAccount(source);
+  }
 
   const tx = new TransactionBuilder(account, {
     fee: BASE_FEE,
