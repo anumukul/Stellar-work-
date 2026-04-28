@@ -1,0 +1,22 @@
+services:
+  frontend:
+    build:
+      context: ./frontend
+      # Target the deps stage during development so we don't unnecessarily build the production app
+      target: deps
+    container_name: stellarwork-frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      # Mount the local frontend directory to /app in the container for hot reloading
+      - ./frontend:/app
+      # Create anonymous volumes for node_modules and .next so they are managed by the container
+      # and not overridden by the mounted volume
+      - /app/node_modules
+      - /app/.next
+    command: npm run dev
+    environment:
+      - NODE_ENV=development
+      # Polling watch helps with hot reload when volume mounting in some docker environments
+      - WATCHPACK_POLLING=true
+      - CHOKIDAR_USEPOLLING=true
