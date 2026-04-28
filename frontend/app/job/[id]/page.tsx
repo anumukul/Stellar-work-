@@ -17,6 +17,7 @@ export default function JobDetailPage() {
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
+  const [lastAnnouncedSuccess, setLastAnnouncedSuccess] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [fetching, setFetching] = useState(true);
   const [latestTxHash, setLatestTxHash] = useState<string | null>(null);
@@ -72,7 +73,11 @@ export default function JobDetailPage() {
         setLatestTxHash(result.hash);
       }
       await load();
-      setStatusMsg("Action completed successfully.");
+      const nextSuccess = "Action completed successfully.";
+      setStatusMsg(nextSuccess);
+      if (nextSuccess !== lastAnnouncedSuccess) {
+        setLastAnnouncedSuccess(nextSuccess);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Transaction failed.");
     } finally {
@@ -85,7 +90,7 @@ export default function JobDetailPage() {
       <div className="py-16">
         <LoadingState
           text="Loading job details..."
-          className="mx-auto flex w-fit items-center gap-2 text-sm text-slate-600"
+          className="mx-auto flex w-fit items-center gap-2 text-sm text-slate-700"
         />
       </div>
     );
@@ -95,7 +100,7 @@ export default function JobDetailPage() {
     return (
       <section className="space-y-4">
         <h1 className="text-2xl font-semibold">Job #{id}</h1>
-        <p className="text-sm text-slate-600">{error ?? "Job not found."}</p>
+        <p className="text-sm text-slate-700">{error ?? "Job not found."}</p>
         <Link href="/" className="text-sm text-blue-600 hover:underline">
           Back to Home
         </Link>
@@ -118,12 +123,17 @@ export default function JobDetailPage() {
         </p>
       )}
       {statusMsg && (
-        <p role="status" aria-live="polite" className="rounded-md bg-green-100 p-3 text-sm text-green-700">
+        <p
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          className="rounded-md bg-green-100 p-3 text-sm text-green-700"
+        >
           {statusMsg}
         </p>
       )}
       {latestTxHash && (
-        <p className="text-sm text-slate-600">
+        <p className="text-sm text-slate-700">
           Last transaction:{" "}
           <a
             href={getExplorerTxUrl(latestTxHash)}

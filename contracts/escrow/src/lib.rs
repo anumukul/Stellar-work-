@@ -66,6 +66,7 @@ pub enum Error {
     DeadlineNotExpired = 7,
     TokenNotAllowed = 8,
     RevisionLimitReached = 9,
+    AlreadyInitialized = 10,
 }
 
 #[contract]
@@ -75,7 +76,7 @@ pub struct EscrowContract;
 impl EscrowContract {
     pub fn initialize(e: Env, admin: Address, native_token: Address) {
         if e.storage().instance().has(&DataKey::Admin) {
-            return;
+            panic_with_error!(&e, Error::AlreadyInitialized);
         }
         admin.require_auth();
         e.storage().instance().set(&DataKey::Admin, &admin);
@@ -640,6 +641,24 @@ mod test {
 
     fn hash(env: &Env) -> BytesN<32> {
         BytesN::from_array(env, &[7; 32])
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #10)")]
+    fn initialize_reinit_fails_explicitly() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, EscrowContract);
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let native_token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+
+        client.initialize(&admin, &native_token);
+        client.initialize(&admin, &native_token);
     }
 
     #[test]
@@ -1379,112 +1398,5 @@ mod test {
         let caller = Address::generate(&env);
         let new_admin = Address::generate(&env);
         client.transfer_admin(&caller, &new_admin);
-    }
-}
-#![no_std]
-
-use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, BytesN,
-    Env, Symbol,
-};
-
-const FEE_BPS: i128 = 250;
-const BPS_DENOMINATOR: i128 = 10_000;
-
-const INSTANCE_LIFETIME_THRESHOLD: u32 = 17_280;
-const INSTANCE_BUMP_AMOUNT: u32 = 518_400;
-const ACTIVE_JOB_LIFETIME_THRESHOLD: u32 = 17_280;
-const ACTIVE_JOB_BUMP_AMOUNT: u32 = 518_400;
-const ARCHIVAL_JOB_BUMP_AMOUNT: u32 = 120_960;
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum JobStatus {
-    Open,
-    InProgress,
-    SubmittedForReview,
-    Completed,
-    Cancelled,
-    Disputed,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Job {
-    pub client: Address,
-    pub freelancer: Option<Address>,
-    pub amount: i128,
-    pub description_hash: BytesN<32>,
-    pub status: JobStatus,
-    pub created_at: u64,
-    pub deadline: u64,
-    pub token: Address,
-    pub submitted_at: u64,
-}
-
-    #[test]
-    fn get_contract_version_is_deterministic() {
-        let (_, client, _, _, _, _) = setup();
-        let first = client.get_contract_version();
-        let second = client.get_contract_version();
-        assert_eq!(first, CONTRACT_VERSION);
-        assert_eq!(first, second);
-    }
-
-    fn next_rand(state: &mut u64) -> u64 {
-        *state = state
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1);
-        *state
-    }
-
-    #[test]
-    fn randomized_lifecycle_sequences_preserve_invariants() {
-        for run in 0..25u64 {
-            let (env, client, _, user, freelancer, native_token) = setup();
-            let mut rng = 0xC0FFEE_u64 ^ run;
-
-            for _ in 0..40 {
-                let amount = 100_000i128 + (next_rand(&mut rng) % 900_000) as i128;
-                let job_id = client.post_job(&user, &amount, &hash(&env), &0u64, &native_token);
-                let choice = next_rand(&mut rng) % 3;
-
-                if choice == 0 {
-                    client.cancel_job(&user, &job_id);
-                    let job = client.get_job(&job_id);
-                    assert_eq!(job.status, JobStatus::Cancelled);
-                    assert!(job.freelancer.is_none());
-                    continue;
-                }
-
-                client.accept_job(&freelancer, &job_id);
-                let accepted = client.get_job(&job_id);
-                assert_eq!(accepted.status, JobStatus::InProgress);
-                assert_eq!(accepted.freelancer, Option::Some(freelancer.clone()));
-
-                client.submit_work(&freelancer, &job_id);
-                let submitted = client.get_job(&job_id);
-                assert_eq!(submitted.status, JobStatus::SubmittedForReview);
-
-                if choice == 1 {
-                    client.approve_work(&user, &job_id);
-                    let completed = client.get_job(&job_id);
-                    assert_eq!(completed.status, JobStatus::Completed);
-                } else {
-                    client.raise_dispute(&user, &job_id);
-                    let disputed = client.get_job(&job_id);
-                    assert_eq!(disputed.status, JobStatus::Disputed);
-
-                    let winner_is_client = next_rand(&mut rng) % 2 == 0;
-                    if winner_is_client {
-                        client.resolve_dispute(&job_id, &user);
-                        assert_eq!(client.get_job(&job_id).status, JobStatus::Cancelled);
-                    } else {
-                        client.resolve_dispute(&job_id, &freelancer);
-                        assert_eq!(client.get_job(&job_id).status, JobStatus::Completed);
-                    }
-                }
-            }
-        }
     }
 }

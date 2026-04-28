@@ -24,6 +24,7 @@ export default function PostJobPage() {
   );
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [lastAnnouncedSuccess, setLastAnnouncedSuccess] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -63,7 +64,12 @@ export default function PostJobPage() {
               setTxHash(result.hash);
             }
             const jobId = typeof result === "number" || typeof result === "string" ? result : null;
-            setSuccess(jobId != null ? `Job #${jobId} created successfully.` : "Job submitted to contract.");
+            const successMessage =
+              jobId != null ? `Job #${jobId} created successfully.` : "Job submitted to contract.";
+            setSuccess(successMessage);
+            if (successMessage !== lastAnnouncedSuccess) {
+              setLastAnnouncedSuccess(successMessage);
+            }
             setAmount("");
             setDescription("");
             setDeadline("");
@@ -129,9 +135,13 @@ export default function PostJobPage() {
       </form>
 
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
-      {success && <p role="status" aria-live="polite" className="rounded-md bg-green-100 p-3 text-sm text-green-700">{success}</p>}
+      {success && (
+        <p role="status" aria-live="polite" aria-atomic="true" className="rounded-md bg-green-100 p-3 text-sm text-green-700">
+          {success}
+        </p>
+      )}
       {txHash && (
-        <p className="text-sm text-slate-600">
+        <p className="text-sm text-slate-700">
           Transaction:{" "}
           <a
             href={getExplorerTxUrl(txHash)}

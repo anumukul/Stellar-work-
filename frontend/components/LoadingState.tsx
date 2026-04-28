@@ -10,7 +10,8 @@ export default function LoadingState({ text, className }: LoadingStateProps) {
     <div
       role="status"
       aria-live="polite"
-      className={className ?? "flex items-center gap-2 text-sm text-slate-600"}
+      aria-atomic="true"
+      className={className ?? "flex items-center gap-2 text-sm text-slate-700"}
     >
       <span
         className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-blue-600 border-t-transparent"
