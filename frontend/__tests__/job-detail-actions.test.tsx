@@ -6,9 +6,10 @@ import type { Job } from "@/lib/types";
 
 const mockGetJob = vi.fn();
 const mockUseWallet = vi.fn();
+let mockRouteId = "1";
 
 vi.mock("next/navigation", () => ({
-  useParams: () => ({ id: "1" }),
+  useParams: () => ({ id: mockRouteId }),
 }));
 
 vi.mock("@/lib/contract", () => ({
@@ -41,6 +42,7 @@ function makeJob(overrides: Partial<Job> = {}): Job {
 describe("Job detail action visibility", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRouteId = "1";
     mockUseWallet.mockReturnValue({
       wallet: "GWALLET",
       connectWallet: vi.fn(),
@@ -100,5 +102,17 @@ describe("Job detail action visibility", () => {
     expect(
       screen.getByText("Connect your wallet to enable contract actions."),
     ).toBeInTheDocument();
+  });
+
+  it("shows not found error path for missing job ids", async () => {
+    mockRouteId = "999";
+    mockGetJob.mockResolvedValue(null);
+
+    render(<JobDetailPage />);
+
+    await waitFor(() =>
+      expect(screen.getByText("Job not found.")).toBeInTheDocument(),
+    );
+    expect(screen.getByRole("heading", { name: "Job #999" })).toBeInTheDocument();
   });
 });
