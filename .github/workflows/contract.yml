@@ -1,0 +1,47 @@
+name: Contract CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Build and Test Contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            contracts/escrow/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/escrow/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install soroban-cli
+        run: |
+          if ! command -v soroban &> /dev/null; then
+            cargo install soroban-cli --locked
+          fi
+
+      - name: Build contract
+        working-directory: contracts/escrow/
+        run: soroban contract build
+
+      - name: Run tests
+        working-directory: contracts/escrow/
+        run: cargo test

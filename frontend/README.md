@@ -1,36 +1,69 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# StellarWork — Frontend
 
-## Getting Started
+Next.js frontend for the StellarWork decentralized freelance marketplace. Connects to a Soroban escrow contract on Stellar to manage the full job lifecycle without platform custody.
 
-First, run the development server:
+## Tech Stack
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+| Layer | Library / Version |
+|---|---|
+| Framework | Next.js 16 (App Router) |
+| UI | React 19 |
+| Styling | Tailwind CSS 4 |
+| Stellar SDK | `@stellar/stellar-sdk` 15 |
+| Wallet | `@stellar/freighter-api` 6 |
+| Language | TypeScript 5 |
+
+## Folder Structure
+
+```
+frontend/
+├── app/                  # Next.js App Router pages
+│   ├── page.tsx          # Home / job listing
+│   ├── post-job/         # Post a new job
+│   ├── job/[id]/         # Job detail & lifecycle actions
+│   ├── dashboard/        # Freelancer / client dashboard
+│   ├── profile/[address] # Public profile by Stellar address
+│   ├── disputes/         # Dispute overview
+│   └── admin/            # Admin panel (fee management)
+├── lib/
+│   ├── contract.ts       # Soroban contract call helpers
+│   ├── stellar.ts        # Stellar / Freighter wallet utilities
+│   └── types.ts          # Shared TypeScript types
+└── public/               # Static assets
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Local Development
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+# 1. Install dependencies
+npm install
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+# 2. Configure environment
+cp .env.example .env.local
+# Edit .env.local — see Environment Variables below
 
-## Learn More
+# 3. Start dev server
+npm run dev
+```
 
-To learn more about Next.js, take a look at the following resources:
+Open [http://localhost:3000](http://localhost:3000).
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Environment Variables
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+| Variable | Required | Description |
+|---|---|---|
+| `NEXT_PUBLIC_CONTRACT_ID` | ✅ | Deployed escrow contract ID on Stellar |
+| `NEXT_PUBLIC_NETWORK` | ✅ | `testnet` or `mainnet` |
+| `NEXT_PUBLIC_HORIZON_URL` | ✅ | Horizon RPC endpoint |
+| `NEXT_PUBLIC_SOROBAN_RPC_URL` | ✅ | Soroban RPC endpoint |
 
-## Deploy on Vercel
+Copy `.env.example` to `.env.local` and fill in the values. The contract ID is printed after running `soroban contract deploy` — see the root [README](../README.md) for the full deploy flow.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Available Scripts
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+| Script | Description |
+|---|---|
+| `npm run dev` | Start development server with hot reload |
+| `npm run build` | Production build |
+| `npm run start` | Serve the production build locally |
+| `npm run lint` | Run ESLint |
