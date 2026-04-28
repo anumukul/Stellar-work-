@@ -67,6 +67,8 @@ pub enum Error {
     TokenNotAllowed = 8,
     RevisionLimitReached = 9,
     AlreadyInitialized = 10,
+    InvalidAmount = 11,
+    InvalidDescriptionHash = 12,
 }
 
 #[contract]
@@ -104,7 +106,11 @@ impl EscrowContract {
         token: Address,
     ) -> u64 {
         if amount <= 0 {
-            panic_with_error!(&e, Error::InsufficientFunds);
+            panic_with_error!(&e, Error::InvalidAmount);
+        }
+        // Reject all-zero hash as a sentinel for an unset/malformed description
+        if desc_hash == BytesN::from_array(&e, &[0u8; 32]) {
+            panic_with_error!(&e, Error::InvalidDescriptionHash);
         }
         client.require_auth();
         if deadline != 0 && e.ledger().timestamp() > deadline {
@@ -439,6 +445,25 @@ impl EscrowContract {
 
     pub fn get_job_count(e: Env) -> u64 {
         get_jobs_count(&e)
+    }
+
+    pub fn get_open_jobs_count(e: Env) -> u64 {
+        let total = get_jobs_count(&e);
+        let mut count: u64 = 0;
+        let mut i: u64 = 1;
+        while i <= total {
+            if let Some(job) = e
+                .storage()
+                .persistent()
+                .get::<DataKey, Job>(&DataKey::Job(i))
+            {
+                if job.status == JobStatus::Open {
+                    count += 1;
+                }
+            }
+            i += 1;
+        }
+        count
     }
 
     pub fn get_native_token(e: Env) -> Address {
@@ -1414,5 +1439,189 @@ mod test {
         let caller = Address::generate(&env);
         let new_admin = Address::generate(&env);
         client.transfer_admin(&caller, &new_admin);
+    }
+
+    // ── Issue #92: InvalidAmount error variant ────────────────────────────────
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #11)")]
+    fn post_job_zero_amount_uses_invalid_amount_error() {
+        let (env, client, _, user, _, native_token) = setup();
+        client.post_job(&user, &0i128, &hash(&env), &0u64, &native_token);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #11)")]
+    fn post_job_negative_amount_uses_invalid_amount_error() {
+        let (env, client, _, user, _, native_token) = setup();
+        client.post_job(&user, &-1i128, &hash(&env), &0u64, &native_token);
+    }
+
+    // ── Issue #91: Description hash length guard ──────────────────────────────
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #12)")]
+    fn post_job_zero_hash_rejected() {
+        let (env, client, _, user, _, native_token) = setup();
+        let zero_hash = BytesN::from_array(&env, &[0u8; 32]);
+        client.post_job(&user, &1_000_000i128, &zero_hash, &0u64, &native_token);
+    }
+
+    #[test]
+    fn post_job_nonzero_hash_accepted() {
+        let (env, client, _, user, _, native_token) = setup();
+        // Any non-zero hash should pass
+        let valid_hash = BytesN::from_array(&env, &[1u8; 32]);
+        let job_id = client.post_job(&user, &1_000_000i128, &valid_hash, &0u64, &native_token);
+        assert_eq!(client.get_job(&job_id).description_hash, valid_hash);
+    }
+
+    // ── Issue #90: get_open_jobs_count ────────────────────────────────────────
+
+    #[test]
+    fn get_open_jobs_count_starts_at_zero() {
+        let (_, client, _, _, _, _) = setup();
+        assert_eq!(client.get_open_jobs_count(), 0);
+    }
+
+    #[test]
+    fn get_open_jobs_count_increments_on_post() {
+        let (env, client, _, user, _, native_token) = setup();
+        assert_eq!(client.get_open_jobs_count(), 0);
+        client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        assert_eq!(client.get_open_jobs_count(), 1);
+        client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        assert_eq!(client.get_open_jobs_count(), 2);
+    }
+
+    #[test]
+    fn get_open_jobs_count_decrements_on_accept() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        assert_eq!(client.get_open_jobs_count(), 1);
+        client.accept_job(&freelancer, &job_id);
+        assert_eq!(client.get_open_jobs_count(), 0);
+    }
+
+    #[test]
+    fn get_open_jobs_count_decrements_on_cancel() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        assert_eq!(client.get_open_jobs_count(), 1);
+        client.cancel_job(&user, &job_id);
+        assert_eq!(client.get_open_jobs_count(), 0);
+    }
+
+    #[test]
+    fn get_open_jobs_count_tracks_mixed_statuses() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        // Post 3 jobs
+        let j1 = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        let j2 = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        assert_eq!(client.get_open_jobs_count(), 3);
+
+        // Accept j1 → InProgress
+        client.accept_job(&freelancer, &j1);
+        assert_eq!(client.get_open_jobs_count(), 2);
+
+        // Cancel j2 → Cancelled
+        client.cancel_job(&user, &j2);
+        assert_eq!(client.get_open_jobs_count(), 1);
+    }
+
+    #[test]
+    fn get_open_jobs_count_zero_after_all_completed() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
+        assert_eq!(client.get_open_jobs_count(), 0);
+    }
+
+    // ── Issue #94: Invariant tests for fee accounting ─────────────────────────
+
+    #[test]
+    fn fee_invariant_fees_never_exceed_total_approvals() {
+        // After N approvals, accrued fees must equal sum of individual fees
+        // and must never exceed the total amount approved.
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let asset = token::StellarAssetClient::new(&env, &native_token);
+        asset.mint(&user, &10_000_000_000i128);
+
+        let amounts: [i128; 4] = [1_000_000, 500_000, 2_000_000, 40];
+        let mut total_approved: i128 = 0;
+        let mut expected_fees: i128 = 0;
+
+        for amount in amounts.iter() {
+            let job_id = client.post_job(&user, amount, &hash(&env), &0u64, &native_token);
+            client.accept_job(&freelancer, &job_id);
+            client.submit_work(&freelancer, &job_id);
+            client.approve_work(&user, &job_id);
+
+            total_approved += amount;
+            expected_fees += amount * FEE_BPS / BPS_DENOMINATOR;
+        }
+
+        let accrued = client.get_fees(&native_token);
+        assert_eq!(accrued, expected_fees, "accrued fees must equal sum of per-approval fees");
+        assert!(accrued <= total_approved, "fees must never exceed total approved amount");
+    }
+
+    #[test]
+    fn fee_invariant_withdraw_zeroes_accrued_fees() {
+        // After withdraw_fees, accrued fees must be exactly 0.
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
+
+        assert!(client.get_fees(&native_token) > 0, "fees should be non-zero before withdraw");
+        client.withdraw_fees(&native_token);
+        assert_eq!(client.get_fees(&native_token), 0, "fees must be exactly 0 after withdraw");
+    }
+
+    #[test]
+    fn fee_invariant_payout_plus_fee_equals_amount() {
+        // For every approval: payout + fee == job.amount (no funds created or destroyed).
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let amount: i128 = 1_000_000;
+        let token_client = token::Client::new(&env, &native_token);
+
+        let job_id = client.post_job(&user, &amount, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+
+        let pre_freelancer = token_client.balance(&freelancer);
+        client.approve_work(&user, &job_id);
+        let post_freelancer = token_client.balance(&freelancer);
+
+        let payout = post_freelancer - pre_freelancer;
+        let fee = client.get_fees(&native_token);
+
+        assert_eq!(payout + fee, amount, "payout + fee must equal original job amount");
+    }
+
+    #[test]
+    fn fee_invariant_dispute_freelancer_wins_payout_plus_fee_equals_amount() {
+        // Same conservation invariant holds when dispute resolves in freelancer's favour.
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let amount: i128 = 1_000_000;
+        let token_client = token::Client::new(&env, &native_token);
+
+        let job_id = client.post_job(&user, &amount, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.raise_dispute(&user, &job_id);
+
+        let pre_freelancer = token_client.balance(&freelancer);
+        client.resolve_dispute(&job_id, &freelancer);
+        let post_freelancer = token_client.balance(&freelancer);
+
+        let payout = post_freelancer - pre_freelancer;
+        let fee = client.get_fees(&native_token);
+
+        assert_eq!(payout + fee, amount, "dispute payout + fee must equal original job amount");
     }
 }
