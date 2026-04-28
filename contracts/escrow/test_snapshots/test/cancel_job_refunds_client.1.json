@@ -358,6 +358,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "revision_count"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "status"
                       },
                       "val": {
@@ -1695,6 +1703,14 @@
                     "symbol": "freelancer"
                   },
                   "val": "void"
+                },
+                {
+                  "key": {
+                    "symbol": "revision_count"
+                  },
+                  "val": {
+                    "u32": 0
+                  }
                 },
                 {
                   "key": {
