@@ -15,4 +15,5 @@ export interface Job {
   created_at: string;
   deadline: string;
   token: string;
+  revision_count: number;
 }

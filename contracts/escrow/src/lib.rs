@@ -2,12 +2,13 @@
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, BytesN,
-    Env, Symbol,
+    Env, Symbol, Vec,
 };
 
 const DEFAULT_FEE_BPS: i128 = 250;
 const MAX_FEE_BPS: i128 = 1_000;
 const BPS_DENOMINATOR: i128 = 10_000;
+const MAX_REVISIONS: u32 = 3;
 
 const INSTANCE_LIFETIME_THRESHOLD: u32 = 17_280;
 const INSTANCE_BUMP_AMOUNT: u32 = 518_400;
@@ -37,6 +38,7 @@ pub struct Job {
     pub created_at: u64,
     pub deadline: u64,
     pub token: Address,
+    pub revision_count: u32,
 }
 
 #[contracttype]
@@ -130,6 +132,7 @@ impl EscrowContract {
             created_at: e.ledger().timestamp(),
             deadline,
             token: token.clone(),
+            revision_count: 0,
         };
 
         set_job(&e, job_id, &job);
@@ -233,6 +236,31 @@ impl EscrowContract {
         );
     }
 
+    pub fn reject_work(e: Env, client: Address, job_id: u64) {
+        let mut job = get_job_or_panic(&e, job_id);
+        client.require_auth();
+
+        if job.status != JobStatus::SubmittedForReview {
+            panic_with_error!(&e, Error::InvalidStatus);
+        }
+        if job.client != client {
+            panic_with_error!(&e, Error::Unauthorized);
+        }
+        if job.revision_count >= MAX_REVISIONS {
+            panic_with_error!(&e, Error::RevisionLimitReached);
+        }
+
+        job.status = JobStatus::InProgress;
+        job.revision_count += 1;
+        set_job(&e, job_id, &job);
+        bump_instance_ttl(&e);
+
+        e.events().publish(
+            (Symbol::new(&e, "job_rejected"),),
+            (job_id, client, job.revision_count),
+        );
+    }
+
     pub fn cancel_job(e: Env, client: Address, job_id: u64) {
         let mut job = get_job_or_panic(&e, job_id);
         client.require_auth();
@@ -319,7 +347,7 @@ impl EscrowContract {
     }
 
     pub fn resolve_dispute(e: Env, job_id: u64, winner: Address) {
-        let admin = get_admin(&e);
+        let admin = load_admin(&e);
         admin.require_auth();
 
         let mut job = get_job_or_panic(&e, job_id);
@@ -384,6 +412,32 @@ impl EscrowContract {
         get_job_or_panic(&e, job_id)
     }
 
+    pub fn get_jobs_batch(e: Env, start: u64, limit: u32) -> Vec<Job> {
+        let jobs_count = get_jobs_count(&e);
+        let mut jobs = Vec::new(&e);
+
+        if start == 0 || limit == 0 || start > jobs_count {
+            return jobs;
+        }
+
+        let end = core::cmp::min(
+            jobs_count,
+            start.saturating_add(limit as u64).saturating_sub(1),
+        );
+
+        let mut cursor = start;
+        while cursor <= end {
+            jobs.push_back(get_job_or_panic(&e, cursor));
+            cursor = cursor.saturating_add(1);
+        }
+
+        jobs
+    }
+
+    pub fn get_admin(e: Env) -> Address {
+        load_admin(&e)
+    }
+
     pub fn get_job_count(e: Env) -> u64 {
         get_jobs_count(&e)
     }
@@ -393,7 +447,7 @@ impl EscrowContract {
     }
 
     pub fn withdraw_fees(e: Env, token: Address) {
-        let admin = get_admin(&e);
+        let admin = load_admin(&e);
         admin.require_auth();
 
         let fees = get_token_fees(&e, &token);
@@ -420,7 +474,7 @@ impl EscrowContract {
     }
 
     pub fn add_allowed_token(e: Env, token: Address) {
-        let admin = get_admin(&e);
+        let admin = load_admin(&e);
         admin.require_auth();
         e.storage()
             .persistent()
@@ -434,7 +488,7 @@ impl EscrowContract {
     }
 
     pub fn remove_allowed_token(e: Env, token: Address) {
-        let admin = get_admin(&e);
+        let admin = load_admin(&e);
         admin.require_auth();
         e.storage()
             .persistent()
@@ -511,7 +565,7 @@ fn load_native_token(e: &Env) -> Address {
         .unwrap_or_else(|| panic!("native token not configured"))
 }
 
-fn get_admin(e: &Env) -> Address {
+fn load_admin(e: &Env) -> Address {
     e.storage()
         .instance()
         .get::<DataKey, Address>(&DataKey::Admin)
@@ -645,6 +699,60 @@ mod test {
         let (env, client, _, user, _, native_token) = setup();
         let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
         client.approve_work(&user, &job_id);
+    }
+
+    #[test]
+    fn reject_work_happy_path_and_resubmit() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+
+        client.reject_work(&user, &job_id);
+        let rejected = client.get_job(&job_id);
+        assert_eq!(rejected.status, JobStatus::InProgress);
+        assert_eq!(rejected.revision_count, 1);
+
+        client.submit_work(&freelancer, &job_id);
+        let resubmitted = client.get_job(&job_id);
+        assert_eq!(resubmitted.status, JobStatus::SubmittedForReview);
+        assert_eq!(resubmitted.revision_count, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #2)")]
+    fn reject_work_wrong_caller_fails() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+
+        client.reject_work(&freelancer, &job_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn reject_work_wrong_status_fails() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.reject_work(&user, &job_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #9)")]
+    fn reject_work_revision_limit_fails() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+
+        for _ in 0..MAX_REVISIONS {
+            client.submit_work(&freelancer, &job_id);
+            client.reject_work(&user, &job_id);
+        }
+
+        client.submit_work(&freelancer, &job_id);
+        client.reject_work(&user, &job_id);
     }
 
     #[test]
@@ -980,6 +1088,58 @@ mod test {
         assert_eq!(client.get_native_token(), native_token);
     }
 
+    // ── cancel_job negative / auth tests (issue #19) ─────────────────────────
+
+    /// A stranger (neither the job's client nor any authorized party) must not
+    /// be able to cancel an Open job. The contract checks ownership AFTER the
+    /// status check, so an Open job with a wrong caller should panic with
+    /// Error::Unauthorized (contract error code #2).
+    #[test]
+    #[should_panic(expected = "Error(Contract, #2)")]
+    fn cancel_job_unauthorized_caller_panics() {
+        let (env, client, _, user, _, native_token) = setup();
+
+        // Post an Open job as the legitimate client
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+
+        // A completely unrelated address attempts to cancel — must be rejected
+        let stranger = Address::generate(&env);
+        client.cancel_job(&stranger, &job_id);
+    }
+
+    /// cancel_job must reject a job that is already InProgress.
+    /// Only Open jobs may be cancelled by the client; any other status
+    /// triggers Error::InvalidStatus (contract error code #3).
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn cancel_job_in_progress_panics_with_invalid_status() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+
+        // Advance the job to InProgress
+        client.accept_job(&freelancer, &job_id);
+        assert_eq!(client.get_job(&job_id).status, JobStatus::InProgress);
+        client.cancel_job(&user, &job_id);
+    }
+
+    /// cancel_job must reject a job that has already reached Completed status.
+    /// A completed job has had its funds disbursed; cancellation at this point
+    /// must trigger Error::InvalidStatus (contract error code #3).
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn cancel_job_completed_panics_with_invalid_status() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+
+        // Drive the job through the full happy-path to Completed
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Completed);
+
+        client.cancel_job(&user, &job_id);
     #[test]
     #[should_panic(expected = "Error(Contract, #6)")]
     fn post_job_with_past_deadline_fails() {

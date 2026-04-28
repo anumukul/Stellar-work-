@@ -1,8 +1,10 @@
 "use client";
 
 import {
+  Account,
   BASE_FEE,
   Contract,
+  Keypair,
   Networks,
   nativeToScVal,
   Operation,
@@ -25,6 +27,16 @@ const getNetworkPassphrase = () =>
   process.env.NEXT_PUBLIC_NETWORK === "mainnet"
     ? Networks.PUBLIC
     : Networks.TESTNET;
+
+const DEFAULT_POLL_TIMEOUT = 30000;
+const DEFAULT_POLL_INTERVAL = 3000;
+
+interface TransactionResult {
+  status: "SUCCESS" | "ERROR" | "PENDING";
+  hash?: string;
+  errorResultXdr?: string;
+  resultMetaXdr?: string;
+}
 
 export async function connectWallet(): Promise<string> {
   const access = await requestAccess();
@@ -53,21 +65,33 @@ export async function signTransaction(xdrValue: string): Promise<string> {
   return "signedTxXdr" in signed ? signed.signedTxXdr : signed;
 }
 
+const READONLY_SOURCE = Keypair.random().publicKey();
+
 export async function callContract(
   contractId: string,
   method: string,
   args: xdr.ScVal[],
-  options?: { readOnly?: boolean },
-): Promise<unknown> {
-  const source = await getPublicKey();
-  if (!source) {
-    throw new Error("Connect Freighter before calling contract.");
-  }
-
+  options?: { readOnly?: boolean; pollTimeout?: number },
+): Promise<TransactionResult> {
   const server = new rpc.Server(getRpcUrl());
-  const account = await server.getAccount(source);
   const networkPassphrase = getNetworkPassphrase();
   const contract = new Contract(contractId);
+
+  let account;
+  if (options?.readOnly) {
+    const source = await getPublicKey();
+    if (source) {
+      account = await server.getAccount(source);
+    } else {
+      account = new Account(READONLY_SOURCE, "0");
+    }
+  } else {
+    const source = await getPublicKey();
+    if (!source) {
+      throw new Error("Connect Freighter before calling contract.");
+    }
+    account = await server.getAccount(source);
+  }
 
   const tx = new TransactionBuilder(account, {
     fee: BASE_FEE,
@@ -87,9 +111,9 @@ export async function callContract(
   if (options?.readOnly) {
     const retval = simulation.result?.retval;
     if (!retval) {
-      return null;
+      return { status: "ERROR", errorResultXdr: "No return value from simulation" };
     }
-    return scValToNative(retval);
+    return { status: "SUCCESS", resultMetaXdr: scValToNative(retval) as string };
   }
 
   const assembled = rpc.assembleTransaction(tx, simulation).build();
@@ -103,14 +127,33 @@ export async function callContract(
   }
 
   if (sent.status === "PENDING") {
-    return sent;
+    const pollTimeout = options?.pollTimeout ?? DEFAULT_POLL_TIMEOUT;
+    const pollInterval = DEFAULT_POLL_INTERVAL;
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < pollTimeout) {
+      await new Promise((resolve) => setTimeout(resolve, pollInterval));
+      const status = await server.getTransaction(sent.hash);
+
+      if (status.status === "SUCCESS") {
+        return { status: "SUCCESS", hash: sent.hash };
+      }
+
+      if (status.status === "ERROR") {
+        return {
+          status: "ERROR",
+          hash: sent.hash,
+          errorResultXdr: status.errorResultXdr ?? "Transaction failed.",
+        };
+      }
+    }
+
+    throw new Error(
+      `Transaction timed out after ${pollTimeout}ms. Hash: ${sent.hash}`,
+    );
   }
 
-  if ("resultMetaXdr" in sent && sent.resultMetaXdr) {
-    return sent;
-  }
-
-  return sent;
+  return { status: "SUCCESS", hash: sent.hash };
 }
 
 export function decodeScVal<T = unknown>(value: xdr.ScVal): T {
