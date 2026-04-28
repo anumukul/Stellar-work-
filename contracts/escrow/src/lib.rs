@@ -1064,6 +1064,58 @@ mod test {
         assert_eq!(client.get_native_token(), native_token);
     }
 
+    // ── cancel_job negative / auth tests (issue #19) ─────────────────────────
+
+    /// A stranger (neither the job's client nor any authorized party) must not
+    /// be able to cancel an Open job. The contract checks ownership AFTER the
+    /// status check, so an Open job with a wrong caller should panic with
+    /// Error::Unauthorized (contract error code #2).
+    #[test]
+    #[should_panic(expected = "Error(Contract, #2)")]
+    fn cancel_job_unauthorized_caller_panics() {
+        let (env, client, _, user, _, native_token) = setup();
+
+        // Post an Open job as the legitimate client
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+
+        // A completely unrelated address attempts to cancel — must be rejected
+        let stranger = Address::generate(&env);
+        client.cancel_job(&stranger, &job_id);
+    }
+
+    /// cancel_job must reject a job that is already InProgress.
+    /// Only Open jobs may be cancelled by the client; any other status
+    /// triggers Error::InvalidStatus (contract error code #3).
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn cancel_job_in_progress_panics_with_invalid_status() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+
+        // Advance the job to InProgress
+        client.accept_job(&freelancer, &job_id);
+        assert_eq!(client.get_job(&job_id).status, JobStatus::InProgress);
+        client.cancel_job(&user, &job_id);
+    }
+
+    /// cancel_job must reject a job that has already reached Completed status.
+    /// A completed job has had its funds disbursed; cancellation at this point
+    /// must trigger Error::InvalidStatus (contract error code #3).
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn cancel_job_completed_panics_with_invalid_status() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+
+        // Drive the job through the full happy-path to Completed
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Completed);
+
+        client.cancel_job(&user, &job_id);
     #[test]
     #[should_panic(expected = "Error(Contract, #6)")]
     fn post_job_with_past_deadline_fails() {
