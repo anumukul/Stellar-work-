@@ -86,4 +86,19 @@ describe("Job detail action visibility", () => {
     expect(screen.queryByText("Submit Work")).not.toBeInTheDocument();
     expect(screen.queryByText("Cancel Job")).not.toBeInTheDocument();
   });
+
+  it("disables open-state action when wallet is not connected", async () => {
+    mockUseWallet.mockReturnValue({
+      wallet: null,
+      connectWallet: vi.fn(),
+    });
+    mockGetJob.mockResolvedValue(makeJob({ status: "Open", client: "GCLIENT" }));
+    render(<JobDetailPage />);
+
+    const button = await screen.findByRole("button", { name: "Accept Job" });
+    expect(button).toBeDisabled();
+    expect(
+      screen.getByText("Connect your wallet to enable contract actions."),
+    ).toBeInTheDocument();
+  });
 });

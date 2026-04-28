@@ -16,7 +16,7 @@ function toXlm(stroops: string) {
 }
 
 export default function HomePage() {
-  const { wallet, connectWallet } = useWallet();
+  const { wallet } = useWallet();
   const [jobs, setJobs] = useState<Array<{ id: number; job: Job }>>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -186,22 +186,16 @@ export default function HomePage() {
               <button
                 type="button"
                 className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                  actionLoading === id
+                  !wallet || actionLoading === id
                     ? "cursor-not-allowed bg-slate-100 text-slate-400"
                     : "bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800"
                 }`}
+                title={!wallet ? "Connect your wallet to accept jobs." : undefined}
                 onClick={async () => {
                   setError(null);
                   if (!wallet) {
-                    try {
-                      await connectWallet();
-                    } catch {
-                      setError("Failed to connect wallet. Is Freighter installed?");
-                      return;
-                    }
                     return;
                   }
-
                   setActionLoading(id);
                   try {
                     const result = await acceptJob(wallet, String(id));
@@ -219,12 +213,17 @@ export default function HomePage() {
                     setActionLoading(null);
                   }
                 }}
-                disabled={actionLoading !== null}
+                disabled={!wallet || actionLoading !== null}
                 aria-busy={actionLoading === id}
               >
                 {actionLoading === id ? "Processing..." : "Accept Job"}
               </button>
             </div>
+            {!wallet && (
+              <p className="mt-2 text-xs text-amber-700">
+                Connect your wallet to enable job actions.
+              </p>
+            )}
           </article>
         ))}
       </div>
