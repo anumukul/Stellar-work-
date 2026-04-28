@@ -3,11 +3,12 @@
 import { callContract, nativeToScVal } from "@/lib/stellar";
 import type { Job } from "@/lib/types";
 
-const contractId = process.env.NEXT_PUBLIC_CONTRACT_ID ?? "";
-
-function hexToBytes(hex: string): Uint8Array {
+export function hexToBytes(hex: string): Uint8Array {
   const normalized = hex.startsWith("0x") ? hex.slice(2) : hex;
   if (normalized.length % 2 !== 0) {
+    throw new Error("Invalid hex input.");
+  }
+  if (!/^[0-9a-fA-F]*$/.test(normalized)) {
     throw new Error("Invalid hex input.");
   }
   const bytes = new Uint8Array(normalized.length / 2);
@@ -17,7 +18,8 @@ function hexToBytes(hex: string): Uint8Array {
   return bytes;
 }
 
-function requireContractId(): string {
+export function requireContractId(): string {
+  const contractId = process.env.NEXT_PUBLIC_CONTRACT_ID ?? "";
   if (!contractId) {
     throw new Error("NEXT_PUBLIC_CONTRACT_ID is not configured.");
   }

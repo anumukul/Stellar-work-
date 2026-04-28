@@ -2,7 +2,7 @@
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, BytesN,
-    Env, Symbol,
+    Env, Symbol, Vec,
 };
 
 const FEE_BPS: i128 = 250;
@@ -315,7 +315,7 @@ impl EscrowContract {
     }
 
     pub fn resolve_dispute(e: Env, job_id: u64, winner: Address) {
-        let admin = get_admin(&e);
+        let admin = load_admin(&e);
         admin.require_auth();
 
         let mut job = get_job_or_panic(&e, job_id);
@@ -366,6 +366,32 @@ impl EscrowContract {
         get_job_or_panic(&e, job_id)
     }
 
+    pub fn get_jobs_batch(e: Env, start: u64, limit: u32) -> Vec<Job> {
+        let jobs_count = get_jobs_count(&e);
+        let mut jobs = Vec::new(&e);
+
+        if start == 0 || limit == 0 || start > jobs_count {
+            return jobs;
+        }
+
+        let end = core::cmp::min(
+            jobs_count,
+            start.saturating_add(limit as u64).saturating_sub(1),
+        );
+
+        let mut cursor = start;
+        while cursor <= end {
+            jobs.push_back(get_job_or_panic(&e, cursor));
+            cursor = cursor.saturating_add(1);
+        }
+
+        jobs
+    }
+
+    pub fn get_admin(e: Env) -> Address {
+        load_admin(&e)
+    }
+
     pub fn get_job_count(e: Env) -> u64 {
         get_jobs_count(&e)
     }
@@ -375,7 +401,7 @@ impl EscrowContract {
     }
 
     pub fn withdraw_fees(e: Env, token: Address) {
-        let admin = get_admin(&e);
+        let admin = load_admin(&e);
         admin.require_auth();
 
         let fees = get_token_fees(&e, &token);
@@ -402,7 +428,7 @@ impl EscrowContract {
     }
 
     pub fn add_allowed_token(e: Env, token: Address) {
-        let admin = get_admin(&e);
+        let admin = load_admin(&e);
         admin.require_auth();
         e.storage()
             .persistent()
@@ -416,7 +442,7 @@ impl EscrowContract {
     }
 
     pub fn remove_allowed_token(e: Env, token: Address) {
-        let admin = get_admin(&e);
+        let admin = load_admin(&e);
         admin.require_auth();
         e.storage()
             .persistent()
@@ -493,7 +519,7 @@ fn load_native_token(e: &Env) -> Address {
         .unwrap_or_else(|| panic!("native token not configured"))
 }
 
-fn get_admin(e: &Env) -> Address {
+fn load_admin(e: &Env) -> Address {
     e.storage()
         .instance()
         .get::<DataKey, Address>(&DataKey::Admin)
@@ -1054,5 +1080,45 @@ mod test {
         let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
         client.accept_job(&freelancer, &job_id);
         client.approve_work(&user, &job_id);
+    }
+
+    #[test]
+    fn get_jobs_batch_returns_stable_order() {
+        let (env, client, _, user, _, native_token) = setup();
+        let first = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        let second = client.post_job(&user, &2_000_000i128, &hash(&env), &0u64, &native_token);
+        let third = client.post_job(&user, &3_000_000i128, &hash(&env), &0u64, &native_token);
+
+        assert_eq!(first, 1);
+        assert_eq!(second, 2);
+        assert_eq!(third, 3);
+
+        let jobs = client.get_jobs_batch(&1u64, &2u32);
+        assert_eq!(jobs.len(), 2);
+        let first_job = jobs.get(0).unwrap();
+        let second_job = jobs.get(1).unwrap();
+        assert_eq!(first_job.amount, 1_000_000i128);
+        assert_eq!(second_job.amount, 2_000_000i128);
+    }
+
+    #[test]
+    fn get_jobs_batch_handles_out_of_range_safely() {
+        let (env, client, _, user, _, native_token) = setup();
+        client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+
+        let empty_from_future = client.get_jobs_batch(&99u64, &5u32);
+        assert_eq!(empty_from_future.len(), 0);
+
+        let empty_zero_start = client.get_jobs_batch(&0u64, &5u32);
+        assert_eq!(empty_zero_start.len(), 0);
+
+        let empty_zero_limit = client.get_jobs_batch(&1u64, &0u32);
+        assert_eq!(empty_zero_limit.len(), 0);
+    }
+
+    #[test]
+    fn get_admin_public_view_returns_configured_admin() {
+        let (_, client, admin, _, _, _) = setup();
+        assert_eq!(client.get_admin(), admin);
     }
 }
