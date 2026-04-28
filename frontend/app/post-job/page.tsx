@@ -35,6 +35,7 @@ export default function PostJobPage() {
         className="space-y-4 rounded-lg border border-slate-200 bg-white p-5"
         onSubmit={async (event) => {
           event.preventDefault();
+          if (submitting) return;
           setError(null);
           setSuccess(null);
           setTxHash(null);
@@ -118,6 +119,7 @@ export default function PostJobPage() {
         </label>
 
         <button
+          type="submit"
           className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
           disabled={submitting}
           aria-busy={submitting}
