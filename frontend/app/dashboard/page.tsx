@@ -8,6 +8,7 @@ import {
   submitWork,
   enforceDeadline,
 } from "@/lib/contract";
+import ErrorBanner from "@/components/ErrorBanner";
 import { useWallet } from "@/lib/wallet-context";
 import type { Job, JobStatus } from "@/lib/types";
 import { useEffect, useState, useCallback } from "react";
@@ -144,9 +145,7 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      {error && (
-        <p className="rounded-md bg-red-100 p-3 text-sm text-red-700">{error}</p>
-      )}
+      {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
       {loading && <p className="text-sm text-slate-600">Loading jobs...</p>}
 
       {!loading && (

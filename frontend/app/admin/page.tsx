@@ -7,6 +7,7 @@ import {
   getNativeToken,
   withdrawFees,
 } from "@/lib/contract";
+import ErrorBanner from "@/components/ErrorBanner";
 import { useWallet } from "@/lib/wallet-context";
 import type { Job, JobStatus } from "@/lib/types";
 import { useEffect, useState, useCallback } from "react";
@@ -159,9 +160,7 @@ export default function AdminPage() {
     <section className="space-y-6">
       <h1 className="text-2xl font-semibold">Admin Panel</h1>
 
-      {error && (
-        <p className="rounded-md bg-red-100 p-3 text-sm text-red-700">{error}</p>
-      )}
+      {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
       {successMessage && (
         <p className="rounded-md bg-green-100 p-3 text-sm text-green-700">
           {successMessage}

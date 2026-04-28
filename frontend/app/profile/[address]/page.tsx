@@ -1,6 +1,7 @@
 "use client";
 
 import { getJob, getJobCount } from "@/lib/contract";
+import ErrorBanner from "@/components/ErrorBanner";
 import { useWallet } from "@/lib/wallet-context";
 import type { Job, JobStatus } from "@/lib/types";
 import Link from "next/link";
@@ -127,9 +128,7 @@ export default function ProfilePage() {
         <p className="mt-1 font-mono text-sm text-slate-500">{address}</p>
       </div>
 
-      {error && (
-        <p className="rounded-md bg-red-100 p-3 text-sm text-red-700">{error}</p>
-      )}
+      {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
       {loading && <p className="text-sm text-slate-600">Loading job history...</p>}
 
       {!loading && (

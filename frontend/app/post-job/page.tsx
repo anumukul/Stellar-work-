@@ -1,6 +1,7 @@
 "use client";
 
 import { postJob } from "@/lib/contract";
+import ErrorBanner from "@/components/ErrorBanner";
 import { useWallet } from "@/lib/wallet-context";
 import { useState } from "react";
 
@@ -13,14 +14,16 @@ async function sha256Hex(input: string): Promise<string> {
 }
 
 export default function PostJobPage() {
-  const { wallet } = useWallet();
+  const { wallet, connectWallet } = useWallet();
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
   const [deadline, setDeadline] = useState("");
   const [tokenAddress, setTokenAddress] = useState(
     process.env.NEXT_PUBLIC_NATIVE_TOKEN ?? "",
   );
-  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   return (
     <section className="mx-auto max-w-2xl space-y-6">
@@ -30,23 +33,38 @@ export default function PostJobPage() {
         className="space-y-4 rounded-lg border border-slate-200 bg-white p-5"
         onSubmit={async (event) => {
           event.preventDefault();
+          setError(null);
+          setSuccess(null);
+
           if (!wallet) {
-            setStatus("Connect wallet first.");
+            try {
+              await connectWallet();
+            } catch {
+              setError("Failed to connect wallet. Is Freighter installed?");
+            }
             return;
           }
 
-          const amountStroops = Math.floor(Number(amount || "0") * 10_000_000);
-          const hashHex = await sha256Hex(description);
-          const deadlineUnix = deadline
-            ? Math.floor(new Date(deadline).getTime() / 1000).toString()
-            : "0";
+          setSubmitting(true);
+          try {
+            const amountStroops = Math.floor(Number(amount || "0") * 10_000_000);
+            const hashHex = await sha256Hex(description);
+            const deadlineUnix = deadline
+              ? Math.floor(new Date(deadline).getTime() / 1000).toString()
+              : "0";
 
-          localStorage.setItem(`job-desc:${hashHex}`, description);
-          await postJob(wallet, String(amountStroops), hashHex, deadlineUnix, tokenAddress);
-          setStatus("Job submitted to contract.");
-          setAmount("");
-          setDescription("");
-          setDeadline("");
+            localStorage.setItem(`job-desc:${hashHex}`, description);
+            const result = await postJob(wallet, String(amountStroops), hashHex, deadlineUnix, tokenAddress);
+            const jobId = typeof result === "number" || typeof result === "string" ? result : null;
+            setSuccess(jobId != null ? `Job #${jobId} created successfully.` : "Job submitted to contract.");
+            setAmount("");
+            setDescription("");
+            setDeadline("");
+          } catch (e) {
+            setError(e instanceof Error ? e.message : "Failed to post job. Please try again.");
+          } finally {
+            setSubmitting(false);
+          }
         }}
       >
         <label className="block text-sm font-medium">
@@ -93,12 +111,17 @@ export default function PostJobPage() {
           />
         </label>
 
-        <button className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white">
-          Post Job
+        <button
+          className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+          disabled={submitting}
+          aria-busy={submitting}
+        >
+          {submitting ? "Posting..." : "Post Job"}
         </button>
       </form>
 
-      {status && <p className="text-sm text-slate-700">{status}</p>}
+      {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+      {success && <p role="status" aria-live="polite" className="rounded-md bg-green-100 p-3 text-sm text-green-700">{success}</p>}
     </section>
   );
 }
