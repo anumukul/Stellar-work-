@@ -1,7 +1,11 @@
 "use client";
 
 import ErrorBanner from "@/components/ErrorBanner";
+import LoadingState from "@/components/LoadingState";
+import EmptyState from "@/components/EmptyState";
+import SectionCard from "@/components/SectionCard";
 import { acceptJob, getJob, getJobCount } from "@/lib/contract";
+import { getExplorerTxUrl } from "@/lib/stellar";
 import type { Job } from "@/lib/types";
 import { useWallet } from "@/lib/wallet-context";
 import Link from "next/link";
@@ -12,14 +16,16 @@ function toXlm(stroops: string) {
 }
 
 export default function HomePage() {
-  const { wallet, connectWallet } = useWallet();
+  const { wallet } = useWallet();
   const [jobs, setJobs] = useState<Array<{ id: number; job: Job }>>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState<number | null>(null);
+  const [latestTxHash, setLatestTxHash] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [totalJobs, setTotalJobs] = useState(0);
+  const [sortOrder, setSortOrder] = useState<"newest" | "oldest">("newest");
 
   const totalPages = useMemo(
     () => Math.max(1, Math.ceil(totalJobs / pageSize)),
@@ -51,7 +57,10 @@ export default function HomePage() {
       const idsToFetch = Array.from(
         { length: endId - startId + 1 },
         (_, i) => String(startId + i),
-      ).reverse();
+      );
+      if (sortOrder === "newest") {
+        idsToFetch.reverse();
+      }
 
       const results = await Promise.all(
         idsToFetch.map(async (id) => {
@@ -75,7 +84,7 @@ export default function HomePage() {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize]);
+  }, [page, pageSize, sortOrder]);
 
   useEffect(() => {
     void refresh();
@@ -103,15 +112,50 @@ export default function HomePage() {
 
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 
-      {loading && jobs.length === 0 && (
-        <p role="status" aria-live="polite" className="text-sm text-slate-600">
-          Loading jobs...
+      {loading && jobs.length === 0 && <LoadingState text="Loading jobs..." />}
+
+      {latestTxHash && (
+        <p className="text-sm text-slate-600">
+          Last transaction:{" "}
+          <a
+            href={getExplorerTxUrl(latestTxHash)}
+            target="_blank"
+            rel="noreferrer"
+            className="text-blue-600 hover:underline"
+          >
+            {latestTxHash}
+          </a>
         </p>
       )}
 
       {!loading && jobs.length === 0 && !error && (
-        <p className="text-sm text-slate-600">No open jobs found.</p>
+        <EmptyState
+          title="No open jobs found"
+          description="New jobs will appear here as clients post them."
+        />
       )}
+
+      <SectionCard
+        title="Jobs Display"
+        description="Default sort is newest first."
+      >
+        <div className="flex items-center gap-2 text-sm text-slate-600">
+          <label htmlFor="jobs-sort-order">Sort:</label>
+          <select
+            id="jobs-sort-order"
+            value={sortOrder}
+            onChange={(event) => {
+              setSortOrder(event.target.value as "newest" | "oldest");
+              setPage(1);
+            }}
+            className="rounded-md border border-slate-300 bg-white px-2 py-1"
+            disabled={loading}
+          >
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+          </select>
+        </div>
+      </SectionCard>
 
       <div className="grid gap-4 md:grid-cols-2">
         {jobs.map(({ id, job }) => (
@@ -142,25 +186,22 @@ export default function HomePage() {
               <button
                 type="button"
                 className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                  actionLoading === id
+                  !wallet || actionLoading === id
                     ? "cursor-not-allowed bg-slate-100 text-slate-400"
                     : "bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800"
                 }`}
+                title={!wallet ? "Connect your wallet to accept jobs." : undefined}
                 onClick={async () => {
                   setError(null);
                   if (!wallet) {
-                    try {
-                      await connectWallet();
-                    } catch {
-                      setError("Failed to connect wallet. Is Freighter installed?");
-                      return;
-                    }
                     return;
                   }
-
                   setActionLoading(id);
                   try {
-                    await acceptJob(wallet, String(id));
+                    const result = await acceptJob(wallet, String(id));
+                    if (result.hash) {
+                      setLatestTxHash(result.hash);
+                    }
                     await refresh();
                   } catch (e) {
                     setError(
@@ -172,12 +213,17 @@ export default function HomePage() {
                     setActionLoading(null);
                   }
                 }}
-                disabled={actionLoading !== null}
+                disabled={!wallet || actionLoading !== null}
                 aria-busy={actionLoading === id}
               >
                 {actionLoading === id ? "Processing..." : "Accept Job"}
               </button>
             </div>
+            {!wallet && (
+              <p className="mt-2 text-xs text-amber-700">
+                Connect your wallet to enable job actions.
+              </p>
+            )}
           </article>
         ))}
       </div>

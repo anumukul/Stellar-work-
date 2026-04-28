@@ -28,6 +28,9 @@ const getNetworkPassphrase = () =>
     ? Networks.PUBLIC
     : Networks.TESTNET;
 
+export const getNetwork = () =>
+  process.env.NEXT_PUBLIC_NETWORK === "mainnet" ? "mainnet" : "testnet";
+
 const DEFAULT_POLL_TIMEOUT = 30000;
 const DEFAULT_POLL_INTERVAL = 3000;
 
@@ -161,3 +164,11 @@ export function decodeScVal<T = unknown>(value: xdr.ScVal): T {
 }
 
 export { nativeToScVal, xdr };
+
+export function getExplorerTxUrl(txHash: string): string {
+  const base =
+    getNetwork() === "mainnet"
+      ? "https://stellar.expert/explorer/public/tx"
+      : "https://stellar.expert/explorer/testnet/tx";
+  return `${base}/${txHash}`;
+}

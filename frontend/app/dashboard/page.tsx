@@ -8,7 +8,9 @@ import {
   submitWork,
   enforceDeadline,
 } from "@/lib/contract";
+import EmptyState from "@/components/EmptyState";
 import ErrorBanner from "@/components/ErrorBanner";
+import SectionCard from "@/components/SectionCard";
 import { useWallet } from "@/lib/wallet-context";
 import type { Job, JobStatus } from "@/lib/types";
 import { useEffect, useState, useCallback } from "react";
@@ -108,7 +110,7 @@ export default function DashboardPage() {
     return (
       <section className="mx-auto max-w-3xl space-y-6">
         <h1 className="text-2xl font-semibold">Dashboard</h1>
-        <div className="rounded-lg border border-slate-200 bg-white p-8 text-center">
+        <SectionCard className="p-8 text-center">
           <p className="text-slate-600">Connect your wallet to view your jobs.</p>
           <button
             className="mt-4 rounded-md bg-slate-900 px-5 py-2.5 text-sm font-medium text-white"
@@ -118,7 +120,7 @@ export default function DashboardPage() {
           >
             Connect Wallet
           </button>
-        </div>
+        </SectionCard>
       </section>
     );
   }
@@ -196,9 +198,10 @@ function JobSection({
       <h2 className="text-lg font-semibold">{title}</h2>
       <p className="mb-3 text-sm text-slate-500">{subtitle}</p>
       {jobs.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-slate-300 bg-white p-6 text-center">
-          <p className="text-sm text-slate-500">No jobs found.</p>
-        </div>
+        <EmptyState
+          title="No jobs found"
+          description="Try changing the status filter or check back after creating/accepting jobs."
+        />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2">
           {jobs.map(({ id, job }) => (

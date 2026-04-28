@@ -19,6 +19,8 @@ interface WalletContextType {
   disconnectWallet: () => void;
 }
 
+type WalletDisplayMode = "short" | "full";
+
 const WalletContext = createContext<WalletContextType>({
   wallet: null,
   connectWallet: async () => {},
@@ -57,14 +59,46 @@ export function useWallet() {
 export function WalletButton() {
   const { wallet, connectWallet, disconnectWallet } = useWallet();
   const [connecting, setConnecting] = useState(false);
+  const [displayMode, setDisplayMode] = useState<WalletDisplayMode>("short");
+
+  useEffect(() => {
+    const stored = sessionStorage.getItem("wallet-display-mode");
+    if (stored === "short" || stored === "full") {
+      setDisplayMode(stored);
+    }
+  }, []);
+
+  const toggleDisplayMode = useCallback(() => {
+    setDisplayMode((current) => {
+      const next: WalletDisplayMode = current === "short" ? "full" : "short";
+      sessionStorage.setItem("wallet-display-mode", next);
+      return next;
+    });
+  }, []);
 
   if (wallet) {
+    const visibleAddress =
+      displayMode === "full" ? wallet : `${wallet.slice(0, 6)}...${wallet.slice(-4)}`;
+
     return (
       <div className="flex items-center gap-2">
         <span className="rounded-md bg-slate-100 px-3 py-1.5 font-mono text-xs text-slate-700">
-          {wallet.slice(0, 6)}...{wallet.slice(-4)}
+          {visibleAddress}
         </span>
         <button
+          type="button"
+          onClick={toggleDisplayMode}
+          className="rounded-md border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+          aria-label={
+            displayMode === "short"
+              ? "Show full wallet address"
+              : "Show shortened wallet address"
+          }
+        >
+          {displayMode === "short" ? "Show full" : "Show short"}
+        </button>
+        <button
+          type="button"
           onClick={disconnectWallet}
           className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
         >

@@ -2,6 +2,7 @@
 
 import { postJob } from "@/lib/contract";
 import ErrorBanner from "@/components/ErrorBanner";
+import { getExplorerTxUrl } from "@/lib/stellar";
 import { useWallet } from "@/lib/wallet-context";
 import { useState } from "react";
 
@@ -23,6 +24,8 @@ export default function PostJobPage() {
   );
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [lastAnnouncedSuccess, setLastAnnouncedSuccess] = useState<string | null>(null);
+  const [txHash, setTxHash] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   return (
@@ -33,8 +36,10 @@ export default function PostJobPage() {
         className="space-y-4 rounded-lg border border-slate-200 bg-white p-5"
         onSubmit={async (event) => {
           event.preventDefault();
+          if (submitting) return;
           setError(null);
           setSuccess(null);
+          setTxHash(null);
 
           if (!wallet) {
             try {
@@ -55,8 +60,16 @@ export default function PostJobPage() {
 
             localStorage.setItem(`job-desc:${hashHex}`, description);
             const result = await postJob(wallet, String(amountStroops), hashHex, deadlineUnix, tokenAddress);
+            if (result.hash) {
+              setTxHash(result.hash);
+            }
             const jobId = typeof result === "number" || typeof result === "string" ? result : null;
-            setSuccess(jobId != null ? `Job #${jobId} created successfully.` : "Job submitted to contract.");
+            const successMessage =
+              jobId != null ? `Job #${jobId} created successfully.` : "Job submitted to contract.";
+            setSuccess(successMessage);
+            if (successMessage !== lastAnnouncedSuccess) {
+              setLastAnnouncedSuccess(successMessage);
+            }
             setAmount("");
             setDescription("");
             setDeadline("");
@@ -112,6 +125,7 @@ export default function PostJobPage() {
         </label>
 
         <button
+          type="submit"
           className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
           disabled={submitting}
           aria-busy={submitting}
@@ -121,7 +135,24 @@ export default function PostJobPage() {
       </form>
 
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
-      {success && <p role="status" aria-live="polite" className="rounded-md bg-green-100 p-3 text-sm text-green-700">{success}</p>}
+      {success && (
+        <p role="status" aria-live="polite" aria-atomic="true" className="rounded-md bg-green-100 p-3 text-sm text-green-700">
+          {success}
+        </p>
+      )}
+      {txHash && (
+        <p className="text-sm text-slate-700">
+          Transaction:{" "}
+          <a
+            href={getExplorerTxUrl(txHash)}
+            target="_blank"
+            rel="noreferrer"
+            className="text-blue-600 hover:underline"
+          >
+            {txHash}
+          </a>
+        </p>
+      )}
     </section>
   );
 }
