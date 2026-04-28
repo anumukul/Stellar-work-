@@ -13,7 +13,7 @@ import { useEffect, useState } from "react";
 export default function JobDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
-  const { wallet, connectWallet } = useWallet();
+  const { wallet } = useWallet();
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
@@ -55,17 +55,12 @@ export default function JobDetailPage() {
   async function handleAction(action: () => Promise<{ hash?: string }>) {
     setError(null);
     setStatusMsg(null);
-    setLoading(true);
-
     if (!wallet) {
-      try {
-        await connectWallet();
-      } catch {
-        setError("Failed to connect wallet. Is Freighter installed?");
-        setLoading(false);
-      }
+      setError("Connect your wallet to run this action.");
       return;
     }
+
+    setLoading(true);
 
     try {
       const result = await action();
@@ -171,11 +166,17 @@ export default function JobDetailPage() {
         </p>
 
         <div className="mt-4 flex flex-wrap gap-2">
-          {wallet && job.status === "Open" && (
+          {job.status === "Open" && (
             <button
               className="rounded-md border border-slate-300 px-3 py-1.5"
-              onClick={() => handleAction(() => acceptJob(wallet, id))}
-              disabled={loading}
+              onClick={() => {
+                if (!wallet) {
+                  return;
+                }
+                void handleAction(() => acceptJob(wallet, id));
+              }}
+              disabled={!wallet || loading}
+              title={!wallet ? "Connect your wallet to accept this job." : undefined}
               aria-busy={loading}
             >
               {loading ? "Processing..." : "Accept Job"}
@@ -215,6 +216,11 @@ export default function JobDetailPage() {
             </button>
           )}
         </div>
+        {!wallet && (
+          <p className="text-xs text-amber-700">
+            Connect your wallet to enable contract actions.
+          </p>
+        )}
       </article>
     </section>
   );

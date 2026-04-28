@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { useModalFocusTrap } from "@/lib/modal";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -170,11 +171,18 @@ function RaiseDisputeModal({
   onClose: () => void;
   onSubmit: (jobId: string, reason: string, evidence: string) => Promise<void>;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
   const [jobId, setJobId] = useState(jobs[0]?.id ?? "");
   const [reason, setReason] = useState("");
   const [evidence, setEvidence] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  const handleClose = useCallback(() => {
+    onClose();
+  }, [onClose]);
+
+  useModalFocusTrap(true, dialogRef, handleClose);
 
   async function handleSubmit() {
     if (loading) return;
@@ -193,7 +201,13 @@ function RaiseDisputeModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-      <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 overflow-hidden">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        tabIndex={-1}
+        className="w-full max-w-lg rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 overflow-hidden"
+      >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
           <div>
@@ -299,12 +313,19 @@ function ResolveModal({
   onClose: () => void;
   onResolve: (id: string, clientShare: number, note: string) => Promise<void>;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
   const [clientShare, setClientShare] = useState(50);
   const [note, setNote] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   const freelancerShare = 100 - clientShare;
+
+  const handleClose = useCallback(() => {
+    onClose();
+  }, [onClose]);
+
+  useModalFocusTrap(true, dialogRef, handleClose);
 
   async function handleResolve() {
     if (loading) return;
@@ -323,7 +344,13 @@ function ResolveModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-      <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 overflow-hidden">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        tabIndex={-1}
+        className="w-full max-w-md rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 overflow-hidden"
+      >
         <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
           <div>
             <h2 className="text-base font-semibold text-slate-900">Resolve Dispute</h2>

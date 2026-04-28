@@ -1018,6 +1018,22 @@ mod test {
     }
 
     #[test]
+    fn withdraw_fees_with_zero_accrued_is_noop() {
+        let (env, client, admin, _, _, native_token) = setup();
+        let token_client = token::Client::new(&env, &native_token);
+        let admin_balance_before = token_client.balance(&admin);
+        let fees_before = client.get_fees(&native_token);
+
+        client.withdraw_fees(&native_token);
+
+        let admin_balance_after = token_client.balance(&admin);
+        let fees_after = client.get_fees(&native_token);
+        assert_eq!(fees_before, 0);
+        assert_eq!(fees_after, 0);
+        assert_eq!(admin_balance_after, admin_balance_before);
+    }
+
+    #[test]
     fn token_whitelist_management() {
         let (env, client, _, _, _, native_token) = setup();
         assert!(client.is_token_allowed(&native_token));
