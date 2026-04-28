@@ -5,8 +5,9 @@ use soroban_sdk::{
     Env, Symbol, Vec,
 };
 
-const FEE_BPS: i128 = 250;
+const DEFAULT_FEE_BPS: i128 = 250;
 const BPS_DENOMINATOR: i128 = 10_000;
+const MAX_FEE_BPS: i128 = 10_000;
 const MAX_REVISIONS: u32 = 3;
 const CONTRACT_VERSION: u32 = 1;
 
@@ -51,6 +52,7 @@ pub enum DataKey {
     FeesAccrued,
     AllowedToken(Address),
     TokenFees(Address),
+    FeeBps,
 }
 
 #[contracterror]
@@ -219,7 +221,7 @@ impl EscrowContract {
             Option::None => panic_with_error!(&e, Error::InvalidStatus),
         };
 
-        let fee = checked_mul_div(&e, job.amount, FEE_BPS, BPS_DENOMINATOR);
+        let fee = checked_mul_div(&e, job.amount, get_fee_bps(e.clone()), BPS_DENOMINATOR);
         let payout = checked_sub(&e, job.amount, fee);
         let current_fees = get_token_fees(&e, &job.token);
         let updated_fees = checked_add(&e, current_fees, fee);
@@ -372,7 +374,7 @@ impl EscrowContract {
             let token_client = token::Client::new(&e, &job.token);
             token_client.transfer(&e.current_contract_address(), &job.client, &job.amount);
         } else if winner == freelancer {
-            let fee = checked_mul_div(&e, job.amount, FEE_BPS, BPS_DENOMINATOR);
+            let fee = checked_mul_div(&e, job.amount, get_fee_bps(e.clone()), BPS_DENOMINATOR);
             let payout = checked_sub(&e, job.amount, fee);
             let current_fees = get_token_fees(&e, &job.token);
             let updated_fees = checked_add(&e, current_fees, fee);
@@ -472,6 +474,30 @@ impl EscrowContract {
 
     pub fn get_contract_version(_e: Env) -> u32 {
         CONTRACT_VERSION
+    }
+
+    pub fn get_fee_bps(e: Env) -> i128 {
+        e.storage()
+            .instance()
+            .get::<DataKey, i128>(&DataKey::FeeBps)
+            .unwrap_or(DEFAULT_FEE_BPS)
+    }
+
+    pub fn update_fee_bps(e: Env, new_fee_bps: i128) {
+        let admin = load_admin(&e);
+        admin.require_auth();
+
+        if new_fee_bps <= 0 || new_fee_bps > MAX_FEE_BPS {
+            panic_with_error!(&e, Error::InvalidAmount);
+        }
+
+        e.storage().instance().set(&DataKey::FeeBps, &new_fee_bps);
+        bump_instance_ttl(&e);
+
+        e.events().publish(
+            (Symbol::new(&e, "fee_updated"),),
+            (admin, new_fee_bps),
+        );
     }
 
     pub fn withdraw_fees(e: Env, token: Address) {
@@ -1623,5 +1649,113 @@ mod test {
         let fee = client.get_fees(&native_token);
 
         assert_eq!(payout + fee, amount, "dispute payout + fee must equal original job amount");
+    }
+
+    // ── Issue #131: Fee update bounds tests ──────────────────────────────
+
+    #[test]
+    fn fee_update_valid_value_accepted() {
+        let (env, client, admin, _, _, native_token) = setup();
+        // Update fee to 5% (500 bps)
+        client.update_fee_bps(&admin, &500i128);
+        assert_eq!(client.get_fee_bps(), 500);
+
+        // Post job and verify new fee is used
+        let job_id = client.post_job(&admin, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        let freelancer = Address::generate(&env);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+
+        let token_client = token::Client::new(&env, &native_token);
+        let pre_balance = token_client.balance(&freelancer);
+        client.approve_work(&admin, &job_id);
+        let post_balance = token_client.balance(&freelancer);
+
+        // 5% fee: 1_000_000 * 500 / 10_000 = 50_000
+        assert_eq!(post_balance - pre_balance, 950_000);
+        assert_eq!(client.get_fees(&native_token), 50_000);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #11)")]
+    fn fee_update_zero_rejected() {
+        let (env, client, admin, _, _, _) = setup();
+        client.update_fee_bps(&admin, &0i128);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #11)")]
+    fn fee_update_negative_rejected() {
+        let (env, client, admin, _, _, _) = setup();
+        client.update_fee_bps(&admin, &-1i128);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #11)")]
+    fn fee_update_above_max_rejected() {
+        let (env, client, admin, _, _, _) = setup();
+        // MAX_FEE_BPS is 10_000 (100%), so 10_001 should fail
+        client.update_fee_bps(&admin, &10_001i128);
+    }
+
+    #[test]
+    fn fee_update_max_value_accepted() {
+        let (env, client, admin, _, _, native_token) = setup();
+        // MAX_FEE_BPS is 10_000 (100%)
+        client.update_fee_bps(&admin, &10_000i128);
+        assert_eq!(client.get_fee_bps(), 10_000);
+
+        let job_id = client.post_job(&admin, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        let freelancer = Address::generate(&env);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+
+        let token_client = token::Client::new(&env, &native_token);
+        let pre_balance = token_client.balance(&freelancer);
+        client.approve_work(&admin, &job_id);
+        let post_balance = token_client.balance(&freelancer);
+
+        // 100% fee: 1_000_000 * 10_000 / 10_000 = 1_000_000, payout = 0
+        assert_eq!(post_balance - pre_balance, 0);
+        assert_eq!(client.get_fees(&native_token), 1_000_000);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #2)")]
+    fn fee_update_non_admin_rejected() {
+        let (env, client, _, _, _, _) = setup();
+        let stranger = Address::generate(&env);
+        client.update_fee_bps(&stranger, &500i128);
+    }
+
+    #[test]
+    fn fee_update_default_used_when_not_set() {
+        // Fresh contract should use DEFAULT_FEE_BPS (250 = 2.5%)
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, EscrowContract);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let native_token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        client.initialize(&admin, &native_token);
+
+        // Fee should be DEFAULT_FEE_BPS if not explicitly set
+        assert_eq!(client.get_fee_bps(), DEFAULT_FEE_BPS);
+    }
+
+    #[test]
+    fn fee_update_event_emitted() {
+        let (env, client, admin, _, _, _) = setup();
+        client.update_fee_bps(&admin, &500i128);
+
+        let events = env.events().all();
+        let has_fee_event = events.iter().any(|e| {
+            e.event.type_ == soroban_sdk::contracteventtype::Contract
+                && e.event.body.to_string().contains("fee_updated")
+        });
+        assert!(has_fee_event, "fee_updated event should be emitted");
     }
 }

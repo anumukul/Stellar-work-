@@ -21,8 +21,17 @@ export default function JobDetailPage() {
   const [loading, setLoading] = useState(false);
   const [fetching, setFetching] = useState(true);
   const [latestTxHash, setLatestTxHash] = useState<string | null>(null);
+  const [invalidId, setInvalidId] = useState(false);
+
+  const numericId = Number(id);
+  const isIdValid = !isNaN(numericId) && numericId > 0 && Number.isInteger(numericId);
 
   async function load() {
+    if (!isIdValid) {
+      setInvalidId(true);
+      setFetching(false);
+      return;
+    }
     setFetching(true);
     setError(null);
     try {
@@ -53,6 +62,7 @@ export default function JobDetailPage() {
   }
 
   async function handleAction(action: () => Promise<{ hash?: string }>) {
+    if (loading) return;
     setError(null);
     setStatusMsg(null);
     if (!wallet) {
@@ -78,6 +88,20 @@ export default function JobDetailPage() {
     } finally {
       setLoading(false);
     }
+  }
+
+  if (invalidId) {
+    return (
+      <section className="space-y-4">
+        <h1 className="text-2xl font-semibold">Invalid Job ID</h1>
+        <p className="text-sm text-red-700" role="alert">
+          Invalid job ID. Please check the URL and try again.
+        </p>
+        <Link href="/" className="text-sm text-blue-600 hover:underline">
+          Back to Home
+        </Link>
+      </section>
+    );
   }
 
   if (fetching) {

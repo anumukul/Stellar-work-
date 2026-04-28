@@ -67,3 +67,6 @@ Copy `.env.example` to `.env.local` and fill in the values. The contract ID is p
 | `npm run build` | Production build |
 | `npm run start` | Serve the production build locally |
 | `npm run lint` | Run ESLint |
+| `npm test` | Run unit tests (vitest) |
+| `npm run test:e2e` | Run E2E tests (Playwright, headless) |
+| `npm run test:e2e -- --headed` | Run E2E tests with browser visible |
