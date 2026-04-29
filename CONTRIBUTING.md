@@ -63,7 +63,7 @@ The following checks are performed:
 
 ## Issue Labels
 
-We use labels to categorize issues and pull requests. Please use them accordingly:
+We use labels to categorize issues and pull requests. Please use them accordingly. For a detailed breakdown of our triage process and label meanings, see the [Issue Triage Guide](docs/TRIAGE.md).
 
 | Label | Description | Example |
 | :--- | :--- | :--- |

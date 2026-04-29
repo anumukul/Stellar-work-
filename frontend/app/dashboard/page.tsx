@@ -80,8 +80,14 @@ export default function DashboardPage() {
   }, [wallet]);
 
   useEffect(() => {
-    fetchJobs();
-  }, [fetchJobs]);
+    if (wallet) {
+      fetchJobs();
+    } else {
+      setAllJobs([]);
+      setLoading(false);
+      setError(null);
+    }
+  }, [wallet, fetchJobs]);
 
   const handleAction = async (fn: () => Promise<unknown>, jobId: number) => {
     setActionLoading(jobId);

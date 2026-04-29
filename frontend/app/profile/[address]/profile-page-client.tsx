@@ -73,8 +73,14 @@ export default function ProfilePageClient({ address }: { address: string }) {
   }, [wallet, address, addressValid]);
 
   useEffect(() => {
-    fetchJobs();
-  }, [fetchJobs]);
+    if (wallet) {
+      fetchJobs();
+    } else {
+      setJobs([]);
+      setLoading(false);
+      setError(null);
+    }
+  }, [wallet, fetchJobs]);
 
   const jobsPosted = jobs.filter((j) => j.role === "client").length;
   const jobsCompleted = jobs.filter((j) => j.job.status === "Completed").length;

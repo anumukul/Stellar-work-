@@ -70,6 +70,12 @@ export function WalletButton() {
     }
   }, []);
 
+  useEffect(() => {
+    if (!wallet) {
+      setDisplayMode("short");
+    }
+  }, [wallet]);
+
   const toggleDisplayMode = useCallback(() => {
     setDisplayMode((current) => {
       const next: WalletDisplayMode = current === "short" ? "full" : "short";
