@@ -744,10 +744,10 @@ export default function DisputesPage() {
           <EmptyState
             message={
               filter === "active"
-                ? "No active disputes — everything looks good."
+                ? "No active disputes yet."
                 : filter === "resolved"
                 ? "No resolved disputes yet."
-                : "No disputes found."
+                : "No disputes yet."
             }
           />
         ) : (

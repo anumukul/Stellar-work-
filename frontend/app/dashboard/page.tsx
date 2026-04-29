@@ -199,8 +199,8 @@ function JobSection({
       <p className="mb-3 text-sm text-slate-500">{subtitle}</p>
       {jobs.length === 0 ? (
         <EmptyState
-          title="No jobs found"
-          description="Try changing the status filter or check back after creating/accepting jobs."
+          title="No jobs yet"
+          description="No jobs match this filter yet."
         />
       ) : (
         <ul className="grid list-none gap-4 sm:grid-cols-2" aria-label={title}>

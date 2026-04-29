@@ -202,8 +202,8 @@ export default function AdminPage() {
       <SectionCard title="All Jobs">
         {jobs.length === 0 ? (
           <EmptyState
-            title="No jobs found on-chain"
-            description="Jobs posted to the contract will appear in this table."
+            title="No jobs yet"
+            description="Jobs posted to the contract will appear here."
           />
         ) : (
           <div className="mt-3 overflow-x-auto">
