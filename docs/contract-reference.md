@@ -38,8 +38,15 @@ This document provides a quick reference for the `EscrowContract` methods, expec
 - `amount: i128`: Total job payment held in escrow.
 - `description_hash: BytesN<32>`: SHA-256 hash of the job description.
 - `status: JobStatus`: Current state of the job.
-- `created_at: u64`: Ledger timestamp of job creation.
-- `deadline: u64`: Ledger timestamp after which the job can be cancelled (0 if none).
+- `created_at: u64`: Ledger timestamp (Unix epoch, **seconds**) recorded at the moment `post_job` is called.
+  - Set by the contract via `e.ledger().timestamp()` — callers cannot supply or override this value.
+  - Immutable after job creation; never updated by subsequent state transitions.
+  - **Example:** `1710000000` (≈ 2024-03-10 00:00:00 UTC)
+  - Useful for calculating job age: `age_seconds = current_ledger_timestamp - created_at`.
+- `deadline: u64`: Ledger timestamp (Unix epoch, **seconds**) after which the job may be cancelled by the client via `enforce_deadline`. Pass `0` to indicate no deadline.
+  - **Example (no deadline):** `0`
+  - **Example (30-day deadline):** `1710000000 + 2_592_000` = `1712592000` (≈ 2024-04-09 UTC)
+  - The contract validates at `post_job` and `accept_job` that `deadline == 0 || current_timestamp <= deadline`.
 - `token: Address`: The token used for payment.
 - `revision_count: u32`: Number of times the client has rejected work.
 
