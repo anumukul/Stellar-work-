@@ -7,7 +7,9 @@ import {
   getNativeToken,
   withdrawFees,
 } from "@/lib/contract";
+import EmptyState from "@/components/EmptyState";
 import ErrorBanner from "@/components/ErrorBanner";
+import SectionCard from "@/components/SectionCard";
 import { useWallet } from "@/lib/wallet-context";
 import type { Job, JobStatus } from "@/lib/types";
 import { useEffect, useState, useCallback } from "react";
@@ -83,6 +85,11 @@ export default function AdminPage() {
       fetchAdminData(wallet);
     } else {
       setLoading(false);
+      setIsAdmin(null);
+      setFees(0);
+      setJobs([]);
+      setError(null);
+      setSuccessMessage(null);
     }
   }, [wallet, fetchAdminData]);
 
@@ -112,7 +119,7 @@ export default function AdminPage() {
     return (
       <section className="mx-auto max-w-3xl space-y-6">
         <h1 className="text-2xl font-semibold">Admin Panel</h1>
-        <div className="rounded-lg border border-slate-200 bg-white p-8 text-center">
+        <SectionCard className="p-8 text-center">
           <p className="text-slate-600">Connect your wallet to access admin controls.</p>
           <button
             className="mt-4 rounded-md bg-slate-900 px-5 py-2.5 text-sm font-medium text-white"
@@ -122,7 +129,7 @@ export default function AdminPage() {
           >
             Connect Wallet
           </button>
-        </div>
+        </SectionCard>
       </section>
     );
   }
@@ -167,8 +174,7 @@ export default function AdminPage() {
         </p>
       )}
 
-      <div className="rounded-lg border border-slate-200 bg-white p-5">
-        <h2 className="text-lg font-semibold">Platform Fees</h2>
+      <SectionCard title="Platform Fees">
         <p className="mt-2 text-3xl font-bold">{toXlm(fees)} XLM</p>
         <p className="text-sm text-slate-500">Accrued platform fees (2.5%)</p>
         <button
@@ -178,10 +184,9 @@ export default function AdminPage() {
         >
           {withdrawing ? "Withdrawing..." : "Withdraw Fees"}
         </button>
-      </div>
+      </SectionCard>
 
-      <div className="rounded-lg border border-slate-200 bg-white p-5">
-        <h2 className="text-lg font-semibold">Job Overview</h2>
+      <SectionCard title="Job Overview">
         <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-6">
           <div className="rounded-md border border-slate-200 p-3 text-center">
             <p className="text-2xl font-bold">{jobs.length}</p>
@@ -197,12 +202,14 @@ export default function AdminPage() {
             </div>
           ))}
         </div>
-      </div>
+      </SectionCard>
 
-      <div className="rounded-lg border border-slate-200 bg-white p-5">
-        <h2 className="text-lg font-semibold">All Jobs</h2>
+      <SectionCard title="All Jobs">
         {jobs.length === 0 ? (
-          <p className="mt-3 text-sm text-slate-500">No jobs found on-chain.</p>
+          <EmptyState
+            title="No jobs yet"
+            description="Jobs posted to the contract will appear here."
+          />
         ) : (
           <div className="mt-3 overflow-x-auto">
             <table className="w-full text-left text-sm">
@@ -249,7 +256,7 @@ export default function AdminPage() {
             </table>
           </div>
         )}
-      </div>
+      </SectionCard>
     </section>
   );
 }

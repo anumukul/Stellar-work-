@@ -1,6 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { useModalFocusTrap } from "@/lib/modal";
+import { useWallet } from "@/lib/wallet-context";
+import SectionCard from "@/components/SectionCard";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -170,13 +173,21 @@ function RaiseDisputeModal({
   onClose: () => void;
   onSubmit: (jobId: string, reason: string, evidence: string) => Promise<void>;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
   const [jobId, setJobId] = useState(jobs[0]?.id ?? "");
   const [reason, setReason] = useState("");
   const [evidence, setEvidence] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  const handleClose = useCallback(() => {
+    onClose();
+  }, [onClose]);
+
+  useModalFocusTrap(true, dialogRef, handleClose);
+
   async function handleSubmit() {
+    if (loading) return;
     if (!reason.trim()) { setError("Please describe the dispute reason."); return; }
     setError("");
     setLoading(true);
@@ -192,22 +203,39 @@ function RaiseDisputeModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-      <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 overflow-hidden">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        tabIndex={-1}
+        className="w-full max-w-lg rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 overflow-hidden"
+      >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
           <div>
             <h2 className="text-base font-semibold text-slate-900">Raise a Dispute</h2>
             <p className="text-xs text-slate-500 mt-0.5">Funds will be held in escrow until resolved</p>
           </div>
-          <button onClick={onClose} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close raise dispute modal"
+            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors"
+          >
             <svg className="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={2}>
               <path d="M4 4l8 8M12 4l-8 8" strokeLinecap="round"/>
             </svg>
           </button>
         </div>
 
-        {/* Body */}
-        <div className="px-6 py-5 space-y-4">
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void handleSubmit();
+          }}
+        >
+          {/* Body */}
+          <div className="px-6 py-5 space-y-4">
           {/* Job selector */}
           <div>
             <label className="block text-xs font-medium text-slate-700 mb-1.5">Job</label>
@@ -230,6 +258,7 @@ function RaiseDisputeModal({
               onChange={e => setReason(e.target.value)}
               rows={3}
               placeholder="Describe the issue clearly…"
+              required
               className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 resize-none"
             />
           </div>
@@ -249,22 +278,27 @@ function RaiseDisputeModal({
           {error && (
             <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600 ring-1 ring-red-200">{error}</p>
           )}
-        </div>
+          </div>
 
-        {/* Footer */}
-        <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-6 py-4">
-          <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 transition-colors">
-            Cancel
-          </button>
-          <button
-            onClick={handleSubmit}
-            disabled={loading}
-            className="flex items-center gap-2 rounded-lg bg-slate-900 px-5 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-60 transition-colors"
-          >
-            {loading && <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />}
-            Submit Dispute
-          </button>
-        </div>
+          {/* Footer */}
+          <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-6 py-4">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={loading}
+              className="flex items-center gap-2 rounded-lg bg-slate-900 px-5 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-60 transition-colors"
+            >
+              {loading && <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />}
+              Submit Dispute
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );
@@ -281,6 +315,7 @@ function ResolveModal({
   onClose: () => void;
   onResolve: (id: string, clientShare: number, note: string) => Promise<void>;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
   const [clientShare, setClientShare] = useState(50);
   const [note, setNote] = useState("");
   const [loading, setLoading] = useState(false);
@@ -288,7 +323,14 @@ function ResolveModal({
 
   const freelancerShare = 100 - clientShare;
 
+  const handleClose = useCallback(() => {
+    onClose();
+  }, [onClose]);
+
+  useModalFocusTrap(true, dialogRef, handleClose);
+
   async function handleResolve() {
+    if (loading) return;
     if (!note.trim()) { setError("Resolution note is required."); return; }
     setError("");
     setLoading(true);
@@ -304,20 +346,37 @@ function ResolveModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-      <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 overflow-hidden">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        tabIndex={-1}
+        className="w-full max-w-md rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 overflow-hidden"
+      >
         <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
           <div>
             <h2 className="text-base font-semibold text-slate-900">Resolve Dispute</h2>
             <p className="text-xs text-slate-500 mt-0.5">{dispute.jobTitle}</p>
           </div>
-          <button onClick={onClose} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 transition-colors">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close resolve dispute modal"
+            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 transition-colors"
+          >
             <svg className="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={2}>
               <path d="M4 4l8 8M12 4l-8 8" strokeLinecap="round"/>
             </svg>
           </button>
         </div>
 
-        <div className="px-6 py-5 space-y-5">
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void handleResolve();
+          }}
+        >
+          <div className="px-6 py-5 space-y-5">
           {/* Fund split */}
           <div>
             <div className="flex items-center justify-between mb-2">
@@ -376,6 +435,7 @@ function ResolveModal({
               onChange={e => setNote(e.target.value)}
               rows={3}
               placeholder="Explain the basis for this resolution…"
+              required
               className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 resize-none"
             />
           </div>
@@ -383,21 +443,26 @@ function ResolveModal({
           {error && (
             <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600 ring-1 ring-red-200">{error}</p>
           )}
-        </div>
+          </div>
 
-        <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-6 py-4">
-          <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 transition-colors">
-            Cancel
-          </button>
-          <button
-            onClick={handleResolve}
-            disabled={loading}
-            className="flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60 transition-colors"
-          >
-            {loading && <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />}
-            Confirm Resolution
-          </button>
-        </div>
+          <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-6 py-4">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={loading}
+              className="flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60 transition-colors"
+            >
+              {loading && <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />}
+              Confirm Resolution
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );
@@ -502,6 +567,7 @@ function DisputeCard({
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function DisputesPage() {
+  const { wallet, connectWallet } = useWallet();
   const [role, setRole] = useState<Role>("client");
   const [disputes, setDisputes] = useState<Dispute[]>([]);
   const [eligibleJobs, setEligibleJobs] = useState<EligibleJob[]>([]);
@@ -513,12 +579,32 @@ export default function DisputesPage() {
   const [resolveTarget, setResolveTarget] = useState<Dispute | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: "success" | "error" } | null>(null);
 
+  // Sync role with wallet/admin status
+  useEffect(() => {
+    if (!wallet) {
+      setDisputes([]);
+      setEligibleJobs([]);
+      setRole("client"); // Default role
+      return;
+    }
+
+    const adminAddress = process.env.NEXT_PUBLIC_ADMIN_ADDRESS;
+    if (adminAddress && wallet === adminAddress) {
+      setRole("admin");
+    }
+  }, [wallet]);
+
   // Simulate data fetch
   useEffect(() => {
+    if (!wallet) {
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
-    setError("");
     const t = setTimeout(() => {
       try {
+        setError("");
         setDisputes(MOCK_DISPUTES);
         setEligibleJobs(MOCK_ELIGIBLE_JOBS);
         setLoading(false);
@@ -528,7 +614,7 @@ export default function DisputesPage() {
       }
     }, 800);
     return () => clearTimeout(t);
-  }, [role]);
+  }, [role, wallet]);
 
   // Toast auto-dismiss
   useEffect(() => {
@@ -588,6 +674,27 @@ export default function DisputesPage() {
 
   const activeCount = disputes.filter(d => ["Active", "UnderReview", "PendingEvidence"].includes(d.status)).length;
 
+  if (!wallet) {
+    return (
+      <div className="min-h-screen bg-slate-50">
+        <div className="mx-auto max-w-3xl px-4 py-8">
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 mb-6">Disputes</h1>
+          <SectionCard className="p-8 text-center">
+            <p className="text-slate-600">Connect your wallet to view and manage disputes.</p>
+            <button
+              className="mt-4 rounded-md bg-slate-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-slate-700 transition-colors"
+              onClick={async () => {
+                try { await connectWallet(); } catch { /* cancelled */ }
+              }}
+            >
+              Connect Wallet
+            </button>
+          </SectionCard>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50">
       {/* Toast */}
@@ -620,7 +727,10 @@ export default function DisputesPage() {
               {(["client", "freelancer", "admin"] as Role[]).map(r => (
                 <button
                   key={r}
-                  onClick={() => setRole(r)}
+                  onClick={() => {
+                    setLoading(true);
+                    setRole(r);
+                  }}
                   className={`rounded-md px-3 py-1.5 font-medium capitalize transition-colors ${
                     role === r ? "bg-slate-900 text-white" : "text-slate-500 hover:text-slate-800"
                   }`}
@@ -679,10 +789,10 @@ export default function DisputesPage() {
           <EmptyState
             message={
               filter === "active"
-                ? "No active disputes — everything looks good."
+                ? "No active disputes yet."
                 : filter === "resolved"
                 ? "No resolved disputes yet."
-                : "No disputes found."
+                : "No disputes yet."
             }
           />
         ) : (

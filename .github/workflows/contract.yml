@@ -18,6 +18,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+          components: rustfmt
+
+      - name: Check formatting
+        working-directory: contracts/escrow/
+        run: cargo fmt --all -- --check
 
       - name: Cache Cargo
         uses: actions/cache@v3

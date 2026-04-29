@@ -9,6 +9,11 @@ body {
   font-family: var(--font-geist-sans);
 }
 
+:root {
+  /* Raise muted text contrast while preserving existing utility classes. */
+  --color-slate-600: #334155;
+}
+
 @layer base {
   button:focus-visible, 
   a:focus-visible, 
@@ -18,5 +23,16 @@ body {
   [tabindex="0"]:focus-visible {
     outline: 2px solid var(--color-blue-500, #3b82f6);
     outline-offset: 2px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

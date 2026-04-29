@@ -8,7 +8,9 @@ import {
   submitWork,
   enforceDeadline,
 } from "@/lib/contract";
+import EmptyState from "@/components/EmptyState";
 import ErrorBanner from "@/components/ErrorBanner";
+import SectionCard from "@/components/SectionCard";
 import { useWallet } from "@/lib/wallet-context";
 import type { Job, JobStatus } from "@/lib/types";
 import { useEffect, useState, useCallback } from "react";
@@ -78,8 +80,14 @@ export default function DashboardPage() {
   }, [wallet]);
 
   useEffect(() => {
-    fetchJobs();
-  }, [fetchJobs]);
+    if (wallet) {
+      fetchJobs();
+    } else {
+      setAllJobs([]);
+      setLoading(false);
+      setError(null);
+    }
+  }, [wallet, fetchJobs]);
 
   const handleAction = async (fn: () => Promise<unknown>, jobId: number) => {
     setActionLoading(jobId);
@@ -108,17 +116,17 @@ export default function DashboardPage() {
     return (
       <section className="mx-auto max-w-3xl space-y-6">
         <h1 className="text-2xl font-semibold">Dashboard</h1>
-        <div className="rounded-lg border border-slate-200 bg-white p-8 text-center">
+        <SectionCard className="p-8 text-center">
           <p className="text-slate-600">Connect your wallet to view your jobs.</p>
           <button
-            className="mt-4 rounded-md bg-slate-900 px-5 py-2.5 text-sm font-medium text-white"
+            className="mt-4 rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
             onClick={async () => {
               try { await connectWallet(); } catch { /* cancelled */ }
             }}
           >
             Connect Wallet
           </button>
-        </div>
+        </SectionCard>
       </section>
     );
   }
@@ -196,23 +204,25 @@ function JobSection({
       <h2 className="text-lg font-semibold">{title}</h2>
       <p className="mb-3 text-sm text-slate-500">{subtitle}</p>
       {jobs.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-slate-300 bg-white p-6 text-center">
-          <p className="text-sm text-slate-500">No jobs found.</p>
-        </div>
+        <EmptyState
+          title="No jobs yet"
+          description="No jobs match this filter yet."
+        />
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2">
+        <ul className="grid list-none gap-4 sm:grid-cols-2" aria-label={title}>
           {jobs.map(({ id, job }) => (
-            <JobCard
-              key={id}
-              id={id}
-              job={job}
-              wallet={wallet}
-              role={role}
-              isLoading={actionLoading === id}
-              onAction={onAction}
-            />
+            <li key={id}>
+              <JobCard
+                id={id}
+                job={job}
+                wallet={wallet}
+                role={role}
+                isLoading={actionLoading === id}
+                onAction={onAction}
+              />
+            </li>
           ))}
-        </div>
+        </ul>
       )}
     </div>
   );
@@ -236,7 +246,7 @@ function JobCard({
   const actions = getActions(id, job, wallet, role);
 
   return (
-    <article className="rounded-lg border border-slate-200 bg-white p-4">
+    <article className="h-full rounded-lg border border-slate-200 bg-white p-4">
       <div className="flex items-start justify-between gap-2">
         <h3 className="font-medium">Job #{id}</h3>
         <span
@@ -261,7 +271,7 @@ function JobCard({
             <button
               key={action.label}
               disabled={isLoading}
-              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm disabled:opacity-50"
+              className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
               onClick={() => onAction(() => action.fn(), id)}
             >
               {isLoading ? "..." : action.label}
