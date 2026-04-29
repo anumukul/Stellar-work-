@@ -30,3 +30,4 @@ Location: `contracts/escrow/src/lib.rs`
 - `4` InsufficientFunds
 - `5` JobAlreadyAccepted
 - `6` DeadlinePassed
+- `7` AlreadyInitialized

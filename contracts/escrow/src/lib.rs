@@ -80,6 +80,7 @@ pub enum Error {
     InsufficientFunds = 4,
     JobAlreadyAccepted = 5,
     DeadlinePassed = 6,
+    AlreadyInitialized = 7,
     DeadlineNotExpired = 7,
     TokenNotAllowed = 8,
     FeeTooHigh = 9,
@@ -2151,5 +2152,35 @@ mod test {
         let review_jobs = client.get_jobs_by_status(&JobStatus::SubmittedForReview);
         assert_eq!(review_jobs.len(), 1);
         assert_eq!(review_jobs.get(0).unwrap().amount, 3_000_000);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::{Env, Address};
+
+    #[test]
+    #[should_panic]
+    fn test_double_initialize_fails() {
+        let e = Env::default();
+        let admin = Address::generate(&e);
+        let token = Address::generate(&e);
+
+        EscrowContract::initialize(e.clone(), admin.clone(), token.clone());
+        // second call should panic
+        EscrowContract::initialize(e.clone(), admin, token);
+    }
+
+    #[test]
+    fn test_initialize_once_works() {
+        let e = Env::default();
+        let admin = Address::generate(&e);
+        let token = Address::generate(&e);
+
+        EscrowContract::initialize(e.clone(), admin.clone(), token.clone());
+
+        let stored_admin: Address = e.storage().instance().get(&DataKey::Admin).unwrap();
+        assert_eq!(stored_admin, admin);
     }
 }
