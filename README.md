@@ -31,6 +31,10 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
+### 3) Pre-commit Hooks (Optional)
+
+To automate quality checks, see the [pre-commit setup guide](CONTRIBUTING.md#pre-commit-hooks-optional) in the contribution docs.
+
 ## Deploy Contract to Stellar Testnet (Step-by-Step)
 
 This walkthrough takes you from build to frontend integration with copy-pasteable commands.
