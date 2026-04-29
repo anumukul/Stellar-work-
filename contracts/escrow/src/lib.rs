@@ -355,10 +355,14 @@ impl EscrowContract {
         let mut job = get_job_or_panic(&e, job_id);
         caller.require_auth();
 
-        if job.status != JobStatus::InProgress && job.status != JobStatus::SubmittedForReview {
+        let is_disputable_status =
+            job.status == JobStatus::InProgress || job.status == JobStatus::SubmittedForReview;
+        if !is_disputable_status {
             panic_with_error!(&e, Error::InvalidStatus);
         }
-        if job.client != caller && job.freelancer != Option::Some(caller.clone()) {
+
+        let is_participant = job.client == caller || job.freelancer == Option::Some(caller.clone());
+        if !is_participant {
             panic_with_error!(&e, Error::Unauthorized);
         }
 
@@ -1282,6 +1286,97 @@ mod test {
         assert_eq!(post_balance - pre_balance, 975_000);
         assert_eq!(client.get_fees(&native_token), 25_000);
         assert_eq!(client.get_job(&job_id).status, JobStatus::Completed);
+    }
+
+    #[test]
+    fn client_can_raise_dispute_on_in_progress_job() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let token_client = token::Client::new(&env, &native_token);
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        let contract_balance = token_client.balance(&client.address);
+
+        client.raise_dispute(&user, &job_id);
+
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Disputed);
+        assert_eq!(token_client.balance(&client.address), contract_balance);
+    }
+
+    #[test]
+    fn client_can_raise_dispute_on_submitted_job() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+
+        client.raise_dispute(&user, &job_id);
+
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Disputed);
+    }
+
+    #[test]
+    fn freelancer_can_raise_dispute_on_in_progress_job() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+
+        client.raise_dispute(&freelancer, &job_id);
+
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Disputed);
+    }
+
+    #[test]
+    fn freelancer_can_raise_dispute_on_submitted_job() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+
+        client.raise_dispute(&freelancer, &job_id);
+
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Disputed);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #2)")]
+    fn raise_dispute_rejects_wrong_caller() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let stranger = Address::generate(&env);
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+
+        client.raise_dispute(&stranger, &job_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn raise_dispute_rejects_open_job() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+
+        client.raise_dispute(&user, &job_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn raise_dispute_rejects_completed_job() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
+
+        client.raise_dispute(&user, &job_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn raise_dispute_rejects_cancelled_job() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        client.cancel_job(&user, &job_id);
+
+        client.raise_dispute(&user, &job_id);
     }
 
     #[test]
