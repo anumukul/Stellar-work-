@@ -192,7 +192,7 @@ export default function JobDetailPage() {
         <div className="mt-4 flex flex-wrap gap-2">
           {job.status === "Open" && (
             <button
-              className="rounded-md border border-slate-300 px-3 py-1.5"
+              className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
               onClick={() => {
                 if (!wallet) {
                   return;
@@ -209,7 +209,7 @@ export default function JobDetailPage() {
 
           {isFreelancer && job.status === "InProgress" && (
             <button
-              className="rounded-md border border-slate-300 px-3 py-1.5"
+              className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
               onClick={() => handleAction(() => submitWork(wallet, id))}
               disabled={loading}
               aria-busy={loading}
@@ -220,7 +220,7 @@ export default function JobDetailPage() {
 
           {isClient && job.status === "SubmittedForReview" && (
             <button
-              className="rounded-md border border-slate-300 px-3 py-1.5"
+              className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
               onClick={() => handleAction(() => approveWork(wallet, id))}
               disabled={loading}
               aria-busy={loading}
@@ -231,7 +231,7 @@ export default function JobDetailPage() {
 
           {isClient && job.status === "Open" && (
             <button
-              className="rounded-md border border-slate-300 px-3 py-1.5"
+              className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
               onClick={() => handleAction(() => cancelJob(wallet, id))}
               disabled={loading}
               aria-busy={loading}

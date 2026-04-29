@@ -42,6 +42,7 @@ export default function HomePage() {
 
       if (count === 0) {
         setJobs([]);
+        setLoading(false);
         return;
       }
 
@@ -78,6 +79,7 @@ export default function HomePage() {
           item !== null && item.job.status === "Open",
       );
 
+      // Update jobs only after new data is ready to prevent flicker
       setJobs(fetched);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to fetch jobs.");
@@ -103,7 +105,7 @@ export default function HomePage() {
         <button
           type="button"
           onClick={() => void refresh()}
-          className="text-sm text-blue-600 hover:underline disabled:opacity-50"
+          className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           disabled={loading}
         >
           {loading ? "Refreshing..." : "Refresh"}
@@ -113,6 +115,12 @@ export default function HomePage() {
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 
       {loading && jobs.length === 0 && <LoadingState text="Loading jobs..." />}
+
+      {loading && jobs.length > 0 && (
+        <p role="status" aria-live="polite" className="text-xs text-slate-400">
+          Refreshing jobs…
+        </p>
+      )}
 
       {latestTxHash && (
         <p className="text-sm text-slate-600">
@@ -157,76 +165,78 @@ export default function HomePage() {
         </div>
       </SectionCard>
 
-      <div className="grid gap-4 md:grid-cols-2">
+      <ul
+        className="grid list-none gap-4 md:grid-cols-2"
+        aria-label="Open jobs"
+      >
         {jobs.map(({ id, job }) => (
-          <article
-            key={id}
-            className="rounded-lg border border-slate-200 bg-white p-4 transition-shadow hover:shadow-md"
-          >
-            <Link href={`/job/${id}`} className="block">
-              <h2 className="text-lg font-medium hover:underline">Job #{id}</h2>
-            </Link>
-            <p className="mt-2 text-sm font-bold text-slate-700">{toXlm(job.amount)} XLM</p>
-            <p className="mt-1 line-clamp-2 text-sm text-slate-700">
-              {getDescription(job.description_hash)}
-            </p>
-            <p className="mt-1 text-xs text-slate-500">
-              Hash: {job.description_hash.slice(0, 12)}...
-            </p>
-            <p className="mt-1 text-xs text-slate-600">
-              Deadline: {job.deadline === "0" ? "No deadline" : new Date(Number(job.deadline) * 1000).toLocaleString()}
-            </p>
-            <div className="mt-4 flex items-center gap-2">
-              <Link
-                href={`/job/${id}`}
-                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-              >
-                View Details
+          <li key={id}>
+            <article className="h-full rounded-lg border border-slate-200 bg-white p-4 transition-shadow hover:shadow-md">
+              <Link href={`/job/${id}`} className="block">
+                <h2 className="text-lg font-medium hover:underline">Job #{id}</h2>
               </Link>
-              <button
-                type="button"
-                className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                  !wallet || actionLoading === id
-                    ? "cursor-not-allowed bg-slate-100 text-slate-400"
-                    : "bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800"
-                }`}
-                title={!wallet ? "Connect your wallet to accept jobs." : undefined}
-                onClick={async () => {
-                  setError(null);
-                  if (!wallet) {
-                    return;
-                  }
-                  setActionLoading(id);
-                  try {
-                    const result = await acceptJob(wallet, String(id));
-                    if (result.hash) {
-                      setLatestTxHash(result.hash);
-                    }
-                    await refresh();
-                  } catch (e) {
-                    setError(
-                      e instanceof Error
-                        ? e.message
-                        : "Failed to accept job. Check your balance or contract state.",
-                    );
-                  } finally {
-                    setActionLoading(null);
-                  }
-                }}
-                disabled={!wallet || actionLoading !== null}
-                aria-busy={actionLoading === id}
-              >
-                {actionLoading === id ? "Processing..." : "Accept Job"}
-              </button>
-            </div>
-            {!wallet && (
-              <p className="mt-2 text-xs text-amber-700">
-                Connect your wallet to enable job actions.
+              <p className="mt-2 text-sm font-bold text-slate-700">{toXlm(job.amount)} XLM</p>
+              <p className="mt-1 line-clamp-2 text-sm text-slate-700">
+                {getDescription(job.description_hash)}
               </p>
-            )}
-          </article>
+              <p className="mt-1 text-xs text-slate-500">
+                Hash: {job.description_hash.slice(0, 12)}...
+              </p>
+              <p className="mt-1 text-xs text-slate-600">
+                Deadline: {job.deadline === "0" ? "No deadline" : new Date(Number(job.deadline) * 1000).toLocaleString()}
+              </p>
+              <div className="mt-4 flex items-center gap-2">
+                <Link
+                  href={`/job/${id}`}
+                  className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  View Details
+                </Link>
+                <button
+                  type="button"
+                  className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+                    !wallet || actionLoading === id
+                      ? "cursor-not-allowed bg-slate-100 text-slate-400"
+                      : "bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800"
+                  }`}
+                  title={!wallet ? "Connect your wallet to accept jobs." : undefined}
+                  onClick={async () => {
+                    setError(null);
+                    if (!wallet) {
+                      return;
+                    }
+                    setActionLoading(id);
+                    try {
+                      const result = await acceptJob(wallet, String(id));
+                      if (result.hash) {
+                        setLatestTxHash(result.hash);
+                      }
+                      await refresh();
+                    } catch (e) {
+                      setError(
+                        e instanceof Error
+                          ? e.message
+                          : "Failed to accept job. Check your balance or contract state.",
+                      );
+                    } finally {
+                      setActionLoading(null);
+                    }
+                  }}
+                  disabled={!wallet || actionLoading !== null}
+                  aria-busy={actionLoading === id}
+                >
+                  {actionLoading === id ? "Processing..." : "Accept Job"}
+                </button>
+              </div>
+              {!wallet && (
+                <p className="mt-2 text-xs text-amber-700">
+                  Connect your wallet to enable job actions.
+                </p>
+              )}
+            </article>
+          </li>
         ))}
-      </div>
+      </ul>
 
       {totalJobs > 0 && (
         <div className="flex flex-col gap-3 pt-4 sm:flex-row sm:items-center sm:justify-between">
