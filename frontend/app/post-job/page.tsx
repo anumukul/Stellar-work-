@@ -27,6 +27,17 @@ export default function PostJobPage() {
   const [lastAnnouncedSuccess, setLastAnnouncedSuccess] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [amountValidationError, setAmountValidationError] = useState<string | null>(null);
+
+  const parseAmountToStroops = (value: string): string | null => {
+    const trimmed = value.trim();
+    const amountPattern = /^\d+(\.\d+)?$/;
+    if (!amountPattern.test(trimmed)) return null;
+    const [, fractional = ""] = trimmed.split(".");
+    if (fractional.length > 7) return null;
+    const [whole = "0"] = trimmed.split(".");
+    return `${whole}${fractional.padEnd(7, "0")}`;
+  };
 
   useEffect(() => {
     if (!wallet) {
@@ -48,6 +59,7 @@ export default function PostJobPage() {
           setError(null);
           setSuccess(null);
           setTxHash(null);
+          setAmountValidationError(null);
 
           if (!wallet) {
             try {
@@ -60,14 +72,26 @@ export default function PostJobPage() {
 
           setSubmitting(true);
           try {
-            const amountStroops = Math.floor(Number(amount || "0") * 10_000_000);
+            const amountStroops = parseAmountToStroops(amount);
+            if (!amountStroops || BigInt(amountStroops) <= 0n) {
+              setAmountValidationError(
+                "Enter a valid amount with up to 7 decimal places.",
+              );
+              return;
+            }
             const hashHex = await sha256Hex(description);
             const deadlineUnix = deadline
               ? Math.floor(new Date(deadline).getTime() / 1000).toString()
               : "0";
 
             localStorage.setItem(`job-desc:${hashHex}`, description);
-            const result = await postJob(wallet, String(amountStroops), hashHex, deadlineUnix, tokenAddress);
+            const result = await postJob(
+              wallet,
+              amountStroops,
+              hashHex,
+              deadlineUnix,
+              tokenAddress,
+            );
             if (result.hash) {
               setTxHash(result.hash);
             }
@@ -99,6 +123,9 @@ export default function PostJobPage() {
             onChange={(e) => setAmount(e.target.value)}
             required
           />
+          {amountValidationError && (
+            <p className="mt-1 text-xs text-red-600">{amountValidationError}</p>
+          )}
         </label>
 
         <label className="block text-sm font-medium">
