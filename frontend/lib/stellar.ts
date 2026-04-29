@@ -37,8 +37,9 @@ const DEFAULT_POLL_INTERVAL = 3000;
 interface TransactionResult {
   status: "SUCCESS" | "ERROR" | "PENDING";
   hash?: string;
-  errorResultXdr?: string;
+  errorResult?: string;
   resultMetaXdr?: string;
+  data?: any;
 }
 
 export async function connectWallet(): Promise<string> {
@@ -101,22 +102,25 @@ export async function callContract(
     networkPassphrase,
   })
     .addOperation(
-      contract.call(method, ...args) as unknown as Operation.InvokeHostFunction,
+      contract.call(method, ...args)
     )
     .setTimeout(60)
     .build();
 
   const simulation = await server.simulateTransaction(tx);
-  if ("error" in simulation && simulation.error) {
+  if (rpc.Api.isSimulationError(simulation)) {
     throw new Error(simulation.error);
   }
 
   if (options?.readOnly) {
+    if (!rpc.Api.isSimulationSuccess(simulation)) {
+      return { status: "ERROR", errorResult: "Simulation failed" };
+    }
     const retval = simulation.result?.retval;
     if (!retval) {
-      return { status: "ERROR", errorResultXdr: "No return value from simulation" };
+      return { status: "ERROR", errorResult: "No return value from simulation" };
     }
-    return { status: "SUCCESS", resultMetaXdr: scValToNative(retval) as string };
+    return { status: "SUCCESS", data: scValToNative(retval) };
   }
 
   const assembled = rpc.assembleTransaction(tx, simulation).build();
@@ -125,11 +129,11 @@ export async function callContract(
   const signedTx = TransactionBuilder.fromXDR(signedXdr, networkPassphrase);
   const sent = await server.sendTransaction(signedTx);
 
-  if (sent.status === "ERROR") {
-    throw new Error(sent.errorResultXdr ?? "Contract invocation failed.");
+  if (sent.status === rpc.Api.SendTransactionStatus.ERROR) {
+    throw new Error(sent.errorResult?.toXDR().toString() ?? "Contract invocation failed.");
   }
 
-  if (sent.status === "PENDING") {
+  if (sent.status === rpc.Api.SendTransactionStatus.PENDING) {
     const pollTimeout = options?.pollTimeout ?? DEFAULT_POLL_TIMEOUT;
     const pollInterval = DEFAULT_POLL_INTERVAL;
     const startTime = Date.now();
@@ -138,15 +142,15 @@ export async function callContract(
       await new Promise((resolve) => setTimeout(resolve, pollInterval));
       const status = await server.getTransaction(sent.hash);
 
-      if (status.status === "SUCCESS") {
+      if (status.status === rpc.Api.GetTransactionStatus.SUCCESS) {
         return { status: "SUCCESS", hash: sent.hash };
       }
 
-      if (status.status === "ERROR") {
+      if (status.status === rpc.Api.GetTransactionStatus.FAILED) {
         return {
           status: "ERROR",
           hash: sent.hash,
-          errorResultXdr: status.errorResultXdr ?? "Transaction failed.",
+          errorResult: "Transaction failed.",
         };
       }
     }
