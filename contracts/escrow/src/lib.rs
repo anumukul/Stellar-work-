@@ -469,6 +469,25 @@ impl EscrowContract {
         count
     }
 
+    pub fn get_jobs_by_status(e: Env, status: JobStatus) -> Vec<Job> {
+        let total = get_jobs_count(&e);
+        let mut jobs = Vec::new(&e);
+        let mut i: u64 = 1;
+        while i <= total {
+            if let Some(job) = e
+                .storage()
+                .persistent()
+                .get::<DataKey, Job>(&DataKey::Job(i))
+            {
+                if job.status == status {
+                    jobs.push_back(job);
+                }
+            }
+            i += 1;
+        }
+        jobs
+    }
+
     pub fn get_native_token(e: Env) -> Address {
         load_native_token(&e)
     }
@@ -1956,5 +1975,33 @@ mod test {
 
         let events = env.events().all();
         assert!(!events.is_empty(), "fee_updated event should be emitted");
+    }
+    #[test]
+    fn get_jobs_by_status_filter() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        
+        // Post 3 jobs
+        let id1 = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
+        let id2 = client.post_job(&user, &2_000_000i128, &hash(&env), &0u64, &native_token);
+        let id3 = client.post_job(&user, &3_000_000i128, &hash(&env), &0u64, &native_token);
+        
+        // Accept job 2 and 3
+        client.accept_job(&freelancer, &id2);
+        client.accept_job(&freelancer, &id3);
+        
+        // Submit job 3
+        client.submit_work(&freelancer, &id3);
+        
+        let open_jobs = client.get_jobs_by_status(&JobStatus::Open);
+        assert_eq!(open_jobs.len(), 1);
+        assert_eq!(open_jobs.get(0).unwrap().amount, 1_000_000);
+        
+        let in_progress_jobs = client.get_jobs_by_status(&JobStatus::InProgress);
+        assert_eq!(in_progress_jobs.len(), 1);
+        assert_eq!(in_progress_jobs.get(0).unwrap().amount, 2_000_000);
+        
+        let review_jobs = client.get_jobs_by_status(&JobStatus::SubmittedForReview);
+        assert_eq!(review_jobs.len(), 1);
+        assert_eq!(review_jobs.get(0).unwrap().amount, 3_000_000);
     }
 }
