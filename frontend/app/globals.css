@@ -9,6 +9,12 @@ body {
   font-family: var(--font-geist-sans);
 }
 
+html {
+  /* Smooth anchor scrolling for hash deep-links.
+     Overridden to 'auto' by the prefers-reduced-motion rule below. */
+  scroll-behavior: smooth;
+}
+
 :root {
   /* Raise muted text contrast while preserving existing utility classes. */
   --color-slate-600: #334155;

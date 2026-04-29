@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useWallet, WalletButton } from "@/lib/wallet-context";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 export function Navigation() {
   const pathname = usePathname();
