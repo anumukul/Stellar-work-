@@ -13,7 +13,22 @@ stellarwork
 
 ## Local Setup
 
-### 1) Contract
+### Using Docker (Recommended)
+
+You can spin up the frontend development environment with a single command (requires Docker installed):
+
+```bash
+cd frontend
+cp .env.example .env.local
+cd ..
+docker compose up
+```
+
+Open [http://localhost:3000](http://localhost:3000). File changes in `frontend/` will trigger hot-reload inside the container automatically.
+
+### Manual Setup
+
+#### 1) Contract
 
 ```bash
 cd contracts/escrow
