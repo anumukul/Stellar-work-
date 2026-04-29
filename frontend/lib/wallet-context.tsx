@@ -23,7 +23,9 @@ type WalletDisplayMode = "short" | "full";
 
 const WalletContext = createContext<WalletContextType>({
   wallet: null,
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
   connectWallet: async () => {},
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
   disconnectWallet: () => {},
 });
 

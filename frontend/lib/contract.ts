@@ -111,7 +111,7 @@ export async function getFees(tokenAddress: string): Promise<number> {
     [nativeToScVal(tokenAddress, { type: "address" })],
     { readOnly: true },
   );
-  return Number(response ?? 0);
+  return Number(response.data ?? 0);
 }
 
 export async function addAllowedToken(tokenAddress: string) {
@@ -133,7 +133,7 @@ export async function isTokenAllowed(tokenAddress: string): Promise<boolean> {
     [nativeToScVal(tokenAddress, { type: "address" })],
     { readOnly: true },
   );
-  return Boolean(response ?? false);
+  return Boolean(response.data ?? false);
 }
 
 export async function getNativeToken(): Promise<string> {
@@ -143,7 +143,7 @@ export async function getNativeToken(): Promise<string> {
     [],
     { readOnly: true },
   );
-  return String(response ?? "");
+  return String(response.data ?? "");
 }
 
 export async function getJob(jobId: string): Promise<Job | null> {
@@ -153,7 +153,7 @@ export async function getJob(jobId: string): Promise<Job | null> {
     [nativeToScVal(jobId, { type: "u64" })],
     { readOnly: true },
   );
-  return (response as Job) ?? null;
+  return (response.data as Job) ?? null;
 }
 
 export async function getJobCount(): Promise<number> {
@@ -165,5 +165,5 @@ export async function getJobCount(): Promise<number> {
       readOnly: true,
     },
   );
-  return Number(response ?? 0);
+  return Number(response.data ?? 0);
 }
