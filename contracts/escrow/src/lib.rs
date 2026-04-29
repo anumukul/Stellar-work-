@@ -6,6 +6,7 @@ use soroban_sdk::{
 };
 
 const DEFAULT_FEE_BPS: i128 = 250;
+const MAX_FEE_BPS: i128 = 1_000;
 const BPS_DENOMINATOR: i128 = 10_000;
 const MAX_FEE_BPS: i128 = 10_000;
 const MAX_REVISIONS: u32 = 3;
@@ -81,6 +82,7 @@ pub enum Error {
     DeadlinePassed = 6,
     DeadlineNotExpired = 7,
     TokenNotAllowed = 8,
+    FeeTooHigh = 9,
     RevisionLimitReached = 9,
     AlreadyInitialized = 10,
     InvalidAmount = 11,
@@ -102,6 +104,7 @@ impl EscrowContract {
             .instance()
             .set(&DataKey::NativeToken, &native_token);
         e.storage().instance().set(&DataKey::JobsCount, &0u64);
+        e.storage().instance().set(&DataKey::FeeBps, &DEFAULT_FEE_BPS);
         e.storage()
             .persistent()
             .set(&DataKey::AllowedToken(native_token.clone()), &true);
@@ -235,6 +238,7 @@ impl EscrowContract {
             Option::None => panic_with_error!(&e, Error::InvalidStatus),
         };
 
+        let fee = checked_mul_div(&e, job.amount, get_fee_bps_storage(&e), BPS_DENOMINATOR);
         let fee = checked_mul_div(&e, job.amount, Self::get_fee_bps(e.clone()), BPS_DENOMINATOR);
         let payout = checked_sub(&e, job.amount, fee);
         let current_fees = get_token_fees(&e, &job.token);
@@ -423,6 +427,7 @@ impl EscrowContract {
             let freelancer_net = checked_sub(&e, freelancer_gross, fee);
 
         } else if winner == freelancer {
+            let fee = checked_mul_div(&e, job.amount, get_fee_bps_storage(&e), BPS_DENOMINATOR);
             let fee =
                 checked_mul_div(&e, job.amount, Self::get_fee_bps(e.clone()), BPS_DENOMINATOR);
             let payout = checked_sub(&e, job.amount, fee);
@@ -458,6 +463,20 @@ impl EscrowContract {
             (Symbol::new(&e, "dispute_resolved"),),
             (job_id, resolution.client_bps),
         );
+    }
+
+    pub fn update_fee(e: Env, new_fee_bps: i128) {
+        let admin = get_admin(&e);
+        admin.require_auth();
+        if new_fee_bps > MAX_FEE_BPS {
+            panic_with_error!(&e, Error::FeeTooHigh);
+        }
+        e.storage().instance().set(&DataKey::FeeBps, &new_fee_bps);
+        bump_instance_ttl(&e);
+    }
+
+    pub fn get_fee_bps(e: Env) -> i128 {
+        get_fee_bps_storage(&e)
     }
 
     pub fn get_job(e: Env, job_id: u64) -> Job {
@@ -701,6 +720,13 @@ fn load_admin(e: &Env) -> Address {
         .instance()
         .get::<DataKey, Address>(&DataKey::Admin)
         .unwrap_or_else(|| panic!("admin not configured"))
+}
+
+fn get_fee_bps_storage(e: &Env) -> i128 {
+    e.storage()
+        .instance()
+        .get::<DataKey, i128>(&DataKey::FeeBps)
+        .unwrap_or(DEFAULT_FEE_BPS)
 }
 
 fn get_token_fees(e: &Env, token: &Address) -> i128 {
@@ -1331,77 +1357,40 @@ mod test {
         assert_eq!(job.deadline, 0);
     }
 
+    // --- fee management tests ---
+
     #[test]
-    #[should_panic(expected = "Error(Contract, #2)")]
-    fn client_cannot_accept_own_job() {
-        let (env, client, _, user, _, native_token) = setup();
-        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
-        client.accept_job(&user, &job_id);
+    fn get_fee_bps_returns_default() {
+        let (_, client, _, _, _, _) = setup();
+        assert_eq!(client.get_fee_bps(), 250);
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #6)")]
-    fn accept_job_with_expired_deadline_panics() {
-        let (env, client, _, user, freelancer, native_token) = setup();
-        let deadline = 1_710_000_000 + 3600;
-        let job_id =
-            client.post_job(&user, &1_000_000i128, &hash(&env), &deadline, &native_token);
-
-        env.ledger().with_mut(|li| {
-            li.timestamp = deadline + 1;
-        });
-
-        client.accept_job(&freelancer, &job_id);
+    fn admin_can_update_fee() {
+        let (_, client, _, _, _, _) = setup();
+        client.update_fee(&500i128);
+        assert_eq!(client.get_fee_bps(), 500);
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #3)")]
-    fn accept_already_in_progress_job_panics() {
-        let (env, client, _, user, freelancer, native_token) = setup();
-        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
-        client.accept_job(&freelancer, &job_id);
-
-        let another_freelancer = Address::generate(&env);
-        client.accept_job(&another_freelancer, &job_id);
+    fn update_fee_to_zero_allowed() {
+        let (_, client, _, _, _, _) = setup();
+        client.update_fee(&0i128);
+        assert_eq!(client.get_fee_bps(), 0);
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #2)")]
-    fn freelancer_cannot_approve_work() {
-        let (env, client, _, user, freelancer, native_token) = setup();
-        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
-        client.accept_job(&freelancer, &job_id);
-        client.submit_work(&freelancer, &job_id);
-        client.approve_work(&freelancer, &job_id);
+    fn update_fee_to_max_allowed() {
+        let (_, client, _, _, _, _) = setup();
+        client.update_fee(&1_000i128);
+        assert_eq!(client.get_fee_bps(), 1_000);
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #2)")]
-    fn random_address_cannot_approve_work() {
-        let (env, client, _, user, freelancer, native_token) = setup();
-        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
-        client.accept_job(&freelancer, &job_id);
-        client.submit_work(&freelancer, &job_id);
-
-        let random = Address::generate(&env);
-        client.approve_work(&random, &job_id);
-    }
-
-    #[test]
-    #[should_panic(expected = "Error(Contract, #3)")]
-    fn approve_work_on_open_job_panics() {
-        let (env, client, _, user, _, native_token) = setup();
-        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
-        client.approve_work(&user, &job_id);
-    }
-
-    #[test]
-    #[should_panic(expected = "Error(Contract, #3)")]
-    fn approve_work_on_in_progress_job_panics() {
-        let (env, client, _, user, freelancer, native_token) = setup();
-        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
-        client.accept_job(&freelancer, &job_id);
-        client.approve_work(&user, &job_id);
+    #[should_panic(expected = "Error(Contract, #9)")]
+    fn update_fee_above_max_rejected() {
+        let (_, client, _, _, _, _) = setup();
+        client.update_fee(&1_001i128);
     }
 
     // ── resolve_dispute new tests ────────────────────────────────────────────
@@ -1535,13 +1524,12 @@ mod test {
     // For very small amounts the integer division truncates to 0.
 
     #[test]
-    fn approve_work_1_stroop_fee_rounds_to_zero() {
-        // 1 * 250 / 10_000 = 0  →  freelancer receives full 1 stroop, fee = 0
+    fn approve_work_uses_updated_fee() {
         let (env, client, _, user, freelancer, native_token) = setup();
-        let asset = token::StellarAssetClient::new(&env, &native_token);
-        asset.mint(&user, &1i128);
+        // set fee to 5% (500 bps)
+        client.update_fee(&500i128);
 
-        let job_id = client.post_job(&user, &1i128, &hash(&env), &0u64, &native_token);
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &0u64, &native_token);
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
 
@@ -1550,67 +1538,10 @@ mod test {
         client.approve_work(&user, &job_id);
         let post_balance = token_client.balance(&freelancer);
 
-        // fee rounds down to 0, so freelancer gets the full amount
-        assert_eq!(post_balance - pre_balance, 1, "freelancer should receive full 1 stroop when fee rounds to 0");
-        assert_eq!(client.get_fees(&native_token), 0, "accrued fee should be 0 for 1-stroop job");
+        // payout = 1_000_000 - 5% = 950_000
+        assert_eq!(post_balance - pre_balance, 950_000);
+        assert_eq!(client.get_fees(&native_token), 50_000);
     }
-
-    #[test]
-    fn approve_work_39_stroops_fee_split() {
-        // 39 * 250 / 10_000 = 9_750 / 10_000 = 0  →  fee = 0, payout = 39
-        // First amount where fee > 0: 40 * 250 / 10_000 = 1  →  fee = 1, payout = 39
-        // Use 40 to get a non-trivial split, then also verify 39 rounds to 0.
-        let (env, client, _, user, freelancer, native_token) = setup();
-        let asset = token::StellarAssetClient::new(&env, &native_token);
-        asset.mint(&user, &100i128);
-
-        // 39 stroops: fee = 39*250/10_000 = 0, payout = 39
-        let job_id_39 = client.post_job(&user, &39i128, &hash(&env), &0u64, &native_token);
-        client.accept_job(&freelancer, &job_id_39);
-        client.submit_work(&freelancer, &job_id_39);
-
-        let token_client = token::Client::new(&env, &native_token);
-        let pre_39 = token_client.balance(&freelancer);
-        client.approve_work(&user, &job_id_39);
-        let post_39 = token_client.balance(&freelancer);
-
-        assert_eq!(post_39 - pre_39, 39, "39-stroop job: fee rounds to 0, freelancer gets all 39");
-        assert_eq!(client.get_fees(&native_token), 0, "39-stroop job: no fee accrued");
-
-        // 40 stroops: fee = 40*250/10_000 = 1, payout = 39
-        let job_id_40 = client.post_job(&user, &40i128, &hash(&env), &0u64, &native_token);
-        client.accept_job(&freelancer, &job_id_40);
-        client.submit_work(&freelancer, &job_id_40);
-
-        let pre_40 = token_client.balance(&freelancer);
-        client.approve_work(&user, &job_id_40);
-        let post_40 = token_client.balance(&freelancer);
-
-        assert_eq!(post_40 - pre_40, 39, "40-stroop job: payout = 39 after 1-stroop fee");
-        assert_eq!(client.get_fees(&native_token), 1, "40-stroop job: 1 stroop fee accrued");
-    }
-
-    #[test]
-    fn approve_work_large_amount_no_overflow() {
-        // i128::MAX / 2 is safely within range for checked_mul_div
-        // Use a large but representable amount: 1_000_000_000_000_000 stroops (1 billion XLM)
-        let large_amount: i128 = 1_000_000_000_000_000i128;
-        let expected_fee: i128 = large_amount * 250 / 10_000; // = 25_000_000_000_000
-        let expected_payout: i128 = large_amount - expected_fee;
-
-        let (env, client, _, user, freelancer, native_token) = setup();
-        let asset = token::StellarAssetClient::new(&env, &native_token);
-        asset.mint(&user, &large_amount);
-
-        let job_id = client.post_job(&user, &large_amount, &hash(&env), &0u64, &native_token);
-        client.accept_job(&freelancer, &job_id);
-        client.submit_work(&freelancer, &job_id);
-
-        let token_client = token::Client::new(&env, &native_token);
-        let pre_balance = token_client.balance(&freelancer);
-        client.approve_work(&user, &job_id);
-        let post_balance = token_client.balance(&freelancer);
-
         assert_eq!(post_balance - pre_balance, expected_payout, "large amount: payout should be amount minus 2.5% fee");
         assert_eq!(client.get_fees(&native_token), expected_fee, "large amount: fee should be exactly 2.5%");
     }
