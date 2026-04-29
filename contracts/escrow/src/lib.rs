@@ -80,7 +80,6 @@ pub enum Error {
     InsufficientFunds = 4,
     JobAlreadyAccepted = 5,
     DeadlinePassed = 6,
-    AlreadyInitialized = 7,
     DeadlineNotExpired = 7,
     TokenNotAllowed = 8,
     FeeTooHigh = 9,
@@ -88,6 +87,7 @@ pub enum Error {
     AlreadyInitialized = 10,
     InvalidAmount = 11,
     InvalidDescriptionHash = 12,
+    UnauthorizedAdmin = 13,
 }
 
 #[contract]
@@ -385,9 +385,12 @@ impl EscrowContract {
     ///   0 < client_bps < 10_000 → split: client gets their share (no fee on
     ///                             client portion), freelancer gets remainder
     ///                             minus platform fee, status = Completed
-    pub fn resolve_dispute(e: Env, job_id: u64, resolution: DisputeResolution) {
+    pub fn resolve_dispute(e: Env, caller: Address, job_id: u64, resolution: DisputeResolution) {
+        caller.require_auth();
         let admin = load_admin(&e);
-        admin.require_auth();
+        if caller != admin {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
 
         let mut job = get_job_or_panic(&e, job_id);
         if job.status != JobStatus::Disputed {
@@ -401,7 +404,7 @@ impl EscrowContract {
 
         // Validate bps is in range
         if resolution.client_bps > BPS_DENOMINATOR as u32 {
-            panic_with_error!(&e, Error::Unauthorized);
+            panic_with_error!(&e, Error::InvalidAmount);
         }
 
         let token_client = token::Client::new(&e, &job.token);
@@ -424,14 +427,9 @@ impl EscrowContract {
             let freelancer_gross = checked_sub(&e, job.amount, client_share);
 
             // Platform fee is taken only from the freelancer's portion
-            let fee = checked_mul_div(&e, freelancer_gross, FEE_BPS, BPS_DENOMINATOR);
+            let fee = checked_mul_div(&e, freelancer_gross, get_fee_bps_storage(&e), BPS_DENOMINATOR);
             let freelancer_net = checked_sub(&e, freelancer_gross, fee);
 
-        } else if winner == freelancer {
-            let fee = checked_mul_div(&e, job.amount, get_fee_bps_storage(&e), BPS_DENOMINATOR);
-            let fee =
-                checked_mul_div(&e, job.amount, Self::get_fee_bps(e.clone()), BPS_DENOMINATOR);
-            let payout = checked_sub(&e, job.amount, fee);
             let current_fees = get_token_fees(&e, &job.token);
             let updated_fees = checked_add(&e, current_fees, fee);
 
