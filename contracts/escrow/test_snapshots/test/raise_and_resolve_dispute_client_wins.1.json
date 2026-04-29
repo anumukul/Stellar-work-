@@ -187,7 +187,16 @@
                   "u64": 1
                 },
                 {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
+                  "map": [
+                    {
+                      "key": {
+                        "symbol": "client_bps"
+                      },
+                      "val": {
+                        "u32": 10000
+                      }
+                    }
+                  ]
                 }
               ]
             }
@@ -1815,7 +1824,16 @@
                   "u64": 1
                 },
                 {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
+                  "map": [
+                    {
+                      "key": {
+                        "symbol": "client_bps"
+                      },
+                      "val": {
+                        "u32": 10000
+                      }
+                    }
+                  ]
                 }
               ]
             }
@@ -1934,7 +1952,7 @@
                   "u64": 1
                 },
                 {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
+                  "u32": 10000
                 }
               ]
             }
