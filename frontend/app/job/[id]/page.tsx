@@ -22,6 +22,7 @@ export default function JobDetailPage() {
   const [fetching, setFetching] = useState(true);
   const [latestTxHash, setLatestTxHash] = useState<string | null>(null);
   const [invalidId, setInvalidId] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const numericId = Number(id);
   const isIdValid = !isNaN(numericId) && numericId > 0 && Number.isInteger(numericId);
@@ -51,6 +52,14 @@ export default function JobDetailPage() {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  useEffect(() => {
+    if (!wallet) {
+      setError(null);
+      setStatusMsg(null);
+      setLatestTxHash(null);
+    }
+  }, [wallet]);
 
   const isClient = wallet && job && wallet === job.client;
   const isFreelancer = wallet && job && wallet === job.freelancer;
@@ -87,6 +96,16 @@ export default function JobDetailPage() {
       setError(e instanceof Error ? e.message : "Transaction failed.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function copyToClipboard(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy!", err);
     }
   }
 
@@ -181,9 +200,21 @@ export default function JobDetailPage() {
         <p>
           <strong>Description:</strong> {getDescription(job.description_hash)}
         </p>
-        <p>
-          <strong>Description hash:</strong> {job.description_hash}
-        </p>
+        <div className="flex items-center gap-2">
+          <p>
+            <strong>Description hash:</strong>{" "}
+            <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-xs">
+              {job.description_hash}
+            </code>
+          </p>
+          <button
+            onClick={() => void copyToClipboard(job.description_hash)}
+            className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 active:bg-slate-200"
+            title="Copy hash to clipboard"
+          >
+            {copied ? "Copied!" : "Copy"}
+          </button>
+        </div>
         <p>
           <strong>Deadline:</strong>{" "}
           {job.deadline === "0" ? "No deadline" : new Date(Number(job.deadline) * 1000).toLocaleString()}

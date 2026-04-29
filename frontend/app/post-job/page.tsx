@@ -28,6 +28,14 @@ export default function PostJobPage() {
   const [txHash, setTxHash] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  useEffect(() => {
+    if (!wallet) {
+      setError(null);
+      setSuccess(null);
+      setTxHash(null);
+    }
+  }, [wallet]);
+
   return (
     <section className="mx-auto max-w-2xl space-y-6">
       <h1 className="text-2xl font-semibold">Post Job</h1>

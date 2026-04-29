@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useModalFocusTrap } from "@/lib/modal";
+import { useWallet } from "@/lib/wallet-context";
+import SectionCard from "@/components/SectionCard";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -565,6 +567,7 @@ function DisputeCard({
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function DisputesPage() {
+  const { wallet, connectWallet } = useWallet();
   const [role, setRole] = useState<Role>("client");
   const [disputes, setDisputes] = useState<Dispute[]>([]);
   const [eligibleJobs, setEligibleJobs] = useState<EligibleJob[]>([]);
@@ -576,8 +579,29 @@ export default function DisputesPage() {
   const [resolveTarget, setResolveTarget] = useState<Dispute | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: "success" | "error" } | null>(null);
 
+  // Sync role with wallet/admin status
+  useEffect(() => {
+    if (!wallet) {
+      setDisputes([]);
+      setEligibleJobs([]);
+      setRole("client"); // Default role
+      return;
+    }
+
+    const adminAddress = process.env.NEXT_PUBLIC_ADMIN_ADDRESS;
+    if (adminAddress && wallet === adminAddress) {
+      setRole("admin");
+    }
+  }, [wallet]);
+
   // Simulate data fetch
   useEffect(() => {
+    if (!wallet) {
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
     const t = setTimeout(() => {
       try {
         setError("");
@@ -590,7 +614,7 @@ export default function DisputesPage() {
       }
     }, 800);
     return () => clearTimeout(t);
-  }, [role]);
+  }, [role, wallet]);
 
   // Toast auto-dismiss
   useEffect(() => {
@@ -649,6 +673,27 @@ export default function DisputesPage() {
   }
 
   const activeCount = disputes.filter(d => ["Active", "UnderReview", "PendingEvidence"].includes(d.status)).length;
+
+  if (!wallet) {
+    return (
+      <div className="min-h-screen bg-slate-50">
+        <div className="mx-auto max-w-3xl px-4 py-8">
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 mb-6">Disputes</h1>
+          <SectionCard className="p-8 text-center">
+            <p className="text-slate-600">Connect your wallet to view and manage disputes.</p>
+            <button
+              className="mt-4 rounded-md bg-slate-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-slate-700 transition-colors"
+              onClick={async () => {
+                try { await connectWallet(); } catch { /* cancelled */ }
+              }}
+            >
+              Connect Wallet
+            </button>
+          </SectionCard>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50">

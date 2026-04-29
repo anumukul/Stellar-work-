@@ -92,6 +92,42 @@ export default function HomePage() {
     void refresh();
   }, [refresh]);
 
+  const [copiedHash, setCopiedHash] = useState<string | null>(null);
+
+  async function handleAction(action: () => Promise<{ hash?: string }>) {
+    if (loading) return;
+    setError(null);
+    setLatestTxHash(null);
+    if (!wallet) {
+      setError("Connect your wallet to run this action.");
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const result = await action();
+      if (result.hash) {
+        setLatestTxHash(result.hash);
+      }
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Transaction failed.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function copyToClipboard(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedHash(text);
+      setTimeout(() => setCopiedHash(null), 2000);
+    } catch (err) {
+      console.error("Failed to copy!", err);
+    }
+  }
+
   function getDescription(hash: string): string {
     const stored = localStorage.getItem(`job-desc:${hash}`);
     if (stored) return stored;

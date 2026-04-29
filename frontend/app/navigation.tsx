@@ -10,6 +10,10 @@ export function Navigation() {
   const { wallet } = useWallet();
   const [menuOpen, setMenuOpen] = useState(false);
 
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [wallet]);
+
   const adminAddress = process.env.NEXT_PUBLIC_ADMIN_ADDRESS;
   const showAdmin = wallet && (adminAddress ? wallet === adminAddress : true);
 

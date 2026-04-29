@@ -85,6 +85,11 @@ export default function AdminPage() {
       fetchAdminData(wallet);
     } else {
       setLoading(false);
+      setIsAdmin(null);
+      setFees(0);
+      setJobs([]);
+      setError(null);
+      setSuccessMessage(null);
     }
   }, [wallet, fetchAdminData]);
 
