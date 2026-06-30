@@ -5,6 +5,7 @@ import InfoTooltip from "@/components/InfoTooltip";
 import LoadingState from "@/components/LoadingState";
 import { useToast } from "@/components/ToastProvider";
 import StatusPill from "@/components/StatusPill";
+import ShareButton from "@/components/ShareButton";
 import RichTextRenderer, { isRichText, PlainTextRenderer } from "@/components/RichTextRenderer";
 import { useNotifications } from "@/lib/notifications-context";
 import { acceptJob, approveWork, cancelJob, freelancerCancelJob, getDescriptionCid, getJob, submitWork } from "@/lib/contract";
@@ -431,7 +432,13 @@ export default function JobDetailPage() {
           <p>
             <strong>Status:</strong> <StatusPill status={job.status} />
           </p>
-          <button
+          <div className="flex items-center gap-2">
+            <ShareButton
+              jobId={id}
+              jobTitle={`Job #${id}`}
+              jobAmount={formatXlmWithFiat(job.amount, fiatCurrency, fiatRates?.rates)}
+            />
+            <button
             type="button"
             onClick={toggleBookmark}
             className={`rounded-md border px-3 py-1.5 text-sm font-medium transition-all duration-200 ${
@@ -444,6 +451,7 @@ export default function JobDetailPage() {
           >
             {isBookmarked ? "★ Saved" : "☆ Save"}
           </button>
+          </div>
         </div>
         <p>
           <strong>Client:</strong> {job.client}

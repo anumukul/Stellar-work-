@@ -10,9 +10,20 @@ export default defineConfig({
     },
   },
   test: {
-    environment: 'jsdom',
-    setupFiles: ['./vitest.setup.ts'],
+    environment: "jsdom",
+    setupFiles: ["./vitest.setup.ts"],
     globals: true,
-    exclude: ['e2e/**', 'node_modules/**'],
+    exclude: ["e2e/**", "node_modules/**"],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "json", "html"],
+      exclude: [
+        "node_modules/**",
+        "e2e/**",
+        ".storybook/**",
+        "**/*.stories.tsx",
+        "**/*.stories.ts",
+      ],
+    },
   },
 })

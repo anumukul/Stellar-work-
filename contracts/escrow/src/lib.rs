@@ -164,6 +164,8 @@ pub enum DataKey {
     TrustedForwarder(Address),
     /// Fee exemption status for an address.
     FeeExempted(Address),
+    /// Emergency pause flag — when true all write operations are blocked.
+    Paused,
     // Issue #460: two-step ownership transfer
     /// Address nominated to become the next admin (cleared on accept or cancel).
     PendingAdmin,
@@ -213,6 +215,8 @@ pub enum Error {
     // Issue #452: batch dispute resolution
     BatchSizeMismatch = 31,
     BatchTooLarge = 32,
+    /// Contract is in emergency pause mode; write operations are blocked.
+    ContractPaused = 36,
 }
 
 #[contract]
@@ -647,6 +651,7 @@ impl EscrowContract {
         if job.client != caller && job.freelancer != Option::Some(caller.clone()) {
             panic_with_error!(&e, Error::Unauthorized);
         }
+        require_not_paused(&e);
         bump_job_ttl(&e, job_id, &job);
         bump_instance_ttl(&e);
     }
@@ -706,6 +711,7 @@ impl EscrowContract {
         if job.status != JobStatus::InProgress && job.status != JobStatus::SubmittedForReview {
             panic_with_error!(&e, Error::InvalidStatus);
         }
+        require_not_paused(&e);
         if job.client != caller && job.freelancer != Option::Some(caller.clone()) {
             panic_with_error!(&e, Error::Unauthorized);
         }
@@ -770,12 +776,16 @@ impl EscrowContract {
     /// if any single dispute fails (e.g. job is not in Disputed status) the
     /// entire batch reverts.
     pub fn batch_resolve_disputes(e: Env, job_ids: Vec<u64>, resolutions: Vec<DisputeResolution>) {
+        require_not_paused(&e);
+        require_not_paused(&e);
         let admin = load_admin(&e);
         admin.require_auth();
 
         if job_ids.len() != resolutions.len() {
             panic_with_error!(&e, Error::BatchSizeMismatch);
         }
+        require_not_paused(&e);
+        require_not_paused(&e);
         if job_ids.len() > MAX_BATCH_DISPUTES {
             panic_with_error!(&e, Error::BatchTooLarge);
         }
@@ -801,6 +811,8 @@ impl EscrowContract {
         if client_payout_bps > BPS_DENOMINATOR as u32 {
             panic_with_error!(&e, Error::InvalidAmount);
         }
+        require_not_paused(&e);
+        require_not_paused(&e);
 
         let mut job = get_job_or_panic(&e, job_id);
         if job.status != JobStatus::Disputed {
@@ -874,6 +886,8 @@ impl EscrowContract {
                 .persistent()
                 .remove(&DataKey::TrustedForwarder(forwarder.clone()));
         }
+        require_not_paused(&e);
+        require_not_paused(&e);
 
         bump_instance_ttl(&e);
         e.events().publish(
@@ -935,6 +949,8 @@ impl EscrowContract {
         if new_fee_bps < 0 || new_fee_bps > MAX_FEE_BPS {
             panic_with_error!(&e, Error::FeeTooHigh);
         }
+        require_not_paused(&e);
+        require_not_paused(&e);
         e.storage().instance().set(&DataKey::FeeBps, &new_fee_bps);
         bump_instance_ttl(&e);
     }
@@ -1017,6 +1033,7 @@ impl EscrowContract {
         if admin != current_admin {
             panic_with_error!(&e, Error::UnauthorizedAdmin);
         }
+        require_not_paused(&e);
         e.storage()
             .instance()
             .set(&DataKey::PendingAdmin, &new_admin);
@@ -1068,6 +1085,7 @@ impl EscrowContract {
         if admin != current_admin {
             panic_with_error!(&e, Error::UnauthorizedAdmin);
         }
+        require_not_paused(&e);
         let pending: Option<Address> = e
             .storage()
             .instance()
@@ -1204,6 +1222,7 @@ impl EscrowContract {
         if caller != admin {
             panic_with_error!(&e, Error::Unauthorized);
         }
+        require_not_paused(&e);
 
         if tier_index >= MAX_FEE_TIERS {
             panic_with_error!(&e, Error::InvalidAmount);
@@ -1282,6 +1301,7 @@ impl EscrowContract {
         if fees <= 0 {
             return;
         }
+        require_not_paused(&e);
         e.storage()
             .persistent()
             .set(&DataKey::TokenFees(token.clone()), &0i128);
@@ -1293,6 +1313,43 @@ impl EscrowContract {
 
         e.events()
             .publish((Symbol::new(&e, "fees_withdrawn"),), (token, fees));
+    }
+
+
+    pub fn pause(e: Env, admin: Address) {
+        admin.require_auth();
+        let current_admin = load_admin(&e);
+        if admin != current_admin {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+        require_not_paused(&e);
+        if is_paused(&e) {
+            panic_with_error!(&e, Error::ContractPaused);
+        }
+        e.storage().instance().set(&DataKey::Paused, &true);
+        bump_instance_ttl(&e);
+        e.events()
+            .publish((Symbol::new(&e, "contract_paused"),), (admin,));
+    }
+
+    pub fn unpause(e: Env, admin: Address) {
+        admin.require_auth();
+        let current_admin = load_admin(&e);
+        if admin != current_admin {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+        require_not_paused(&e);
+        if !is_paused(&e) {
+            return;
+        }
+        e.storage().instance().remove(&DataKey::Paused);
+        bump_instance_ttl(&e);
+        e.events()
+            .publish((Symbol::new(&e, "contract_unpaused"),), (admin,));
+    }
+
+    pub fn get_paused(e: Env) -> bool {
+        is_paused(&e)
     }
 
     pub fn get_fees(e: Env, token: Address) -> i128 {
@@ -1314,6 +1371,7 @@ impl EscrowContract {
     }
 
     pub fn remove_allowed_token(e: Env, token: Address) {
+        require_not_paused(&e);
         let admin = load_admin(&e);
         admin.require_auth();
         e.storage()
@@ -1323,6 +1381,7 @@ impl EscrowContract {
     }
 
     pub fn is_token_allowed(e: Env, token: Address) -> bool {
+        require_not_paused(&e);
         e.storage().persistent().has(&DataKey::AllowedToken(token))
     }
 
@@ -1332,6 +1391,7 @@ impl EscrowContract {
         if admin != stored_admin {
             panic_with_error!(&e, Error::UnauthorizedAdmin);
         }
+        require_not_paused(&e);
 
         let deadline = e.ledger().timestamp() + UPGRADE_TIMELOCK_SECS;
         e.storage()
@@ -1354,6 +1414,7 @@ impl EscrowContract {
         if admin != stored_admin {
             panic_with_error!(&e, Error::UnauthorizedAdmin);
         }
+        require_not_paused(&e);
 
         let deadline: u64 = e
             .storage()
@@ -1392,6 +1453,7 @@ impl EscrowContract {
         if admin != stored_admin {
             panic_with_error!(&e, Error::UnauthorizedAdmin);
         }
+        require_not_paused(&e);
 
         if !e
             .storage()
@@ -1523,6 +1585,7 @@ impl EscrowContract {
         if admin != current_admin {
             panic_with_error!(&e, Error::UnauthorizedAdmin);
         }
+        require_not_paused(&e);
         e.storage().instance().set(&DataKey::WhitelistMode, &enabled);
         bump_instance_ttl(&e);
         e.events().publish((Symbol::new(&e, "whitelist_mode_toggled"),), (enabled,));
@@ -1538,6 +1601,7 @@ impl EscrowContract {
         if admin != current_admin {
             panic_with_error!(&e, Error::UnauthorizedAdmin);
         }
+        require_not_paused(&e);
         e.storage().persistent().set(&DataKey::Blacklisted(address.clone()), &true);
         e.storage().persistent().extend_ttl(&DataKey::Blacklisted(address.clone()), INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         e.events().publish((Symbol::new(&e, "user_blacklisted"),), (address,));
@@ -1559,6 +1623,7 @@ impl EscrowContract {
         if admin != current_admin {
             panic_with_error!(&e, Error::UnauthorizedAdmin);
         }
+        require_not_paused(&e);
         e.storage().persistent().set(&DataKey::Whitelisted(address.clone()), &true);
         e.storage().persistent().extend_ttl(&DataKey::Whitelisted(address.clone()), INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         e.events().publish((Symbol::new(&e, "user_whitelisted"),), (address,));
@@ -1570,6 +1635,7 @@ impl EscrowContract {
         if admin != current_admin {
             panic_with_error!(&e, Error::UnauthorizedAdmin);
         }
+        require_not_paused(&e);
         e.storage().persistent().remove(&DataKey::Whitelisted(address.clone()));
         e.events().publish((Symbol::new(&e, "user_removed_from_whitelist"),), (address,));
     }
@@ -1589,6 +1655,7 @@ impl EscrowContract {
         if admin != current_admin {
             panic_with_error!(&e, Error::UnauthorizedAdmin);
         }
+        require_not_paused(&e);
         if exempted {
             e.storage().persistent().set(&DataKey::FeeExempted(address.clone()), &true);
             e.storage().persistent().extend_ttl(&DataKey::FeeExempted(address.clone()), INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
@@ -1834,7 +1901,22 @@ fn resolve_single_dispute(e: &Env, admin: &Address, job_id: u64, resolution: Dis
     );
 }
 
+
+fn is_paused(e: &Env) -> bool {
+    e.storage()
+        .instance()
+        .get::<DataKey, bool>(&DataKey::Paused)
+        .unwrap_or(false)
+}
+
+fn require_not_paused(e: &Env) {
+    if is_paused(e) {
+        panic_with_error!(e, Error::ContractPaused);
+    }
+}
+
 fn require_active_access(e: &Env, address: &Address) {
+    require_not_paused(e);
     if e.storage().persistent().get(&DataKey::Blacklisted(address.clone())).unwrap_or(false) {
         panic_with_error!(e, Error::BlacklistedUser);
     }
@@ -8319,6 +8401,173 @@ mod test {
         let (_, client, _, user, _, _) = setup();
         client.get_dashboard_stats(&user);
     }
+
+    // ── Pause / Unpause ───────────────────────────────────────────────────
+
+    #[test]
+    fn pause_and_unpause_by_admin() {
+        let (_, client, admin, _, _, _) = setup();
+        assert!(!client.get_paused());
+        client.pause(&admin);
+        assert!(client.get_paused());
+        client.unpause(&admin);
+        assert!(!client.get_paused());
+    }
+
+    #[test]
+    fn pause_emits_event() {
+        let (env, client, admin, _, _, _) = setup();
+        let before = env.events().all().len();
+        client.pause(&admin);
+        assert!(env.events().all().len() > before);
+    }
+
+    #[test]
+    fn unpause_emits_event() {
+        let (env, client, admin, _, _, _) = setup();
+        client.pause(&admin);
+        let before = env.events().all().len();
+        client.unpause(&admin);
+        assert!(env.events().all().len() > before);
+    }
+
+    #[test]
+    fn unpause_when_not_paused_is_noop() {
+        let (_, client, admin, _, _, _) = setup();
+        assert!(!client.get_paused());
+        client.unpause(&admin);
+        assert!(!client.get_paused());
+    }
+
+    #[test]
+    #[should_panic]
+    fn pause_when_already_paused_panics() {
+        let (_, client, admin, _, _, _) = setup();
+        client.pause(&admin);
+        client.pause(&admin);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #13)")]
+    fn pause_rejects_non_admin() {
+        let (_, client, _, user, _, _) = setup();
+        client.pause(&user);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #13)")]
+    fn unpause_rejects_non_admin() {
+        let (_, client, _, user, _, _) = setup();
+        client.unpause(&user);
+    }
+
+    #[test]
+    fn post_job_blocked_when_paused() {
+        let (env, client, admin, user, _, native_token) = setup();
+        client.pause(&admin);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        }));
+        assert!(r.is_err());
+        assert_eq!(client.get_job_count(), 0);
+    }
+
+    #[test]
+    fn post_job_resumes_after_unpause() {
+        let (env, client, admin, user, _, native_token) = setup();
+        client.pause(&admin);
+        client.unpause(&admin);
+        let id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        assert_eq!(id, 1);
+    }
+
+    #[test]
+    fn accept_job_blocked_when_paused() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+        let id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.pause(&admin);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.accept_job(&freelancer, &id);
+        }));
+        assert!(r.is_err());
+        assert_eq!(client.get_job(&id).status, JobStatus::Open);
+    }
+
+    #[test]
+    fn cancel_job_blocked_when_paused() {
+        let (env, client, admin, user, _, native_token) = setup();
+        let id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.pause(&admin);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.cancel_job(&user, &id);
+        }));
+        assert!(r.is_err());
+        assert_eq!(client.get_job(&id).status, JobStatus::Open);
+    }
+
+    #[test]
+    fn withdraw_fees_blocked_when_paused() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+        let id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &id);
+        client.submit_work(&freelancer, &id);
+        client.approve_work(&user, &id);
+        client.pause(&admin);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.withdraw_fees(&native_token);
+        }));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn read_only_functions_available_during_pause() {
+        let (env, client, admin, user, _, native_token) = setup();
+        let id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.pause(&admin);
+        assert_eq!(client.get_job(&id).status, JobStatus::Open);
+        assert_eq!(client.get_job_count(), 1);
+        assert_eq!(client.get_admin(), admin);
+        assert_eq!(client.get_native_token(), native_token);
+        assert_eq!(client.get_fees(&native_token), 0);
+        assert_eq!(client.get_fee_bps(), DEFAULT_FEE_BPS);
+    }
+
+    #[test]
+    fn update_fee_blocked_when_paused() {
+        let (_, client, admin, _, _, _) = setup();
+        client.pause(&admin);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.update_fee(&500i128);
+        }));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn raise_dispute_blocked_when_paused() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+        let id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &id);
+        client.pause(&admin);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.raise_dispute(&user, &id);
+        }));
+        assert!(r.is_err());
+        assert_eq!(client.get_job(&id).status, JobStatus::InProgress);
+    }
+
+    #[test]
+    fn resolve_dispute_blocked_when_paused() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+        let id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &id);
+        client.raise_dispute(&user, &id);
+        client.pause(&admin);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.resolve_dispute(&id, &DisputeResolution { client_bps: 10_000 });
+        }));
+        assert!(r.is_err());
+        assert_eq!(client.get_job(&id).status, JobStatus::Disputed);
+    }
 }
 #![no_std]
 
@@ -8483,6 +8732,8 @@ pub enum DataKey {
     TrustedForwarder(Address),
     /// Fee exemption status for an address.
     FeeExempted(Address),
+    /// Emergency pause flag — when true all write operations are blocked.
+    Paused,
     // Issue #460: two-step ownership transfer
     /// Address nominated to become the next admin (cleared on accept or cancel).
     PendingAdmin,
@@ -8533,6 +8784,8 @@ pub enum Error {
     BatchSizeMismatch = 31,
     BatchTooLarge = 32,
     InvalidSignature = 33,
+    /// Emergency pause: write operations are blocked while paused.
+    ContractPaused = 36,
 }
 
 #[contracttype]

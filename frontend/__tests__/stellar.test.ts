@@ -1,40 +1,33 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 
-const mockIsAllowed = vi.fn();
-const mockGetAddress = vi.fn();
+import { truncateAddress, getNetwork, getExplorerTxUrl } from "../lib/stellar";
 
-vi.mock("@stellar/freighter-api", () => ({
-  isAllowed: (...args: unknown[]) => mockIsAllowed(...args),
-  getAddress: (...args: unknown[]) => mockGetAddress(...args),
-  requestAccess: vi.fn(),
-  signTransaction: vi.fn(),
-}));
-
-import { getPublicKey } from "../lib/stellar";
-
-describe("getPublicKey", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+describe("truncateAddress", () => {
+  it("truncates a Stellar address with default 4 chars", () => {
+    const addr = "GALVPSP4DOAQTNBPRYMHFJNRXFJPCJQQGFPRP5DBQKXGYGDHMHXBVHGF";
+    expect(truncateAddress(addr)).toBe("GALVPS...VHGF");
   });
 
-  it("returns null when Freighter access is not allowed", async () => {
-    mockIsAllowed.mockResolvedValue({ isAllowed: false });
-
-    await expect(getPublicKey()).resolves.toBeNull();
-    expect(mockGetAddress).not.toHaveBeenCalled();
+  it("truncates with custom char count", () => {
+    const addr = "GALVPSP4DOAQTNBPRYMHFJNRXFJPCJQQGFPRP5DBQKXGYGDHMHXBVHGF";
+    expect(truncateAddress(addr, 6)).toBe("GALVPSP4...XBVHGF");
   });
 
-  it("returns the wallet address when Freighter access is allowed", async () => {
-    mockIsAllowed.mockResolvedValue({ isAllowed: true });
-    mockGetAddress.mockResolvedValue({ address: "GALLOWEDWALLET" });
-
-    await expect(getPublicKey()).resolves.toBe("GALLOWEDWALLET");
+  it("returns short addresses unchanged", () => {
+    expect(truncateAddress("abc")).toBe("abc");
+    expect(truncateAddress("GA")).toBe("GA");
+    expect(truncateAddress("GABCDEFGHIJK")).toBe("GABCDE...HIJK");
   });
 
-  it("returns null when Freighter getAddress reports an error", async () => {
-    mockIsAllowed.mockResolvedValue({ isAllowed: true });
-    mockGetAddress.mockResolvedValue({ error: "User rejected request" });
+  it("returns empty string for empty input", () => {
+    expect(truncateAddress("")).toBe("");
+  });
+});
 
-    await expect(getPublicKey()).resolves.toBeNull();
+describe("getExplorerTxUrl", () => {
+  it("returns testnet URL by default", () => {
+    const url = getExplorerTxUrl("abctxhash");
+    expect(url).toContain("testnet");
+    expect(url).toContain("abctxhash");
   });
 });

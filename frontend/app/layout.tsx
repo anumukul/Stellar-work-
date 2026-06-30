@@ -16,6 +16,9 @@ import OnboardingProvider from "@/components/OnboardingProvider";
 import AnnouncementBanner from "@/components/AnnouncementBanner";
 import JsonLd from "@/components/JsonLd";
 import AppFooter from "@/components/AppFooter";
+import OfflineIndicator from "@/components/OfflineIndicator";
+import InstallPrompt from "@/components/InstallPrompt";
+import ServiceWorkerRegistration from "@/components/ServiceWorkerRegistration";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -37,7 +40,7 @@ export const viewport: Viewport = {
 const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL ?? "https://stellarwork.app";
 
 export const metadata: Metadata = {
-  metadataBase: new URL(BASE_URL),
+    metadataBase: new URL(BASE_URL),
   title: {
     default: "StellarWork — Decentralized Freelance Marketplace on Stellar",
     template: "%s | StellarWork",
@@ -56,6 +59,7 @@ export const metadata: Metadata = {
   ],
   authors: [{ name: "StellarWork" }],
   creator: "StellarWork",
+  manifest: "/manifest.json",
   openGraph: {
     type: "website",
     locale: "en_US",
@@ -138,7 +142,9 @@ export default async function RootLayout({
           >
             Skip to main content
           </a>
+          <ServiceWorkerRegistration />
           <AnnouncementBanner />
+          <OfflineIndicator />
           <Navigation />
           <CommandPalette />
           <ShortcutCheatSheet />
@@ -147,6 +153,7 @@ export default async function RootLayout({
           <main id="main-content" tabIndex={-1} className="mx-auto w-full max-w-5xl flex-1 px-3 py-6 sm:px-4 sm:py-8">
             <ErrorBoundary>{children}</ErrorBoundary>
           </main>
+          <InstallPrompt />
           <AppFooter />
           </ToastProvider>
           </MessagingProvider>
