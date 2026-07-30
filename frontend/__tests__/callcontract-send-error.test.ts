@@ -144,6 +144,16 @@ describe("callContract sendTransaction error path", () => {
     expect(result.hash).toBe("TX_HASH_FAIL");
   });
 
+  it("decodes the contract return value after transaction confirmation", async () => {
+    sendTransaction.mockResolvedValue({ status: "PENDING", hash: "TX_HASH_OK" });
+    getTransaction.mockResolvedValue({ status: "SUCCESS", returnValue: 17n });
+
+    const result = await callContract("CCONTRACT", "post_job", [], {
+      pollTimeout: 500,
+    });
+
+    expect(result).toEqual({ status: "SUCCESS", hash: "TX_HASH_OK", data: 17n });
+  });
   it("does not call signTransaction when simulation itself errors", async () => {
     isSimulationError.mockReturnValue(true);
     simulateTransaction.mockResolvedValue({ error: "sim failed" });

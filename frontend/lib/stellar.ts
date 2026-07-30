@@ -173,7 +173,11 @@ export async function callContract(
       const status = await server.getTransaction(sent.hash);
 
       if (status.status === rpc.Api.GetTransactionStatus.SUCCESS) {
-        return { status: "SUCCESS", hash: sent.hash };
+        return {
+          status: "SUCCESS",
+          hash: sent.hash,
+          data: status.returnValue ? scValToNative(status.returnValue) : undefined,
+        };
       }
 
       if (status.status === rpc.Api.GetTransactionStatus.FAILED) {
