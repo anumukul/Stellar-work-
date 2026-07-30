@@ -124,6 +124,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             <ToastItem key={toast.id} toast={toast} onDismiss={dismiss} />
           ))}
         </div>
+      </div>
       <div
         aria-live="polite"
         aria-relevant="additions"

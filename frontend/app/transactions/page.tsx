@@ -5,7 +5,7 @@ import ErrorBanner from "@/components/ErrorBanner";
 import NoResultsState from "@/components/NoResultsState";
 import SectionCard from "@/components/SectionCard";
 import TransactionRowSkeleton from "@/components/TransactionRowSkeleton";
-import { getJob, getJobCount } from "@/lib/contract";
+import { getJob, getJobCount, getJobsBatch } from "@/lib/contract";
 import { useWallet } from "@/lib/wallet-context";
 import {
   ALL_TX_TYPES,
@@ -101,10 +101,13 @@ export default function TransactionsPage() {
     try {
       const count = await getJobCount();
       const results: Array<{ id: number; job: Job }> = [];
-      for (let id = 1; id <= count; id++) {
-        const job = await getJob(String(id));
-        if (job && (job.client === wallet || job.freelancer === wallet)) {
-          results.push({ id, job });
+      if (count > 0) {
+        const jobs = await getJobsBatch(1, count);
+        for (let id = 1; id <= jobs.length; id++) {
+          const job = jobs[id - 1];
+          if (job && (job.client === wallet || job.freelancer === wallet)) {
+            results.push({ id, job });
+          }
         }
       }
       setAllJobs(results);
