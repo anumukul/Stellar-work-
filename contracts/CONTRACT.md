@@ -173,3 +173,5 @@ Run the benchmark script:
 ```
 
 This builds the contract in release mode and simulates each function, reporting storage bytes read/written and estimated CPU cost.
+
+<!-- SC-82: archive_old_jobs planned -->
