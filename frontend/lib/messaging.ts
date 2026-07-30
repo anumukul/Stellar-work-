@@ -96,6 +96,10 @@ export function sanitiseMessageBody(raw: string): string {
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#x27;/g, "'")
+    .replace(/&#x2F;/g, "/")
     .trim()
     .slice(0, 2000); // hard cap
 }

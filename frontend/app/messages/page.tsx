@@ -11,6 +11,7 @@ import {
   shortAddr,
   type ConversationMeta,
 } from "@/lib/messaging";
+import { sanitizePlainText } from "@/lib/sanitize";
 
 // ─── Empty state ──────────────────────────────────────────────────────────────
 
@@ -165,9 +166,10 @@ export default function MessagesPage() {
     refreshUnread();
   }
 
-  const filtered = search.trim()
+  const cleanSearch = sanitizePlainText(search, 100);
+  const filtered = cleanSearch
     ? conversations.filter((c) =>
-        c.peerAddress.toLowerCase().includes(search.trim().toLowerCase()),
+        c.peerAddress.toLowerCase().includes(cleanSearch.toLowerCase()),
       )
     : conversations;
 

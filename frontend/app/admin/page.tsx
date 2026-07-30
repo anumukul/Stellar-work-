@@ -24,6 +24,7 @@ import { useWallet } from "@/lib/wallet-context";
 import type { Job, JobStatus } from "@/lib/types";
 import { useEffect, useState, useCallback } from "react";
 import { ANNOUNCEMENT_STORAGE_KEY, type AnnouncementConfig } from "@/components/AnnouncementBanner";
+import { sanitizeAnnouncementMessage, validateStellarAddress, MAX_ANNOUNCEMENT_MSG_LEN } from "@/lib/sanitize";
 
 const TX_LOG_KEY = "stellarwork:admin-withdrawals";
 
@@ -176,10 +177,11 @@ export default function AdminPage() {
   };
 
   const handlePublishAnnouncement = () => {
+    const sanitized = sanitizeAnnouncementMessage(announcementMsg);
     const config: AnnouncementConfig = {
       id: `${Date.now()}`,
       type: announcementType,
-      message: announcementMsg,
+      message: sanitized,
       enabled: announcementEnabled,
       expiresAt: announcementTtl > 0 ? Date.now() + announcementTtl * 60 * 60 * 1000 : null,
     };
@@ -195,16 +197,21 @@ export default function AdminPage() {
 
   const handleAccessAction = async (action: "addBlacklist" | "removeBlacklist" | "addWhitelist" | "removeWhitelist") => {
     if (!wallet || !accessTarget) return;
+    const validated = validateStellarAddress(accessTarget);
+    if (!validated) {
+      setError("Invalid Stellar address. Must start with G and be 56 characters.");
+      return;
+    }
     setAccessUpdating(true);
     setError(null);
     setSuccessMessage(null);
     try {
       const actualAdmin = process.env.NEXT_PUBLIC_ADMIN_ADDRESS || wallet;
-      if (action === "addBlacklist") await addToBlacklist(actualAdmin, accessTarget);
-      else if (action === "removeBlacklist") await removeFromBlacklist(actualAdmin, accessTarget);
-      else if (action === "addWhitelist") await addToWhitelist(actualAdmin, accessTarget);
-      else if (action === "removeWhitelist") await removeFromWhitelist(actualAdmin, accessTarget);
-      setSuccessMessage(`Successfully processed ${action} for ${accessTarget}`);
+      if (action === "addBlacklist") await addToBlacklist(actualAdmin, validated);
+      else if (action === "removeBlacklist") await removeFromBlacklist(actualAdmin, validated);
+      else if (action === "addWhitelist") await addToWhitelist(actualAdmin, validated);
+      else if (action === "removeWhitelist") await removeFromWhitelist(actualAdmin, validated);
+      setSuccessMessage(`Successfully processed ${action} for ${validated}`);
       setAccessTarget("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Access control action failed.");
@@ -329,6 +336,7 @@ export default function AdminPage() {
               value={announcementMsg}
               onChange={(e) => setAnnouncementMsg(e.target.value)}
               placeholder="E.g. Scheduled maintenance on Friday at 2AM UTC."
+              maxLength={MAX_ANNOUNCEMENT_MSG_LEN}
             />
           </div>
           
@@ -380,7 +388,7 @@ export default function AdminPage() {
               announcementType === "error" ? "bg-red-600" :
               "bg-emerald-600"
             }`}>
-              <div dangerouslySetInnerHTML={{ __html: announcementMsg || "<em>No message</em>" }} />
+              <div dangerouslySetInnerHTML={{ __html: sanitizeAnnouncementMessage(announcementMsg) || "<em>No message</em>" }} />
             </div>
           </div>
 

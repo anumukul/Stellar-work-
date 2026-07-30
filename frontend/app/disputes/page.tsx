@@ -17,6 +17,12 @@ import {
   type DisputeStatus,
   type EligibleJob,
 } from "@/lib/disputes-loader";
+import {
+  sanitizePlainText,
+  MAX_DISPUTE_REASON_LEN,
+  MAX_DISPUTE_EVIDENCE_LEN,
+  MAX_RESOLUTION_NOTE_LEN,
+} from "@/lib/sanitize";
 
 type Role = "client" | "freelancer" | "admin";
 
@@ -88,11 +94,13 @@ function RaiseDisputeModal({
 
   async function handleSubmit() {
     if (loading) return;
-    if (!reason.trim()) { setError("Please describe the dispute reason."); return; }
+    const cleanReason = sanitizePlainText(reason, MAX_DISPUTE_REASON_LEN);
+    const cleanEvidence = sanitizePlainText(evidence, MAX_DISPUTE_EVIDENCE_LEN);
+    if (!cleanReason) { setError("Please describe the dispute reason."); return; }
     setError("");
     setLoading(true);
     try {
-      await onSubmit(jobId, reason, evidence);
+      await onSubmit(jobId, cleanReason, cleanEvidence);
       onClose();
     } catch {
       setError("Failed to raise dispute. Please try again.");
@@ -231,11 +239,12 @@ function ResolveModal({
 
   async function handleResolve() {
     if (loading) return;
-    if (!note.trim()) { setError("Resolution note is required."); return; }
+    const cleanNote = sanitizePlainText(note, MAX_RESOLUTION_NOTE_LEN);
+    if (!cleanNote) { setError("Resolution note is required."); return; }
     setError("");
     setLoading(true);
     try {
-      await onResolve(dispute.id, clientShare, note);
+      await onResolve(dispute.id, clientShare, cleanNote);
       onClose();
     } catch {
       setError("Failed to resolve dispute. Please try again.");
@@ -533,6 +542,8 @@ export default function DisputesPage() {
     try {
       await contractRaiseDispute(wallet, jobId);
       const job = eligibleJobs.find(j => j.id === jobId)!;
+      const cleanReason = sanitizePlainText(reason, MAX_DISPUTE_REASON_LEN);
+      const cleanEvidence = sanitizePlainText(evidence, MAX_DISPUTE_EVIDENCE_LEN);
       const newDispute: Dispute = {
         id: `D-${String(disputes.length + 1).padStart(3, "0")}`,
         jobId,
@@ -543,8 +554,8 @@ export default function DisputesPage() {
         raisedBy: role as "client" | "freelancer",
         raisedAt: new Date().toISOString(),
         status: "Active",
-        reason,
-        evidence,
+        reason: cleanReason,
+        evidence: cleanEvidence,
       };
       setDisputes(prev => [newDispute, ...prev]);
       showSuccess("Dispute raised. Funds held in escrow.");
@@ -558,6 +569,7 @@ export default function DisputesPage() {
       const jobId = disputes.find(d => d.id === id)?.jobId;
       if (!jobId) return;
       await contractResolveDispute(jobId, clientShare);
+      const cleanNote = sanitizePlainText(note, MAX_RESOLUTION_NOTE_LEN);
       setDisputes(prev =>
         prev.map(d =>
           d.id === id
@@ -568,7 +580,7 @@ export default function DisputesPage() {
                   resolvedAt: new Date().toISOString(),
                   clientShare,
                   freelancerShare: 100 - clientShare,
-                  note,
+                  note: cleanNote,
                 },
               }
             : d

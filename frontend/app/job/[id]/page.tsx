@@ -10,6 +10,7 @@ import RichTextRenderer, { isRichText, PlainTextRenderer } from "@/components/Ri
 import { useNotifications } from "@/lib/notifications-context";
 import { acceptJob, approveWork, cancelJob, freelancerCancelJob, getDescriptionCid, getJob, submitWork } from "@/lib/contract";
 import { fetchFromIpfs } from "@/lib/ipfs-service";
+import { sanitizeMeetingTitle } from "@/lib/sanitize";
 import {
   fetchXlmFiatRates,
   formatDeadline,
@@ -687,13 +688,15 @@ export default function JobDetailPage() {
                 </div>
                 <button
                   type="button"
-                  disabled={!meetingTitle || !slotDate || !slotStart || !slotEnd}
+                  disabled={!meetingTitle.trim() || !slotDate || !slotStart || !slotEnd}
                   onClick={() => {
                     const start = `${slotDate}T${slotStart}:00`;
                     const end = `${slotDate}T${slotEnd}:00`;
+                    const cleanTitle = sanitizeMeetingTitle(meetingTitle);
+                    if (!cleanTitle) return;
                     proposeMeeting(
                       numericId,
-                      meetingTitle,
+                      cleanTitle,
                       [{ start, end }],
                       wallet,
                       otherParty,

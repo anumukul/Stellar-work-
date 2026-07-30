@@ -13,6 +13,13 @@ import {
   formatCooldown,
   type RateLimitStatus,
 } from "@/lib/rate-limiter";
+import {
+  validateAmount,
+  validateAmountMin,
+  validateDeadline,
+  validateTokenAddress,
+  MIN_JOB_AMOUNT_STROOPS,
+} from "@/lib/sanitize";
 
 const MIN_JOB_AMOUNT_XLM = 0.5;
 const DRAFT_STORAGE_KEY_PREFIX = "stellarwork:post-job-draft:";
@@ -97,13 +104,8 @@ export default function PostJobPage() {
   const prevWalletRef = useRef<string | null>(null);
 
   const parseAmountToStroops = (value: string): string | null => {
-    const trimmed = value.trim();
-    const amountPattern = /^\d+(\.\d+)?$/;
-    if (!amountPattern.test(trimmed)) return null;
-    const [, fractional = ""] = trimmed.split(".");
-    if (fractional.length > 7) return null;
-    const [whole = "0"] = trimmed.split(".");
-    return `${whole}${fractional.padEnd(7, "0")}`;
+    const result = validateAmount(value);
+    return result.stroops;
   };
 
   // Restore draft on mount and on wallet change
@@ -283,14 +285,13 @@ export default function PostJobPage() {
               deadline?: string;
               tokenAddress?: string;
             } = {};
-            const amountStroops = parseAmountToStroops(amount);
-            if (!amountStroops || BigInt(amountStroops) <= 0n) {
-              nextFieldErrors.amount = "Enter a valid amount with up to 7 decimal places.";
-            } else {
-              const amountXlm = parseFloat(amount);
-              if (amountXlm < MIN_JOB_AMOUNT_XLM) {
-                nextFieldErrors.amount = `Minimum job amount is ${MIN_JOB_AMOUNT_XLM} XLM to prevent dust spam.`;
-              }
+            const amountResult = validateAmount(amount);
+            const amountStroops = amountResult.stroops;
+            if (amountResult.error) {
+              nextFieldErrors.amount = amountResult.error;
+            } else if (amountStroops) {
+              const minError = validateAmountMin(amountStroops, MIN_JOB_AMOUNT_STROOPS, `${MIN_JOB_AMOUNT_XLM} XLM`);
+              if (minError) nextFieldErrors.amount = minError;
             }
 
             const limitStatus = getRateLimitStatus();
@@ -309,20 +310,14 @@ export default function PostJobPage() {
               nextFieldErrors.description = `Description must be at most ${maxDescPayloadBytes} bytes (currently ${descriptionBytes}).`;
             }
             if (deadline) {
-              const today = new Date();
-              const todayIsoDate = new Date(
-                today.getFullYear(),
-                today.getMonth(),
-                today.getDate(),
-              )
-                .toISOString()
-                .slice(0, 10);
-              if (deadline < todayIsoDate) {
-                nextFieldErrors.deadline = "Deadline cannot be in the past.";
-              }
+              const deadlineError = validateDeadline(deadline);
+              if (deadlineError) nextFieldErrors.deadline = deadlineError;
             }
             if (!tokenAddress.trim()) {
               nextFieldErrors.tokenAddress = "Token address is required.";
+            } else {
+              const tokenError = validateTokenAddress(tokenAddress);
+              if (tokenError) nextFieldErrors.tokenAddress = tokenError;
             }
             if (Object.keys(nextFieldErrors).length > 0) {
               setFieldErrors(nextFieldErrors);
