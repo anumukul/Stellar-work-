@@ -8,6 +8,7 @@ import {
   getJob,
   getJobCount,
   getCompletedJobsCount,
+  getJobsBatch,
   submitWork,
   enforceDeadline,
 } from "@/lib/contract";
@@ -107,10 +108,13 @@ export default function DashboardPage() {
     try {
       const count = await getJobCount();
       const fetched: Array<{ id: number; job: Job }> = [];
-      for (let id = 1; id <= count; id += 1) {
-        const job = await getJob(String(id));
-        if (job && (job.client === wallet || job.freelancer === wallet)) {
-          fetched.push({ id, job });
+      if (count > 0) {
+        const jobs = await getJobsBatch(1, count);
+        for (let id = 1; id <= jobs.length; id++) {
+          const job = jobs[id - 1];
+          if (job && (job.client === wallet || job.freelancer === wallet)) {
+            fetched.push({ id, job });
+          }
         }
       }
       setAllJobs(fetched);
@@ -150,16 +154,17 @@ export default function DashboardPage() {
       }
       setBookmarkedLoading(true);
       try {
-        const results = await Promise.all(
-          ids.map(async (id) => {
-            try {
-              const job = await getJob(String(id));
-              return job ? { id, job } : null;
-            } catch {
-              return null;
-            }
-          }),
-        );
+        const maxId = Math.max(...ids);
+        const minId = Math.min(...ids);
+        const jobs = await getJobsBatch(minId, maxId - minId + 1);
+        const jobMap = new Map<number, Job>();
+        jobs.forEach((job, idx) => {
+          jobMap.set(minId + idx, job);
+        });
+        const results = ids.map((id) => {
+          const job = jobMap.get(id);
+          return job ? { id, job } : null;
+        });
         setBookmarkedJobs(
           results.filter(
             (item): item is { id: number; job: Job } => item !== null,

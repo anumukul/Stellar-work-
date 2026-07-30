@@ -2,7 +2,7 @@
 
 import ErrorBanner from "@/components/ErrorBanner";
 import StatusPill from "@/components/StatusPill";
-import { getJob, getJobCount, isBlacklisted, isWhitelisted, isWhitelistModeEnabled } from "@/lib/contract";
+import { getJob, getJobCount, getJobsBatch, isBlacklisted, isWhitelisted, isWhitelistModeEnabled } from "@/lib/contract";
 import { toXlm } from "@/lib/format";
 import {
   MAX_BIO_LENGTH,
@@ -347,11 +347,14 @@ export default function ProfilePageClient({ address }: { address: string }) {
 
       const count = await getJobCount();
       const fetched: ProfileJob[] = [];
-      for (let id = 1; id <= count; id += 1) {
-        const job = await getJob(String(id));
-        if (!job) continue;
-        if (job.client === address) fetched.push({ id, job, role: "client" });
-        else if (job.freelancer === address) fetched.push({ id, job, role: "freelancer" });
+      if (count > 0) {
+        const jobs = await getJobsBatch(1, count);
+        for (let id = 1; id <= jobs.length; id++) {
+          const job = jobs[id - 1];
+          if (!job) continue;
+          if (job.client === address) fetched.push({ id, job, role: "client" });
+          else if (job.freelancer === address) fetched.push({ id, job, role: "freelancer" });
+        }
       }
       setJobs(fetched);
     } catch (e) {

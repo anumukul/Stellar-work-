@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages } from "next-intl/server";
 import dynamic from "next/dynamic";
+import ClientComponents from "@/components/ClientComponents";
 import { WalletProvider } from "@/lib/wallet-context";
 import { ToastProvider } from "@/components/ToastProvider";
 import { NotificationProvider } from "@/lib/notifications-context";
@@ -22,9 +23,6 @@ import "./globals.css";
 const CommandPalette = dynamic(() => import("@/components/CommandPalette"), { ssr: false });
 const ShortcutCheatSheet = dynamic(() => import("@/components/ShortcutCheatSheet"), { ssr: false });
 const OnboardingProvider = dynamic(() => import("@/components/OnboardingProvider"), { ssr: false });
-const InstallPrompt = dynamic(() => import("@/components/InstallPrompt"), { ssr: false });
-const ServiceWorkerRegistration = dynamic(() => import("@/components/ServiceWorkerRegistration"), { ssr: false });
-const AnnouncementBanner = dynamic(() => import("@/components/AnnouncementBanner"), { ssr: false });
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -150,8 +148,7 @@ export default async function RootLayout({
           >
             Skip to main content
           </a>
-          <ServiceWorkerRegistration />
-          <AnnouncementBanner />
+          <ClientComponents />
           <OfflineIndicator />
           <Navigation />
           <CommandPalette />
@@ -187,15 +184,14 @@ export default async function RootLayout({
               </div>
             </div>
           </footer>
-          <InstallPrompt />
           <AppFooter />
           </ToastProvider>
           </MeetingsProvider>
           </MessagingProvider>
           </NotificationProvider>
         </WalletProvider>
-        </TypographyProvider>
         </NetworkProvider>
+        </TypographyProvider>
         </ThemeProvider>
         </NextIntlClientProvider>
       </body>

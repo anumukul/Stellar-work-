@@ -8,7 +8,7 @@ import JobCardSkeleton from "@/components/JobCardSkeleton";
 import SectionCard from "@/components/SectionCard";
 import ComparisonBar from "@/components/ComparisonBar";
 import JobFilterPanel, { DEFAULT_FILTERS, type JobFilters } from "@/components/JobFilterPanel";
-import { acceptJob, getDescriptionCid, getJob, getJobCount } from "@/lib/contract";
+import { acceptJob, getDescriptionCid, getJob, getJobCount, getJobsBatch } from "@/lib/contract";
 import { fetchFromIpfs } from "@/lib/ipfs-service";
 import { useNotifications } from "@/lib/notifications-context";
 import {
@@ -272,21 +272,11 @@ export default function HomePage() {
         }
       }
 
-      const idsToFetch: string[] = [];
-      for (let id = 1; id <= count; id += 1) {
-        idsToFetch.push(String(id));
-      }
-
-      const results = await Promise.all(
-        idsToFetch.map(async (id) => {
-          try {
-            const job = await getJob(id);
-            return job ? { id: Number(id), job } : null;
-          } catch {
-            return null;
-          }
-        }),
-      );
+      const fetchedJobs = await getJobsBatch(1, count);
+      const results = fetchedJobs.map((job, index) => ({
+        id: index + 1,
+        job,
+      }));
 
       const fetched = results.filter(
         (item): item is { id: number; job: Job } =>
