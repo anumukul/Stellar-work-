@@ -72,3 +72,8 @@ To bypass hooks (use sparingly):
 ```bash
 git commit -m "..." --no-verify
 ```
+
+## 5. Planned Features
+
+### Escrow top-up (SC-83)
+Clients cannot yet add funds to an existing job escrow after posting. Scope increases currently require canceling and reposting. A `top_up_escrow` contract method is planned.
