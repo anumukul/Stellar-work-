@@ -1277,6 +1277,23 @@ impl Escrow {
         env.storage().instance().get(&DataKey::JobCount).unwrap_or(0)
     }
 
+    pub fn get_jobs_batch(env: Env, start: u64, limit: u32) -> Vec<Job> {
+        let count: u64 = env.storage().instance().get(&DataKey::JobCount).unwrap_or(0);
+        let mut jobs = Vec::new(&env);
+        if start == 0 || limit == 0 || start > count {
+            return jobs;
+        }
+        let end = core::cmp::min(count, start.saturating_add(limit as u64).saturating_sub(1));
+        let mut cursor = start;
+        while cursor <= end {
+            if let Some(job) = env.storage().persistent().get::<_, Job>(&DataKey::Job(cursor)) {
+                jobs.push_back(job);
+            }
+            cursor = cursor.saturating_add(1);
+        }
+        jobs
+    }
+
     pub fn get_completed_jobs_count(env: Env) -> u64 {
         env.storage().instance().get(&DataKey::CompletedJobsCount).unwrap_or(0)
     }
