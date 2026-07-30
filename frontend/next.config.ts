@@ -1,5 +1,10 @@
 import type { NextConfig } from "next";
 import createNextIntlPlugin from "next-intl/plugin";
+import { assertEnv } from "@/lib/env-validator";
+
+// Validate required environment variables at build time.
+// Throws immediately if required vars are missing or malformed.
+assertEnv();
 
 const withNextIntl = createNextIntlPlugin("./i18n/request.ts");
 

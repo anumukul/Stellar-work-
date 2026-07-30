@@ -49,6 +49,7 @@ const ACTIVE_JOB_BUMP_AMOUNT: u32 = 518_400;
 const ARCHIVAL_JOB_BUMP_AMOUNT: u32 = 120_960;
 const FEE_BPS: i128 = 250;
 const MAX_DESC_PAYLOAD_LEN: u32 = 4096;
+const DEFAULT_MAX_ACTIVE_JOBS: u32 = 50;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -526,6 +527,9 @@ impl Escrow {
         env.storage()
             .instance()
             .set(&DataKey::WhitelistMode, &false);
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxActiveJobsPerClient, &DEFAULT_MAX_ACTIVE_JOBS);
 
         env.events()
             .publish((symbol_short!("init"),), (admin, native_token));
@@ -544,6 +548,7 @@ impl Escrow {
     ) -> u64 {
         client.require_auth();
         check_access(&env, &client);
+        enforce_client_active_job_limit(&env, &client);
         if amount <= 0 { panic!("invalid amount"); }
         if description_payload_len > Self::get_desc_payload_max(env.clone()) { panic!("payload too large"); }
         if deadline <= current_ledger(&env) { panic!("deadline too soon"); }
@@ -616,6 +621,7 @@ impl Escrow {
     pub fn accept_job(env: Env, freelancer: Address, job_id: u64) {
         freelancer.require_auth();
         check_access(&env, &freelancer);
+        enforce_client_active_job_limit(&env, &freelancer);
         let mut job = get_job(&env, job_id);
         if job.status != JobStatus::Open { panic!("job not open"); }
         if current_ledger(&env) > job.deadline { panic!("deadline passed"); }
@@ -1277,6 +1283,23 @@ impl Escrow {
         env.storage().instance().get(&DataKey::JobCount).unwrap_or(0)
     }
 
+    pub fn get_jobs_batch(env: Env, start: u64, limit: u32) -> Vec<Job> {
+        let count: u64 = env.storage().instance().get(&DataKey::JobCount).unwrap_or(0);
+        let mut jobs = Vec::new(&env);
+        if start == 0 || limit == 0 || start > count {
+            return jobs;
+        }
+        let end = core::cmp::min(count, start.saturating_add(limit as u64).saturating_sub(1));
+        let mut cursor = start;
+        while cursor <= end {
+            if let Some(job) = env.storage().persistent().get::<_, Job>(&DataKey::Job(cursor)) {
+                jobs.push_back(job);
+            }
+            cursor = cursor.saturating_add(1);
+        }
+        jobs
+    }
+
     pub fn get_completed_jobs_count(env: Env) -> u64 {
         env.storage().instance().get(&DataKey::CompletedJobsCount).unwrap_or(0)
     }
@@ -1466,6 +1489,30 @@ impl Escrow {
             .publish((symbol_short!("fees_wdr"),), (admin, token, accumulated));
 
         Ok(())
+    }
+
+    pub fn set_max_active_jobs_per_client(env: Env, admin: Address, limit: u32) -> Result<(), Error> {
+        check_admin(&env);
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxActiveJobsPerClient, &limit);
+        env.events()
+            .publish(
+                (symbol_short!("max_jobs"),),
+                (admin, limit),
+            );
+        Ok(())
+    }
+
+    pub fn get_max_active_jobs_per_client(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get::<DataKey, u32>(&DataKey::MaxActiveJobsPerClient)
+            .unwrap_or(DEFAULT_MAX_ACTIVE_JOBS)
+    }
+
+    pub fn get_client_active_jobs_count(env: Env, client: Address) -> u32 {
+        count_client_active_jobs(&env, &client)
     }
 
     pub fn add_allowed_token(env: Env, token: Address) -> Result<(), Error> {

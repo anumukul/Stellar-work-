@@ -38,15 +38,16 @@ export type DisputesPageData = {
 };
 
 export async function loadDisputesPageData(wallet: string): Promise<DisputesPageData> {
-  const { getJobCount, getJob } = await import("@/lib/contract");
+  const { getJobCount, getJobsBatch } = await import("@/lib/contract");
   const count = await getJobCount();
 
   const disputes: Dispute[] = [];
   const eligibleJobs: EligibleJob[] = [];
   const now = new Date().toISOString();
 
-  for (let id = 1; id <= count; id++) {
-    const job = await getJob(String(id));
+  const allJobs = count > 0 ? await getJobsBatch(1, count) : [];
+  for (let id = 1; id <= allJobs.length; id++) {
+    const job = allJobs[id - 1];
     if (!job) continue;
 
     if (job.client !== wallet && job.freelancer !== wallet) continue;

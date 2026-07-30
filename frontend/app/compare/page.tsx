@@ -1,6 +1,6 @@
 "use client";
 
-import { getJob } from "@/lib/contract";
+import { getJob, getJobsBatch } from "@/lib/contract";
 import { formatDeadline, toXlm } from "@/lib/format";
 import type { Job } from "@/lib/types";
 import Link from "next/link";
@@ -64,20 +64,31 @@ export default function ComparePage() {
     setLoading(true);
     setError(null);
 
-    Promise.all(
-      ids.map(async (id) => {
-        const job = await getJob(String(id));
-        return job ? { id, job } : null;
-      }),
-    )
-      .then((results) => {
-        const valid = results.filter((r): r is JobEntry => r !== null);
-        setEntries(valid);
-      })
-      .catch((e) => {
+    (async () => {
+      try {
+        const validEntries: JobEntry[] = [];
+        if (ids.length > 0) {
+          const maxId = Math.max(...ids);
+          const minId = Math.min(...ids);
+          const jobs = await getJobsBatch(minId, maxId - minId + 1);
+          const jobMap = new Map<number, Job>();
+          jobs.forEach((job, idx) => {
+            jobMap.set(minId + idx, job);
+          });
+          for (const id of ids) {
+            const job = jobMap.get(id);
+            if (job) {
+              validEntries.push({ id, job });
+            }
+          }
+        }
+        setEntries(validEntries);
+      } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to load jobs for comparison.");
-      })
-      .finally(() => setLoading(false));
+      } finally {
+        setLoading(false);
+      }
+    })();
   }, [searchParams]);
 
   const ids = searchParams.get("ids");
