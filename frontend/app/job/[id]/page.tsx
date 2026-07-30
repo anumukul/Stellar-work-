@@ -6,6 +6,7 @@ import LoadingState from "@/components/LoadingState";
 import { useToast } from "@/components/ToastProvider";
 import StatusPill from "@/components/StatusPill";
 import ShareButton from "@/components/ShareButton";
+import DeadlineCountdown from "@/components/DeadlineCountdown";
 import RichTextRenderer, { isRichText, PlainTextRenderer } from "@/components/RichTextRenderer";
 import { useNotifications } from "@/lib/notifications-context";
 import { acceptJob, approveWork, cancelJob, freelancerCancelJob, getDescriptionCid, getJob, submitWork } from "@/lib/contract";
@@ -594,14 +595,19 @@ export default function JobDetailPage() {
             {copied ? "Copied!" : "Copy"}
           </button>
         </div>
-        <p>
-          <strong>Deadline:</strong>{" "}
-          {(() => {
-            const deadline = formatDeadline(job.deadline);
-            if (!deadline) return "No deadline";
-            return `${deadline.isPast ? "Past due" : deadline.relative} • ${deadline.exact}`;
-          })()}
-        </p>
+        <div className="space-y-1">
+          <p>
+            <strong>Deadline:</strong>{" "}
+            {(() => {
+              const deadline = formatDeadline(job.deadline);
+              if (!deadline) return "No deadline";
+              return `${deadline.isPast ? "Past due" : deadline.relative} • ${deadline.exact}`;
+            })()}
+          </p>
+          {job.deadline && job.deadline !== "0" ? (
+            <DeadlineCountdown deadline={job.deadline} />
+          ) : null}
+        </div>
 
         {/* Message button — visible when the other party is known */}
         {wallet && (() => {

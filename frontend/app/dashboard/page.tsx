@@ -20,6 +20,7 @@ import JobCardSkeleton from "@/components/JobCardSkeleton";
 import NoResultsState from "@/components/NoResultsState";
 import SectionCard from "@/components/SectionCard";
 import StatusPill from "@/components/StatusPill";
+import DeadlineCountdown from "@/components/DeadlineCountdown";
 import { useToast } from "@/components/ToastProvider";
 import { useNotifications, getEventLabel } from "@/lib/notifications-context";
 import { formatDeadline, toXlm } from "@/lib/format";
@@ -579,13 +580,18 @@ export default function DashboardPage() {
                           <p className="truncate font-mono text-xs text-slate-400">
                             Token: {job.token ? `${job.token.slice(0, 8)}...${job.token.slice(-4)}` : "N/A"}
                           </p>
-                          <p>
-                            {(() => {
-                              const deadline = formatDeadline(job.deadline);
-                              if (!deadline) return "Deadline: No deadline";
-                              return `Deadline: ${deadline.isPast ? "Past due" : deadline.relative} • ${deadline.exact}`;
-                            })()}
-                          </p>
+                          <div className="space-y-1">
+                            <p>
+                              {(() => {
+                                const deadline = formatDeadline(job.deadline);
+                                if (!deadline) return "Deadline: No deadline";
+                                return `Deadline: ${deadline.isPast ? "Past due" : deadline.relative} • ${deadline.exact}`;
+                              })()}
+                            </p>
+                            {job.deadline && job.deadline !== "0" ? (
+                              <DeadlineCountdown deadline={job.deadline} />
+                            ) : null}
+                          </div>
                         </div>
                         {isOwnJob && (
                           <p className="mt-2 text-xs text-amber-600">This is your own job</p>
