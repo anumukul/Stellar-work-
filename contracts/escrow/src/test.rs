@@ -66,7 +66,10 @@ fn test_full_job_lifecycle() {
     escrow.accept_job(&freelancer, &job_id);
     assert_eq!(escrow.get_job(&job_id).status, JobStatus::InProgress);
     escrow.submit_work(&freelancer, &job_id);
-    assert_eq!(escrow.get_job(&job_id).status, JobStatus::SubmittedForReview);
+    assert_eq!(
+        escrow.get_job(&job_id).status,
+        JobStatus::SubmittedForReview
+    );
     escrow.approve_work(&client, &job_id);
     assert_eq!(escrow.get_job(&job_id).status, JobStatus::Completed);
     assert_eq!(escrow.get_completed_jobs_count(), 1);
@@ -278,7 +281,14 @@ fn test_trusted_forwarder() {
 
     let desc_hash = BytesN::from_array(&env, &[0u8; 32]);
     let deadline: u64 = 1000;
-    let job_id = escrow.post_job(&client, &100_0000000i128, &desc_hash, &100u32, &deadline, &token);
+    let job_id = escrow.post_job(
+        &client,
+        &100_0000000i128,
+        &desc_hash,
+        &100u32,
+        &deadline,
+        &token,
+    );
     escrow.relay_cancel_job(&forwarder, &client, &job_id);
     assert_eq!(escrow.get_job(&job_id).status, JobStatus::Cancelled);
 }
@@ -299,7 +309,15 @@ fn test_sla_config_creation() {
         auto_escalate: true,
     };
 
-    let job_id = escrow.post_job_with_sla(&client, &amount, &desc_hash, &100u32, &deadline, &token, &sla_config);
+    let job_id = escrow.post_job_with_sla(
+        &client,
+        &amount,
+        &desc_hash,
+        &100u32,
+        &deadline,
+        &token,
+        &sla_config,
+    );
     assert_eq!(job_id, 1);
 
     let status = escrow.get_sla_status(&job_id);
@@ -325,7 +343,15 @@ fn test_sla_get_sla_status_returns_correct_values() {
         auto_escalate: false,
     };
 
-    let job_id = escrow.post_job_with_sla(&client, &amount, &desc_hash, &100u32, &deadline, &token, &sla_config);
+    let job_id = escrow.post_job_with_sla(
+        &client,
+        &amount,
+        &desc_hash,
+        &100u32,
+        &deadline,
+        &token,
+        &sla_config,
+    );
     let status_before = escrow.get_sla_status(&job_id);
     assert_eq!(status_before.accepted_at, 0);
 
@@ -360,7 +386,15 @@ fn test_sla_penalty_applied_on_late_delivery() {
         auto_escalate: true,
     };
 
-    let job_id = escrow.post_job_with_sla(&client, &amount, &desc_hash, &100u32, &deadline, &token, &sla_config);
+    let job_id = escrow.post_job_with_sla(
+        &client,
+        &amount,
+        &desc_hash,
+        &100u32,
+        &deadline,
+        &token,
+        &sla_config,
+    );
     escrow.accept_job(&freelancer, &job_id);
 
     let current = env.ledger().sequence();
@@ -395,7 +429,15 @@ fn test_sla_breach_event_emitted() {
         auto_escalate: true,
     };
 
-    let job_id = escrow.post_job_with_sla(&client, &amount, &desc_hash, &100u32, &deadline, &token, &sla_config);
+    let job_id = escrow.post_job_with_sla(
+        &client,
+        &amount,
+        &desc_hash,
+        &100u32,
+        &deadline,
+        &token,
+        &sla_config,
+    );
     escrow.accept_job(&freelancer, &job_id);
 
     let current = env.ledger().sequence();
@@ -406,4 +448,222 @@ fn test_sla_breach_event_emitted() {
     let post_events = env.events().all().len();
 
     assert!(post_events > pre_events, "SLA breach should emit an event");
+}
+
+// ── SC-TEST-INSUFFICIENT-BALANCE (#633): post_job insufficient balance ───────
+
+#[test]
+fn test_post_job_insufficient_balance_fails() {
+    let env = Env::default();
+    let (_admin, _rich_client, _freelancer, token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+
+    // Create a client with a tiny balance
+    let poor_client = Address::generate(&env);
+    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&poor_client, &1_000_0000i128); // 1 token
+
+    let desc_hash = BytesN::from_array(&env, &[0u8; 32]);
+    let deadline: u64 = 1000;
+    let amount: i128 = 100_0000000; // 100 tokens — far more than poor_client has
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        escrow.post_job(
+            &poor_client,
+            &amount,
+            &desc_hash,
+            &100u32,
+            &deadline,
+            &token,
+        );
+    }));
+    assert!(
+        result.is_err(),
+        "post_job must panic with insufficient balance"
+    );
+
+    // Verify the panic message contains the expected error
+    let err_msg = format!("{:?}", result);
+    assert!(
+        err_msg.contains("insufficient balance"),
+        "Expected panic message containing 'insufficient balance', got: {}",
+        err_msg
+    );
+}
+
+#[test]
+fn test_post_job_insufficient_balance_no_job_stored() {
+    let env = Env::default();
+    let (_admin, _rich_client, _freelancer, token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+
+    // Create a client with a tiny balance
+    let poor_client = Address::generate(&env);
+    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&poor_client, &1_000_0000i128); // 1 token
+
+    let desc_hash = BytesN::from_array(&env, &[0u8; 32]);
+    let deadline: u64 = 1000;
+    let amount: i128 = 100_0000000; // 100 tokens — far more than poor_client has
+
+    // Record pre-attempt job count
+    let pre_count = escrow.get_job_count();
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        escrow.post_job(
+            &poor_client,
+            &amount,
+            &desc_hash,
+            &100u32,
+            &deadline,
+            &token,
+        );
+    }));
+    assert!(
+        result.is_err(),
+        "post_job must panic with insufficient balance"
+    );
+
+    // Verify no job was stored
+    let post_count = escrow.get_job_count();
+    assert_eq!(
+        pre_count, post_count,
+        "Job count should not change after a failed post_job due to insufficient balance"
+    );
+}
+
+// ── SC-TEST-TOKEN-NOT-ALLOWED (#633): post_job token restriction ──────────────
+
+#[test]
+fn test_post_job_token_not_allowed_fails() {
+    let env = Env::default();
+    let (admin, client, _freelancer, token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+
+    // setup_test already adds the native `token` to the allowed list.
+    // Generate a random address that is NOT an allowed token.
+    let restricted_token = Address::generate(&env);
+
+    // Sanity check: the random token should not be allowed
+    assert!(!escrow.is_token_allowed(&restricted_token));
+
+    let desc_hash = BytesN::from_array(&env, &[0u8; 32]);
+    let deadline: u64 = 1000;
+    let amount: i128 = 100_0000000;
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        escrow.post_job(
+            &client,
+            &amount,
+            &desc_hash,
+            &100u32,
+            &deadline,
+            &restricted_token,
+        );
+    }));
+    assert!(
+        result.is_err(),
+        "post_job must panic with 'token not allowed'"
+    );
+
+    let err_msg = format!("{:?}", result);
+    assert!(
+        err_msg.contains("token not allowed"),
+        "Expected panic message containing 'token not allowed', got: {}",
+        err_msg
+    );
+
+    // Verify no job was stored
+    assert_eq!(
+        escrow.get_job_count(),
+        0,
+        "No job should be stored after a failed token check"
+    );
+}
+
+// ── SC-TEST-BLACKLISTED (#633): blacklisted client cannot post_job ────────────
+
+#[test]
+fn test_post_job_blacklisted_client_fails() {
+    let env = Env::default();
+    let (admin, client, _freelancer, token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+
+    // Blacklist the client
+    escrow.add_to_blacklist(&admin, &client);
+    assert!(escrow.is_blacklisted_public(&client));
+
+    let desc_hash = BytesN::from_array(&env, &[0u8; 32]);
+    let deadline: u64 = 1000;
+    let amount: i128 = 100_0000000;
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        escrow.post_job(&client, &amount, &desc_hash, &100u32, &deadline, &token);
+    }));
+    assert!(result.is_err(), "post_job must panic with 'blacklisted'");
+
+    let err_msg = format!("{:?}", result);
+    assert!(
+        err_msg.contains("blacklisted"),
+        "Expected panic message containing 'blacklisted', got: {}",
+        err_msg
+    );
+
+    // Verify no job was stored
+    assert_eq!(
+        escrow.get_job_count(),
+        0,
+        "No job should be stored for a blacklisted client"
+    );
+}
+
+// ── SC-TEST-NOT-WHITELISTED (#633): non-whitelisted client blocked ────────────
+
+#[test]
+fn test_post_job_not_whitelisted_fails() {
+    let env = Env::default();
+    let (admin, _client, _freelancer, token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+
+    // Enable whitelist mode
+    escrow.set_whitelist_mode(&admin, &true);
+    assert!(escrow.is_whitelist_mode_enabled());
+
+    // Create a client that is NOT on the whitelist
+    let unwhitelisted_client = Address::generate(&env);
+    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&unwhitelisted_client, &100_0000000i128);
+
+    let desc_hash = BytesN::from_array(&env, &[0u8; 32]);
+    let deadline: u64 = 1000;
+    let amount: i128 = 100_0000000;
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        escrow.post_job(
+            &unwhitelisted_client,
+            &amount,
+            &desc_hash,
+            &100u32,
+            &deadline,
+            &token,
+        );
+    }));
+    assert!(
+        result.is_err(),
+        "post_job must panic with 'not whitelisted'"
+    );
+
+    let err_msg = format!("{:?}", result);
+    assert!(
+        err_msg.contains("not whitelisted"),
+        "Expected panic message containing 'not whitelisted', got: {}",
+        err_msg
+    );
+
+    // Verify no job was stored
+    assert_eq!(
+        escrow.get_job_count(),
+        0,
+        "No job should be stored for a non-whitelisted client"
+    );
 }
