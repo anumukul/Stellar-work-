@@ -508,6 +508,17 @@ export default function PostJobPage() {
         >
           {submitting ? "Posting..." : "Post Job"}
         </button>
+        <p className="mt-2 text-xs text-slate-500">
+          A 2.5% platform fee applies on job completion.{" "}
+          <a
+            href="https://github.com/anoncon/Stellar-work-/blob/main/docs/TOKENOMICS.md"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 hover:underline"
+          >
+            Learn more about fees
+          </a>
+        </p>
       </form>
 
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
