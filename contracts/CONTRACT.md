@@ -174,4 +174,13 @@ Run the benchmark script:
 
 This builds the contract in release mode and simulates each function, reporting storage bytes read/written and estimated CPU cost.
 
-<!-- SC-82: archive_old_jobs planned -->
+## SC-82 Job Archive
+
+Admin-triggered archive moves old completed/cancelled jobs out of active storage:
+
+- `ARCHIVE_THRESHOLD` — 180 days (ledger timestamp seconds)
+- `archive_old_jobs(admin, cutoff_timestamp) -> u64` — archives eligible jobs, emits `job_archived`
+- `get_archived_job(admin, job_id) -> Option<Job>` — archived record (same schema as active jobs)
+- `get_archive_count(admin) -> u64` — monitoring helper
+
+Active listing APIs only read `DataKey::Job`; archived entries live under `DataKey::ArchivedJob` and are excluded automatically.
