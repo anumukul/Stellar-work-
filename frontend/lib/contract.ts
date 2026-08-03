@@ -133,6 +133,14 @@ export async function cancelJob(client: string, jobId: string) {
   ]);
 }
 
+export async function topUpEscrow(client: string, jobId: string, additionalAmount: string) {
+  return callContract(getActiveContractId(), "top_up_escrow", [
+    nativeToScVal(client, { type: "address" }),
+    nativeToScVal(jobId, { type: "u64" }),
+    nativeToScVal(additionalAmount, { type: "i128" }),
+  ]);
+}
+
 export async function enforceDeadline(client: string, jobId: string) {
   return callContract(getActiveContractId(), "enforce_deadline", [
     nativeToScVal(client, { type: "address" }),

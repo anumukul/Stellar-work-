@@ -157,6 +157,24 @@ Client cancels an open job. Refunds full escrow to client. Transitions to `Cance
 
 ---
 
+#### `top_up_escrow(client: Address, job_id: u64, additional_amount: i128)`
+
+Client adds funds to an existing job escrow. Transfers `additional_amount` from the client into the contract and updates `job.amount`.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `client` | `Address` | Must be the original job client. Must authorize. |
+| `job_id` | `u64` | ID of the job to top up. |
+| `additional_amount` | `i128` | Extra escrow amount. Must be > 0. |
+
+**Allowed statuses:** `Open`, `InProgress`, `SubmittedForReview`.
+
+**Errors:** `JobNotFound` (1), `Unauthorized` (2), `InvalidStatus` (3), `InsufficientFunds` (4), `InvalidAmount` (11)
+
+**Event:** `EscrowToppedUp` — data: `(job_id, old_amount, new_amount)`
+
+---
+
 #### `freelancer_cancel_job(freelancer: Address, job_id: u64)`
 
 Freelancer cancels an in-progress job. Returns full escrow to client. Transitions to `Cancelled`.
@@ -302,6 +320,7 @@ Admin resolves a disputed job. Distributes funds based on `client_bps` share.
 | `job_approved` | `("job_approved",)` | `(job_id, client, freelancer, payout)` |
 | `job_rejected` | `("job_rejected",)` | `(job_id, client, revision_count)` |
 | `job_cancelled` | `("job_cancelled",)` | `(job_id, client)` |
+| `EscrowToppedUp` | `("EscrowToppedUp",)` | `(job_id, old_amount, new_amount)` |
 | `job_freelancer_cancelled` | `("job_freelancer_cancelled",)` | `(job_id, freelancer, client, amount)` |
 | `job_mutually_cancelled` | `("job_mutually_cancelled",)` | `(job_id, client, freelancer, client_share, freelancer_share)` |
 | `deadline_enforced` | `("deadline_enforced",)` | `(job_id, client)` |

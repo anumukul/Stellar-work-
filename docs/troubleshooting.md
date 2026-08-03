@@ -73,7 +73,6 @@ To bypass hooks (use sparingly):
 git commit -m "..." --no-verify
 ```
 
-## 5. Planned Features
+## 5. Escrow Top-Up (SC-83)
 
-### Escrow top-up (SC-83)
-Clients cannot yet add funds to an existing job escrow after posting. Scope increases currently require canceling and reposting. A `top_up_escrow` contract method is planned.
+Clients can add funds to an existing job via `top_up_escrow(client, job_id, additional_amount)` while the job is `Open`, `InProgress`, or `SubmittedForReview`. Only the original client may call it. The job detail page exposes an **Add Funds** action that confirms the new total before submitting.

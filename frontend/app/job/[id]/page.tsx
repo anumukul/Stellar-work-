@@ -8,7 +8,7 @@ import StatusPill from "@/components/StatusPill";
 import ShareButton from "@/components/ShareButton";
 import RichTextRenderer, { isRichText, PlainTextRenderer } from "@/components/RichTextRenderer";
 import { useNotifications } from "@/lib/notifications-context";
-import { acceptJob, approveWork, cancelJob, freelancerCancelJob, getDescriptionCid, getJob, submitWork } from "@/lib/contract";
+import { acceptJob, approveWork, cancelJob, freelancerCancelJob, getDescriptionCid, getJob, submitWork, topUpEscrow } from "@/lib/contract";
 import { fetchFromIpfs } from "@/lib/ipfs-service";
 import {
   fetchXlmFiatRates,
@@ -17,6 +17,7 @@ import {
   formatXlmWithFiat,
   getCachedXlmFiatRates,
   getPreferredFiatCurrency,
+  toXlm,
   type FiatCurrency,
   type XlmFiatRateCache,
 } from "@/lib/format";
@@ -28,9 +29,20 @@ import { useMeetings } from "@/lib/meetings-context";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-type PendingAction = "cancelJob" | "approveWork" | "submitWork" | "freelancerCancelJob";
+type PendingAction = "cancelJob" | "approveWork" | "submitWork" | "freelancerCancelJob" | "topUpEscrow";
 
 const BOOKMARK_STORAGE_KEY = "stellarwork:bookmarked-jobs";
+const STROOPS_PER_XLM = 10_000_000n;
+
+function parseXlmToStroops(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed || !/^\d+(\.\d{1,7})?$/.test(trimmed)) return null;
+  const [whole, fraction = ""] = trimmed.split(".");
+  const fracPadded = (fraction + "0000000").slice(0, 7);
+  const stroops = BigInt(whole) * STROOPS_PER_XLM + BigInt(fracPadded);
+  if (stroops <= 0n) return null;
+  return stroops.toString();
+}
 
 function getAutoApprovalCountdown(submittedAtStr: string | undefined) {
   if (!submittedAtStr) return null;
@@ -99,6 +111,9 @@ export default function JobDetailPage() {
   const [slotDate, setSlotDate] = useState("");
   const [slotStart, setSlotStart] = useState("");
   const [slotEnd, setSlotEnd] = useState("");
+  const [showTopUpForm, setShowTopUpForm] = useState(false);
+  const [topUpAmountXlm, setTopUpAmountXlm] = useState("");
+  const [topUpStroops, setTopUpStroops] = useState<string | null>(null);
 
   const numericId = Number(id);
   const isIdValid = !isNaN(numericId) && numericId > 0 && Number.isInteger(numericId);
@@ -200,7 +215,13 @@ export default function JobDetailPage() {
   const canApprove = Boolean(isClient && job?.status === "SubmittedForReview");
   const canCancel = Boolean(isClient && job?.status === "Open");
   const canFreelancerCancel = Boolean(isFreelancer && job?.status === "InProgress");
-  const hasPrimaryActions = canAccept || canSubmit || canApprove || canCancel || canFreelancerCancel;
+  const canTopUp = Boolean(
+    isClient &&
+      job &&
+      (job.status === "Open" || job.status === "InProgress" || job.status === "SubmittedForReview"),
+  );
+  const hasPrimaryActions =
+    canAccept || canSubmit || canApprove || canCancel || canFreelancerCancel || canTopUp;
 
   async function handleAction(
     action: () => Promise<{ hash?: string }>,
@@ -243,6 +264,7 @@ export default function JobDetailPage() {
       approveWork: CONFIRM_KEYS.approveWork,
       submitWork: CONFIRM_KEYS.submitWork,
       freelancerCancelJob: CONFIRM_KEYS.freelancerCancelJob,
+      topUpEscrow: CONFIRM_KEYS.topUpEscrow,
     };
     if (isConfirmSuppressed(keyMap[action])) {
       void executeAction(action);
@@ -282,6 +304,45 @@ export default function JobDetailPage() {
           "Job cancelled. Full refund returned to client.",
         );
         break;
+      case "topUpEscrow": {
+        const stroops = topUpStroops ?? parseXlmToStroops(topUpAmountXlm);
+        if (!stroops) {
+          showError("Enter a valid top-up amount.");
+          return;
+        }
+        await handleAction(
+          () => topUpEscrow(wallet, id, stroops),
+          "Escrow topped up successfully.",
+        );
+        setShowTopUpForm(false);
+        setTopUpAmountXlm("");
+        setTopUpStroops(null);
+        break;
+      }
+    }
+  }
+
+  function requestTopUpConfirm() {
+    const stroops = parseXlmToStroops(topUpAmountXlm);
+    if (!stroops) {
+      showError("Enter a valid amount with up to 7 decimal places.");
+      return;
+    }
+    setTopUpStroops(stroops);
+    if (isConfirmSuppressed(CONFIRM_KEYS.topUpEscrow)) {
+      setPendingAction(null);
+      void (async () => {
+        if (!wallet) return;
+        await handleAction(
+          () => topUpEscrow(wallet, id, stroops),
+          "Escrow topped up successfully.",
+        );
+        setShowTopUpForm(false);
+        setTopUpAmountXlm("");
+        setTopUpStroops(null);
+      })();
+    } else {
+      setPendingAction("topUpEscrow");
     }
   }
 
@@ -332,6 +393,12 @@ export default function JobDetailPage() {
 
   const amountXlm = job ? formatXlmWithFiat(job.amount, fiatCurrency, fiatRates?.rates) : "";
   const fiatTooltip = formatXlmFiatRateTooltip(fiatCurrency, fiatRates?.rates, fiatRates?.fetchedAt);
+  const topUpNewTotalStroops =
+    job && topUpStroops ? (BigInt(job.amount) + BigInt(topUpStroops)).toString() : null;
+  const topUpImpactLine =
+    job && topUpStroops && topUpNewTotalStroops
+      ? `Current ${toXlm(job.amount)} XLM + ${toXlm(topUpStroops)} XLM = ${toXlm(topUpNewTotalStroops)} XLM total escrow`
+      : undefined;
 
   const DIALOG_CONFIG: Record<
     PendingAction,
@@ -393,6 +460,18 @@ export default function JobDetailPage() {
       confirmLabel: "Yes, cancel job",
       variant: "danger",
       suppressKey: CONFIRM_KEYS.freelancerCancelJob,
+    },
+    topUpEscrow: {
+      title: "Add funds to escrow?",
+      description: "Additional funds will be transferred from your wallet into this job's escrow. The freelancer relationship and job status stay the same.",
+      consequences: [
+        "Only the escrowed amount increases.",
+        "You can top up again later while the job remains eligible.",
+      ],
+      impactLine: topUpImpactLine,
+      confirmLabel: "Yes, add funds",
+      variant: "primary",
+      suppressKey: CONFIRM_KEYS.topUpEscrow,
     },
   };
 
@@ -818,9 +897,72 @@ export default function JobDetailPage() {
                   <span className="block truncate">{loading ? "Processing..." : "Cancel as Freelancer"}</span>
                 </button>
               )}
+
+              {canTopUp && (
+                <button
+                  className="min-w-0 flex-1 rounded-md border border-emerald-600 bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-500 sm:flex-none sm:max-w-48 sm:py-2"
+                  onClick={() => setShowTopUpForm((open) => !open)}
+                  disabled={loading}
+                  aria-expanded={showTopUpForm}
+                >
+                  <span className="block truncate">Add Funds</span>
+                </button>
+              )}
             </div>
           </div>
         </>
+      )}
+
+      {canTopUp && showTopUpForm && (
+        <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
+          <h3 className="text-sm font-semibold text-slate-900">Add funds to escrow</h3>
+          <p className="text-sm text-slate-600">
+            Current escrow: {formatXlmWithFiat(job.amount, fiatCurrency, fiatRates?.rates)}
+          </p>
+          <label className="block text-sm text-slate-700" htmlFor="top-up-amount">
+            Additional amount (XLM)
+          </label>
+          <input
+            id="top-up-amount"
+            type="text"
+            inputMode="decimal"
+            value={topUpAmountXlm}
+            onChange={(e) => setTopUpAmountXlm(e.target.value)}
+            placeholder="e.g. 10.5"
+            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+          />
+          {parseXlmToStroops(topUpAmountXlm) && (
+            <p className="text-sm text-slate-600">
+              New total:{" "}
+              {formatXlmWithFiat(
+                (BigInt(job.amount) + BigInt(parseXlmToStroops(topUpAmountXlm)!)).toString(),
+                fiatCurrency,
+                fiatRates?.rates,
+              )}
+            </p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:bg-slate-300"
+              onClick={requestTopUpConfirm}
+              disabled={loading || !parseXlmToStroops(topUpAmountXlm)}
+            >
+              Continue
+            </button>
+            <button
+              type="button"
+              className="rounded-md border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+              onClick={() => {
+                setShowTopUpForm(false);
+                setTopUpAmountXlm("");
+                setTopUpStroops(null);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Confirmation dialogs */}
