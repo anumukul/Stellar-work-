@@ -4,7 +4,7 @@ import { getDescPayloadMax, postJob, storeDescriptionCid } from "@/lib/contract"
 import { uploadToIpfs } from "@/lib/ipfs-service";
 import ErrorBanner from "@/components/ErrorBanner";
 import RichTextEditor, { htmlToPlainText } from "@/components/RichTextEditor";
-import { getExplorerTxUrl, isValidStellarAddress } from "@/lib/stellar";
+import { getExplorerTxUrl, isValidStellarAddress, parseContractError, getNativeBalance } from "@/lib/stellar";
 import { useWallet } from "@/lib/wallet-context";
 import { useEffect, useId, useRef, useState } from "react";
 import {
@@ -415,7 +415,16 @@ export default function PostJobPage() {
             setDraftSavedAt(null);
             setHasDraft(false);
           } catch (e) {
-            setError(e instanceof Error ? e.message : "Failed to post job. Please try again.");
+            // Fetch current balance to include in insufficient-balance messages (#620)
+            let balance: string | undefined;
+            if (wallet) {
+              try {
+                balance = await getNativeBalance(wallet);
+              } catch {
+                // Balance fetch failed — parseContractError will omit the balance detail
+              }
+            }
+            setError(parseContractError(e, balance));
           } finally {
             setSubmitting(false);
           }
