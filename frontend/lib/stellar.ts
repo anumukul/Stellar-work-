@@ -406,3 +406,91 @@ const STELLAR_ADDRESS_RE = /^[GC][A-Z2-7]{55}$/;
 export function isValidStellarAddress(address: string): boolean {
   return STELLAR_ADDRESS_RE.test(address.trim());
 }
+
+// ─── Contract Error Parser (Issue #620) ──────────────────────────────────────
+
+/**
+ * Mapping from Soroban / Stellar error patterns to user-friendly messages.
+ *
+ * Soroban emits errors in several formats depending on where they originate:
+ *  - `HostError: Error(Contract, #N)` — contract-defined error codes
+ *  - `insufficient balance` / `balance` — token contract balance errors
+ *  - `op_underfunded` — Horizon transaction result code
+ *  - `tx_insufficient_fee` — fee account is underfunded
+ *  - simulation errors that include the phrase "balance" or "amount"
+ *
+ * This utility normalises all of them to readable sentences.
+ */
+export function parseContractError(error: unknown, currentBalance?: string): string {
+  const raw = error instanceof Error ? error.message : String(error ?? "Unknown error");
+  const lower = raw.toLowerCase();
+
+  // ── Insufficient balance patterns ────────────────────────────────────────
+  if (
+    lower.includes("insufficient balance") ||
+    lower.includes("balance is not sufficient") ||
+    lower.includes("op_underfunded") ||
+    lower.includes("underfunded") ||
+    // Soroban SAC (Stellar Asset Contract) emits Error(Contract, #10) for balance
+    /error\(contract,\s*#10\)/.test(lower) ||
+    // Generic "balance" near "error" or "fail"
+    (lower.includes("balance") && (lower.includes("fail") || lower.includes("error") || lower.includes("insufficient")))
+  ) {
+    if (currentBalance !== undefined) {
+      return `Insufficient balance. Your current balance is ${currentBalance} XLM. Please add funds and try again.`;
+    }
+    return "Insufficient balance. Please add funds to your wallet and try again.";
+  }
+
+  // ── Contract error codes ──────────────────────────────────────────────────
+  // Map known escrow contract error numbers (defined in contracts/escrow/src/lib.rs)
+  const contractErrorMatch = raw.match(/error\(contract,\s*#(\d+)\)/i);
+  if (contractErrorMatch) {
+    const code = Number(contractErrorMatch[1]);
+    const CONTRACT_ERRORS: Record<number, string> = {
+      1:  "Not authorized to perform this action.",
+      2:  "Job not found.",
+      3:  "Invalid job status for this action.",
+      4:  "Job amount must be greater than zero.",
+      5:  "Token is not allowed for this operation.",
+      6:  "The job description is too large.",
+      7:  "Platform is currently paused. Please try again later.",
+      8:  "Deadline must be in the future.",
+      9:  "You have reached the maximum number of active jobs.",
+      10: "Insufficient token balance. Please add funds and try again.",
+      11: "The deadline has not passed yet.",
+      12: "Only the assigned freelancer can perform this action.",
+      13: "Only the job client can perform this action.",
+      14: "Job revision limit reached.",
+      15: "Dispute already raised for this job.",
+    };
+    return CONTRACT_ERRORS[code] ?? `Contract error #${code}. Please try again or contact support.`;
+  }
+
+  // ── Wallet / signing errors ───────────────────────────────────────────────
+  if (lower.includes("user declined") || lower.includes("user rejected") || lower.includes("cancelled")) {
+    return "Transaction was cancelled.";
+  }
+  if (lower.includes("connect freighter") || lower.includes("wallet") && lower.includes("connect")) {
+    return "Please connect your Freighter wallet and try again.";
+  }
+
+  // ── Fee errors ────────────────────────────────────────────────────────────
+  if (lower.includes("tx_insufficient_fee") || lower.includes("insufficient fee")) {
+    return "Transaction fee is too low. Please try again — the fee will be adjusted automatically.";
+  }
+
+  // ── Network / timeout errors ──────────────────────────────────────────────
+  if (lower.includes("timeout") || lower.includes("timed out")) {
+    return "The transaction timed out. Please check your network connection and try again.";
+  }
+  if (lower.includes("econnrefused") || lower.includes("network") || lower.includes("fetch")) {
+    return "Network error. Please check your connection and try again.";
+  }
+
+  // ── Fallback: return the original message but trim XDR noise ─────────────
+  // Strip raw XDR blobs and long hex strings to keep messages readable.
+  const trimmed = raw.replace(/[A-Za-z0-9+/]{60,}={0,2}/g, "[data]").slice(0, 200);
+  return trimmed || "Transaction failed. Please try again.";
+}
+// ─────────────────────────────────────────────────────────────────────────────

@@ -41,7 +41,7 @@ import {
   type FiatCurrency,
   type XlmFiatRateCache,
 } from "@/lib/format";
-import { getExplorerTxUrl } from "@/lib/stellar";
+import { getExplorerTxUrl, parseContractError, getNativeBalance } from "@/lib/stellar";
 import { isConfirmSuppressed, CONFIRM_KEYS } from "@/lib/confirm-prefs";
 import type { Job } from "@/lib/types";
 import { useWallet } from "@/lib/wallet-context";
@@ -307,7 +307,16 @@ function JobDetailPageContent() {
       showSuccess(successMessage);
       setStatusAnnouncement(successMessage);
     } catch (e) {
-      const message = e instanceof Error ? e.message : "Transaction failed.";
+      // Fetch current balance to include in insufficient-balance messages (#620)
+      let balance: string | undefined;
+      if (wallet) {
+        try {
+          balance = await getNativeBalance(wallet);
+        } catch {
+          // Balance fetch failed — parseContractError will omit the balance detail
+        }
+      }
+      const message = parseContractError(e, balance);
       setError(message);
       showError(message);
     } finally {
