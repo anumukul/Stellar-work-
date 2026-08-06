@@ -23,7 +23,9 @@ export type MetricSample =
       durationMs?: number;
     }
   | { type: "rpc_error"; kind: string; network: string }
-  | { type: "client_error"; kind: string; path: string };
+  | { type: "client_error"; kind: string; path: string }
+  | { type: "job_view"; jobId: string }
+  | { type: "session_ping" };
 
 let queue: MetricSample[] = [];
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -82,6 +84,14 @@ export function reportContractTx(
 
 export function reportRpcError(kind: string, network: string) {
   reportSample({ type: "rpc_error", kind, network });
+}
+
+export function reportJobView(jobId: string) {
+  reportSample({ type: "job_view", jobId });
+}
+
+export function reportSessionPing() {
+  reportSample({ type: "session_ping" });
 }
 
 /** Buckets a thrown value into a coarse, low-cardinality error kind. */

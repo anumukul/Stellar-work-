@@ -81,6 +81,7 @@ function makeJob(overrides: Partial<Job> = {}): Job {
     deadline: "0",
     token: "GTOKEN",
     revision_count: 0,
+    submitted_at: "0",
     ...overrides,
   };
 }

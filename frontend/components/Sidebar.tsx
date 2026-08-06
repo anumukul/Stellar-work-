@@ -17,7 +17,7 @@ import {
   ChevronRight,
   Menu,
 } from "lucide-react";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 
 const SIDEBAR_STATE_KEY = "stellarwork:sidebar-collapsed";
 const SIDEBAR_WIDTH_EXPANDED = 220;

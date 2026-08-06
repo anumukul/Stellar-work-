@@ -18,6 +18,16 @@ export default function MetricsReporter() {
   }, [pathname]);
 
   useEffect(() => {
+    reportSample({ type: "session_ping" });
+    const interval = setInterval(() => {
+      if (document.visibilityState === "visible") {
+        reportSample({ type: "session_ping" });
+      }
+    }, 30_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
     if (typeof PerformanceObserver === "undefined") return;
 
     const path = pathname;

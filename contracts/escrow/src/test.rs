@@ -811,3 +811,113 @@ fn test_post_job_valid_duration_within_bounds() {
     );
     assert_eq!(job_id, 1);
 }
+
+#[test]
+fn test_record_job_view_increments_count() {
+    let env = Env::default();
+    let (_admin, client, freelancer, token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+    let desc_hash = BytesN::from_array(&env, &[1u8; 32]);
+    let deadline: u64 = 1000;
+    let amount: i128 = 100_0000000;
+
+    let job_id = escrow.post_job(&client, &amount, &desc_hash, &100u32, &deadline, &token, &dummy_title(&env), &dummy_category(&env));
+    assert_eq!(escrow.get_job_views(&job_id), 0);
+
+    escrow.record_job_view(&freelancer, &job_id);
+    assert_eq!(escrow.get_job_views(&job_id), 1);
+
+    escrow.record_job_view(&client, &job_id);
+    assert_eq!(escrow.get_job_views(&job_id), 2);
+}
+
+#[test]
+fn test_record_job_view_deduplicates_same_viewer() {
+    let env = Env::default();
+    let (_admin, client, freelancer, token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+    let desc_hash = BytesN::from_array(&env, &[1u8; 32]);
+    let deadline: u64 = 1000;
+    let amount: i128 = 100_0000000;
+
+    let job_id = escrow.post_job(&client, &amount, &desc_hash, &100u32, &deadline, &token, &dummy_title(&env), &dummy_category(&env));
+
+    escrow.record_job_view(&freelancer, &job_id);
+    escrow.record_job_view(&freelancer, &job_id);
+    escrow.record_job_view(&freelancer, &job_id);
+    assert_eq!(escrow.get_job_views(&job_id), 1);
+}
+
+#[test]
+fn test_completion_certificate_minted_on_approve() {
+    let env = Env::default();
+    let (_admin, client, freelancer, token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+    let desc_hash = BytesN::from_array(&env, &[1u8; 32]);
+    let deadline: u64 = 1000;
+    let amount: i128 = 100_0000000;
+
+    assert_eq!(escrow.get_certificate_count(&freelancer), 0);
+
+    let job_id = escrow.post_job(&client, &amount, &desc_hash, &100u32, &deadline, &token, &dummy_title(&env), &dummy_category(&env));
+    escrow.accept_job(&freelancer, &job_id);
+    escrow.submit_work(&freelancer, &job_id);
+    escrow.approve_work(&client, &job_id);
+
+    assert_eq!(escrow.get_certificate_count(&freelancer), 1);
+
+    let certs = escrow.get_certificates(&freelancer, &0u64, &10u64);
+    assert_eq!(certs.len(), 1);
+    let cert = certs.get(0).unwrap();
+    assert_eq!(cert.job_id, job_id);
+    assert_eq!(cert.client, client);
+    assert_eq!(cert.freelancer, freelancer);
+    assert_eq!(cert.amount, amount);
+}
+
+#[test]
+fn test_multiple_certificates_across_jobs() {
+    let env = Env::default();
+    let (_admin, client, freelancer, token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+    let desc_hash = BytesN::from_array(&env, &[1u8; 32]);
+    let deadline: u64 = 1000;
+    let amount: i128 = 50_0000000;
+
+    for _ in 0..3 {
+        let job_id = escrow.post_job(&client, &amount, &desc_hash, &100u32, &deadline, &token, &dummy_title(&env), &dummy_category(&env));
+        escrow.accept_job(&freelancer, &job_id);
+        escrow.submit_work(&freelancer, &job_id);
+        escrow.approve_work(&client, &job_id);
+    }
+
+    assert_eq!(escrow.get_certificate_count(&freelancer), 3);
+    let certs = escrow.get_certificates(&freelancer, &0u64, &10u64);
+    assert_eq!(certs.len(), 3);
+}
+
+#[test]
+fn test_get_certificates_pagination() {
+    let env = Env::default();
+    let (_admin, client, freelancer, token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+    let desc_hash = BytesN::from_array(&env, &[1u8; 32]);
+    let deadline: u64 = 1000;
+    let amount: i128 = 50_0000000;
+
+    for _ in 0..5 {
+        let job_id = escrow.post_job(&client, &amount, &desc_hash, &100u32, &deadline, &token, &dummy_title(&env), &dummy_category(&env));
+        escrow.accept_job(&freelancer, &job_id);
+        escrow.submit_work(&freelancer, &job_id);
+        escrow.approve_work(&client, &job_id);
+    }
+
+    let page1 = escrow.get_certificates(&freelancer, &0u64, &2u64);
+    assert_eq!(page1.len(), 2);
+
+    let page2 = escrow.get_certificates(&freelancer, &2u64, &2u64);
+    assert_eq!(page2.len(), 2);
+
+    let page3 = escrow.get_certificates(&freelancer, &4u64, &2u64);
+    assert_eq!(page3.len(), 1);
+}

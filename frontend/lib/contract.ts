@@ -592,3 +592,61 @@ export async function migrateJobVersion(
   ]);
   return Number(response.data ?? targetVersion);
 }
+
+// ─── Job View Counter ────────────────────────────────────────────────────────
+
+export async function recordJobView(viewer: string, jobId: string) {
+  return callContract(getActiveContractId(), "record_job_view", [
+    nativeToScVal(viewer, { type: "address" }),
+    nativeToScVal(jobId, { type: "u64" }),
+  ]);
+}
+
+export async function getJobViews(jobId: string): Promise<number> {
+  const response = await callContract(
+    getActiveContractId(),
+    "get_job_views",
+    [nativeToScVal(jobId, { type: "u64" })],
+    { readOnly: true },
+  );
+  return Number(response.data ?? 0);
+}
+
+// ─── Completion Certificates ─────────────────────────────────────────────────
+
+export interface CompletionCertificate {
+  job_id: number;
+  client: string;
+  freelancer: string;
+  amount: string;
+  completed_at: string;
+  metadata_uri: string;
+}
+
+export async function getCertificates(
+  freelancer: string,
+  start: number,
+  limit: number,
+): Promise<CompletionCertificate[]> {
+  const response = await callContract(
+    getActiveContractId(),
+    "get_certificates",
+    [
+      nativeToScVal(freelancer, { type: "address" }),
+      nativeToScVal(start, { type: "u64" }),
+      nativeToScVal(limit, { type: "u64" }),
+    ],
+    { readOnly: true },
+  );
+  return (response.data as CompletionCertificate[]) ?? [];
+}
+
+export async function getCertificateCount(freelancer: string): Promise<number> {
+  const response = await callContract(
+    getActiveContractId(),
+    "get_certificate_count",
+    [nativeToScVal(freelancer, { type: "address" })],
+    { readOnly: true },
+  );
+  return Number(response.data ?? 0);
+}

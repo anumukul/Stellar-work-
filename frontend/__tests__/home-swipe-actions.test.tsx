@@ -88,6 +88,7 @@ const OWN_OPEN_JOB = {
   deadline: "0",
   token: "GTOKEN",
   revision_count: 0,
+  submitted_at: "0",
 };
 
 describe("Home page mobile swipe quick actions", () => {

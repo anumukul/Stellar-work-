@@ -70,6 +70,7 @@ describe("Dashboard filter chip toggling", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       })
       .mockResolvedValueOnce({
         client: "GTESTWALLET",
@@ -81,6 +82,7 @@ describe("Dashboard filter chip toggling", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       })
       .mockResolvedValueOnce({
         client: "GCLIENT",
@@ -92,6 +94,7 @@ describe("Dashboard filter chip toggling", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       });
   });
 
@@ -234,6 +237,7 @@ describe("Dashboard filter chip toggling", () => {
       deadline: "0",
       token: "GTOKEN",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     render(<DashboardPage />);
@@ -265,6 +269,7 @@ describe("Dashboard filter chip toggling", () => {
       deadline: "0",
       token: "GTOKEN",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     render(<DashboardPage />);

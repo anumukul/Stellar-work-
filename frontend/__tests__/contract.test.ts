@@ -126,7 +126,7 @@ describe("contract interaction wrappers", () => {
   describe("success paths", () => {
     it("postJob calls post_job", async () => {
       mockCallContract.mockResolvedValue({ status: "SUCCESS" });
-      const result = await postJob("GCLIENT", "100", "0a10ff", 32, "12345", "GTOKEN");
+      const result = await postJob("GCLIENT", "100", "0a10ff", 32, "12345", "GTOKEN", "", "development");
       expect(result).toEqual({ status: "SUCCESS" });
       expect(mockCallContract).toHaveBeenCalledWith(
         CONTRACT_ID,
@@ -328,7 +328,7 @@ describe("contract interaction wrappers", () => {
     });
 
     it.each([
-      ["postJob", () => postJob("GCLIENT", "100", "0a10ff", 32, "12345", "GTOKEN")],
+      ["postJob", () => postJob("GCLIENT", "100", "0a10ff", 32, "12345", "GTOKEN", "", "development")],
       ["acceptJob", () => acceptJob("GFREELANCER", "1")],
       ["submitWork", () => submitWork("GFREELANCER", "1")],
       ["approveWork", () => approveWork("GCLIENT", "1")],
@@ -362,7 +362,7 @@ describe("contract calls without NEXT_PUBLIC_CONTRACT_ID", () => {
   });
 
   it.each([
-    ["postJob", () => postJob("GCLIENT", "100", "0x0a", 4, "0", "GTOKEN")],
+    ["postJob", () => postJob("GCLIENT", "100", "0x0a", 4, "0", "GTOKEN", "", "development")],
     ["acceptJob", () => acceptJob("GFREELANCER", "1")],
     ["submitWork", () => submitWork("GFREELANCER", "1")],
     ["approveWork", () => approveWork("GCLIENT", "1")],

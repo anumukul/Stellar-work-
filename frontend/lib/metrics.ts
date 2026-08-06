@@ -123,6 +123,32 @@ const clientErrors = counter(
   "Unhandled frontend errors reported by browsers.",
 );
 
+const httpRequests = counter(
+  "stellarwork_http_requests_total",
+  "HTTP requests handled by the Next.js server, by route and status code.",
+);
+
+const httpRequestDuration = histogram(
+  "stellarwork_http_request_duration_milliseconds",
+  "HTTP request processing latency in milliseconds, by route.",
+  [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000],
+);
+
+const httpErrors = counter(
+  "stellarwork_http_errors_total",
+  "HTTP responses with 4xx or 5xx status codes, by route.",
+);
+
+const activeSessions = counter(
+  "stellarwork_active_sessions_total",
+  "Number of beacon requests received (proxy for concurrent visitors).",
+);
+
+const jobViews = counter(
+  "stellarwork_job_views_total",
+  "Job detail page views reported by browsers.",
+);
+
 // ── recording API ───────────────────────────────────────────────────────────
 
 /** Keeps label values low-cardinality and safe to render in the exposition format. */
@@ -166,6 +192,24 @@ export function recordRpcError(kind: string, network: string) {
 
 export function recordClientError(kind: string, path: string) {
   incCounter(clientErrors, { kind: sanitizeLabel(kind), path: sanitizeLabel(path, "/") });
+}
+
+export function recordHttpRequest(route: string, statusCode: number, durationMs: number) {
+  const routeLabel = sanitizeLabel(route, "/");
+  const statusLabel = String(statusCode);
+  incCounter(httpRequests, { route: routeLabel, status: statusLabel });
+  observe(httpRequestDuration, { route: routeLabel }, durationMs);
+  if (statusCode >= 400) {
+    incCounter(httpErrors, { route: routeLabel });
+  }
+}
+
+export function recordActiveSession() {
+  incCounter(activeSessions, { type: "beacon" });
+}
+
+export function recordJobView(jobId: string) {
+  incCounter(jobViews, { job_id: sanitizeLabel(jobId) });
 }
 
 /** Test hook — drops every recorded sample. */

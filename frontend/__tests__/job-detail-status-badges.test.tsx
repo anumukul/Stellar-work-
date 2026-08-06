@@ -78,6 +78,7 @@ function makeJob(status: JobStatus): Job {
     deadline: "1720000000",
     token: "GTOKEN",
     revision_count: 0,
+    submitted_at: "0",
   };
 }
 

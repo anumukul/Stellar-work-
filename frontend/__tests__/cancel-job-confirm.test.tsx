@@ -56,7 +56,6 @@ vi.mock("@/lib/meetings-context", () => ({
     cancelMeeting: vi.fn(),
     completeMeeting: vi.fn(),
     rescheduleProposal: vi.fn(),
-    cancelMeeting: vi.fn(),
     confirmMeeting: vi.fn(),
     getMeetingsForJob: () => [],
     getUpcomingMeetings: () => [],
@@ -76,6 +75,7 @@ function makeJob(overrides: Partial<Job> = {}): Job {
     deadline: "0",
     token: "GTOKEN",
     revision_count: 0,
+    submitted_at: "0",
     ...overrides,
   };
 }

@@ -59,6 +59,11 @@ browser ──POST /api/metrics──▶ Next.js server (in-memory registry)
 | `stellarwork_contract_tx_duration_milliseconds` | histogram | `method`, `network` | End-to-end invocation latency |
 | `stellarwork_rpc_errors_total` | counter | `kind`, `network` | Stellar RPC failures by coarse kind |
 | `stellarwork_client_errors_total` | counter | `kind`, `path` | Unhandled frontend errors |
+| `stellarwork_http_requests_total` | counter | `route`, `status` | HTTP requests by route and status code |
+| `stellarwork_http_request_duration_milliseconds` | histogram | `route` | HTTP request processing latency |
+| `stellarwork_http_errors_total` | counter | `route` | HTTP responses with 4xx/5xx status |
+| `stellarwork_active_sessions_total` | counter | `type` | Beacon pings (proxy for concurrent visitors) |
+| `stellarwork_job_views_total` | counter | `job_id` | Job detail page views |
 
 Label values are sanitized and each metric is capped at 500 distinct series, so
 browser-supplied labels cannot grow memory without bound.
@@ -93,6 +98,8 @@ Defined in [`monitoring/prometheus/alerts.yml`](../monitoring/prometheus/alerts.
 | `LcpRegression` | warning | p75 LCP >2.5s for 30m |
 | `InpRegression` | warning | p75 INP >200ms for 30m |
 | `ClientErrorSpike` | warning | >1 client error/sec for 10m |
+| `HttpErrorRateHigh` | warning | >1% HTTP 4xx/5xx responses for 10m |
+| `HttpLatencyHigh` | warning | p95 HTTP latency >3s for 15m |
 
 Routing lives in [`monitoring/alertmanager/alertmanager.yml`](../monitoring/alertmanager/alertmanager.yml).
 Alertmanager does **not** expand environment variables — replace the placeholder Slack
