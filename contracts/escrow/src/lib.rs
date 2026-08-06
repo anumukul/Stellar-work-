@@ -40,6 +40,10 @@ const MAX_DESC_PAYLOAD: u32 = 8192;
 const SLA_PENALTY_DENOMINATOR: u32 = 10_000;
 const CANCELLATION_GRACE_PERIOD: u64 = 100;
 const INITIAL_JOB_VERSION: u32 = 1;
+/// Minimum job duration in ledgers — approx. 1 hour at ~5 s per ledger.
+const MIN_JOB_DURATION_LEDGERS: u64 = 720;
+/// Maximum job duration in ledgers — approx. 1 year at ~5 s per ledger.
+const MAX_JOB_DURATION_LEDGERS: u64 = 6_307_200;
 
 fn current_ledger(env: &Env) -> u64 {
     u64::from(env.ledger().sequence())
@@ -411,6 +415,11 @@ pub enum DataKey {
     // ── Job templates (issue #446) ───────────────────────────────────────────
     TemplateCount(Address),
     Template(Address, u64),
+    // ── Job duration limits (issue #439) ─────────────────────────────────────
+    /// Minimum allowed job duration in ledgers (0 = no restriction).
+    MinJobDuration,
+    /// Maximum allowed job duration in ledgers (0 = no restriction).
+    MaxJobDuration,
     // ── Payment splits ───────────────────────────────────────────────────────
     PaymentSplitCount(u64),
     PaymentSplit(u64, u32),
@@ -588,6 +597,32 @@ impl EscrowContract {
         env.storage().instance().get(&DataKey::DescPayloadMax).unwrap_or(MAX_DESC_PAYLOAD)
     }
 
+    // ── Issue #439: job duration limits ───────────────────────────────────────
+
+    /// Set the minimum allowed job duration in ledgers (0 = no restriction).
+    /// Approx: 720 ledgers ≈ 1 hour at 5 s / ledger.
+    pub fn set_min_job_duration(env: Env, min_ledgers: u64) {
+        require_admin(&env);
+        env.storage().instance().set(&DataKey::MinJobDuration, &min_ledgers);
+    }
+
+    /// Set the maximum allowed job duration in ledgers (0 = no restriction).
+    /// Approx: 6_307_200 ledgers ≈ 1 year at 5 s / ledger.
+    pub fn set_max_job_duration(env: Env, max_ledgers: u64) {
+        require_admin(&env);
+        env.storage().instance().set(&DataKey::MaxJobDuration, &max_ledgers);
+    }
+
+    /// Return the configured minimum job duration in ledgers (0 = no restriction).
+    pub fn get_min_job_duration(env: Env) -> u64 {
+        env.storage().instance().get(&DataKey::MinJobDuration).unwrap_or(0)
+    }
+
+    /// Return the configured maximum job duration in ledgers (0 = no restriction).
+    pub fn get_max_job_duration(env: Env) -> u64 {
+        env.storage().instance().get(&DataKey::MaxJobDuration).unwrap_or(0)
+    }
+
     pub fn post_job(
         e: Env,
         client: Address,
@@ -632,6 +667,13 @@ impl EscrowContract {
         if amount <= 0 { panic!("invalid amount"); }
         if description_payload_len > Self::get_desc_payload_max(env.clone()) { panic!("payload too large"); }
         if deadline <= current_ledger(&env) { panic!("deadline too soon"); }
+
+        // ── Issue #439: enforce configurable min/max duration limits ──────────
+        let duration = deadline.saturating_sub(current_ledger(&env));
+        let min_dur: u64 = env.storage().instance().get(&DataKey::MinJobDuration).unwrap_or(0);
+        if min_dur > 0 && duration < min_dur { panic!("job duration below minimum"); }
+        let max_dur: u64 = env.storage().instance().get(&DataKey::MaxJobDuration).unwrap_or(0);
+        if max_dur > 0 && duration > max_dur { panic!("job duration exceeds maximum"); }
 
         let count: u64 = env.storage().instance().get(&DataKey::JobCount).unwrap_or(0);
         let job_id = count + 1;

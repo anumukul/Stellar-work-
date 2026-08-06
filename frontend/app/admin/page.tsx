@@ -622,6 +622,67 @@ export default function AdminPage() {
         </SectionCard>
       )}
 
+      {/* ── Platform Analytics (#442) ─────────────────────────────────────────── */}
+      <SectionCard title="Platform Analytics">
+        <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="rounded-md border border-slate-200 p-3 text-center">
+            <p className="text-2xl font-bold tabular-nums">{jobs.length}</p>
+            <p className="text-xs text-slate-500">Total Jobs</p>
+          </div>
+          <div className="rounded-md border border-slate-200 p-3 text-center">
+            <p className="text-2xl font-bold tabular-nums">
+              {jobs.filter(({ job }) => job.status === "Completed").length}
+            </p>
+            <p className="text-xs text-slate-500">Completed</p>
+          </div>
+          <div className="rounded-md border border-slate-200 p-3 text-center">
+            <p className="text-2xl font-bold tabular-nums">
+              {jobs.filter(({ job }) => job.status === "Disputed").length}
+            </p>
+            <p className="text-xs text-slate-500">Disputed</p>
+          </div>
+          <div className="rounded-md border border-slate-200 p-3 text-center">
+            <p className="text-2xl font-bold tabular-nums">
+              {jobs.length > 0
+                ? `${Math.round(
+                    (jobs.filter(({ job }) => job.status === "Completed").length /
+                      jobs.length) *
+                      100,
+                  )}%`
+                : "—"}
+            </p>
+            <p className="text-xs text-slate-500">Completion Rate</p>
+          </div>
+        </div>
+        {jobs.length > 0 && (
+          <div className="mt-4 rounded-md border border-slate-200 p-3">
+            <p className="text-xs font-medium text-slate-500">Total Platform Volume</p>
+            <p className="mt-1 text-2xl font-bold tabular-nums">
+              {(
+                jobs.reduce((sum, { job }) => sum + Number(job.amount), 0) /
+                10_000_000
+              ).toFixed(2)}{" "}
+              <span className="text-base font-normal text-slate-500">XLM</span>
+            </p>
+            <p className="mt-1 text-xs text-slate-400">
+              Across all {jobs.length} posted job{jobs.length !== 1 ? "s" : ""}
+            </p>
+          </div>
+        )}
+        <p className="mt-3 text-xs text-slate-400">
+          Full per-client breakdowns and historical trends are tracked in{" "}
+          <a
+            href="https://github.com/anumukul/Stellar-work-/issues/442"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-slate-600"
+          >
+            issue #442
+          </a>
+          .
+        </p>
+      </SectionCard>
+
       <SectionCard title="Job Overview">
         <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-6">
           <div className="rounded-md border border-slate-200 p-3 text-center">

@@ -714,3 +714,100 @@ fn test_migrate_job_version_rejects_unauthorized() {
 
     escrow.migrate_job_version(&stranger, &job_id, &2u32);
 }
+
+// ── Issue #439: min/max job duration limits ───────────────────────────────────
+
+#[test]
+fn test_get_set_min_job_duration() {
+    let env = Env::default();
+    let (_admin, _client, _freelancer, _token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+
+    // Default: 0 = no restriction
+    assert_eq!(escrow.get_min_job_duration(), 0);
+
+    escrow.set_min_job_duration(&MIN_JOB_DURATION_LEDGERS);
+    assert_eq!(escrow.get_min_job_duration(), MIN_JOB_DURATION_LEDGERS);
+}
+
+#[test]
+fn test_get_set_max_job_duration() {
+    let env = Env::default();
+    let (_admin, _client, _freelancer, _token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+
+    // Default: 0 = no restriction
+    assert_eq!(escrow.get_max_job_duration(), 0);
+
+    escrow.set_max_job_duration(&MAX_JOB_DURATION_LEDGERS);
+    assert_eq!(escrow.get_max_job_duration(), MAX_JOB_DURATION_LEDGERS);
+}
+
+#[test]
+#[should_panic]
+fn test_post_job_below_min_duration_panics() {
+    let env = Env::default();
+    let (_admin, client, _freelancer, token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+
+    // Set min to 720 ledgers (~1 hour)
+    escrow.set_min_job_duration(&720u64);
+
+    // deadline = 100, ledger = 0 → duration 100 < 720 → panic
+    escrow.post_job(
+        &client,
+        &100_0000000i128,
+        &BytesN::from_array(&env, &[0u8; 32]),
+        &100u32,
+        &100u64,
+        &token,
+        &dummy_title(&env),
+        &dummy_category(&env),
+    );
+}
+
+#[test]
+#[should_panic]
+fn test_post_job_above_max_duration_panics() {
+    let env = Env::default();
+    let (_admin, client, _freelancer, token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+
+    // Cap at 1000 ledgers
+    escrow.set_max_job_duration(&1000u64);
+
+    // deadline = 5000, ledger = 0 → duration 5000 > 1000 → panic
+    escrow.post_job(
+        &client,
+        &100_0000000i128,
+        &BytesN::from_array(&env, &[0u8; 32]),
+        &100u32,
+        &5000u64,
+        &token,
+        &dummy_title(&env),
+        &dummy_category(&env),
+    );
+}
+
+#[test]
+fn test_post_job_valid_duration_within_bounds() {
+    let env = Env::default();
+    let (_admin, client, _freelancer, token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+
+    escrow.set_min_job_duration(&720u64);
+    escrow.set_max_job_duration(&6_307_200u64);
+
+    // deadline = 1000, ledger = 0 → duration 1000 — within [720, 6_307_200]
+    let job_id = escrow.post_job(
+        &client,
+        &100_0000000i128,
+        &BytesN::from_array(&env, &[0u8; 32]),
+        &100u32,
+        &1000u64,
+        &token,
+        &dummy_title(&env),
+        &dummy_category(&env),
+    );
+    assert_eq!(job_id, 1);
+}

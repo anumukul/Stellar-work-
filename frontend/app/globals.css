@@ -131,6 +131,9 @@ html {
   --color-slate-600: #334155;
 }
 
+/* ── Keyboard navigation (#445) ─────────────────────────────────────────────
+   Consistent, high-contrast focus rings for all interactive elements.
+   Using :focus-visible so mouse users are not distracted by focus rings.     */
 @layer base {
   /* One high-contrast focus treatment for every keyboard-focusable control. */
   :focus-visible {
