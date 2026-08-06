@@ -296,26 +296,6 @@ async function invokeContract(
       throw new Error("Connect Freighter before calling contract.");
     }
     const account = await server.getAccount(source);
-  if (sent.hash) {
-    recordRecentContractInteraction({
-      hash: sent.hash,
-      status: "PENDING",
-      timestamp: Date.now(),
-      method,
-    });
-  }
-
-  if (sent.status === "ERROR") {
-    if (sent.hash) {
-      recordRecentContractInteraction({
-        hash: sent.hash,
-        status: "ERROR",
-        timestamp: Date.now(),
-        method,
-      });
-    }
-    throw new Error(sent.errorResult?.toXDR().toString() ?? "Contract invocation failed.");
-  }
 
     const tx = new TransactionBuilder(account, {
       fee: BASE_FEE,
@@ -336,31 +316,25 @@ async function invokeContract(
     const signedTx = TransactionBuilder.fromXDR(signedXdr, networkPassphrase);
     const sent = await server.sendTransaction(signedTx);
 
-    if (sent.status === "ERROR") {
-      throw new Error(sent.errorResult?.toXDR().toString() ?? "Contract invocation failed.");
-      if (status.status === rpc.Api.GetTransactionStatus.SUCCESS) {
-        recordRecentContractInteraction({
-          hash: sent.hash,
-          status: "SUCCESS",
-          timestamp: Date.now(),
-          method,
-        });
-        return { status: "SUCCESS", hash: sent.hash };
-      }
+    if (sent.hash) {
+      recordRecentContractInteraction({
+        hash: sent.hash,
+        status: "PENDING",
+        timestamp: Date.now(),
+        method,
+      });
+    }
 
-      if (status.status === rpc.Api.GetTransactionStatus.FAILED) {
+    if (sent.status === "ERROR") {
+      if (sent.hash) {
         recordRecentContractInteraction({
           hash: sent.hash,
           status: "ERROR",
           timestamp: Date.now(),
           method,
         });
-        return {
-          status: "ERROR",
-          hash: sent.hash,
-          errorResult: "Transaction failed.",
-        };
       }
+      throw new Error(sent.errorResult?.toXDR().toString() ?? "Contract invocation failed.");
     }
 
     if (sent.status === "PENDING") {
@@ -373,10 +347,22 @@ async function invokeContract(
         const status = await server.getTransaction(sent.hash);
 
         if (status.status === rpc.Api.GetTransactionStatus.SUCCESS) {
+          recordRecentContractInteraction({
+            hash: sent.hash,
+            status: "SUCCESS",
+            timestamp: Date.now(),
+            method,
+          });
           return { status: "SUCCESS", hash: sent.hash } as TransactionResult;
         }
 
         if (status.status === rpc.Api.GetTransactionStatus.FAILED) {
+          recordRecentContractInteraction({
+            hash: sent.hash,
+            status: "ERROR",
+            timestamp: Date.now(),
+            method,
+          });
           return {
             status: "ERROR",
             hash: sent.hash,
@@ -391,17 +377,7 @@ async function invokeContract(
     }
 
     return { status: "SUCCESS", hash: sent.hash } as TransactionResult;
-  }, operationLabel);
-  if (sent.hash) {
-    recordRecentContractInteraction({
-      hash: sent.hash,
-      status: "SUCCESS",
-      timestamp: Date.now(),
-      method,
-    });
-  }
-
-  return { status: "SUCCESS", hash: sent.hash };
+  }, method);
 }
 
 export function decodeScVal<T = unknown>(value: xdr.ScVal): T {

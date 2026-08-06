@@ -103,6 +103,7 @@ describe("Job Detail Mobile Footer", () => {
       deadline: "0",
       token: "GTOKEN123",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     const JobDetailPage = (await import("@/app/job/[id]/page")).default;
@@ -136,6 +137,7 @@ describe("Job Detail Mobile Footer", () => {
       deadline: "0",
       token: "GTOKEN123",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     const JobDetailPage = (await import("@/app/job/[id]/page")).default;
@@ -164,6 +166,7 @@ describe("Job Detail Mobile Footer", () => {
       deadline: "0",
       token: "GTOKEN123",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     const JobDetailPage = (await import("@/app/job/[id]/page")).default;
@@ -208,6 +211,7 @@ describe("Job Detail Mobile Footer", () => {
       deadline: "0",
       token: "GTOKEN123",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     const JobDetailPage = (await import("@/app/job/[id]/page")).default;
@@ -249,6 +253,7 @@ describe("Job Detail Mobile Footer", () => {
       deadline: "0",
       token: "GTOKEN123",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     const JobDetailPage = (await import("@/app/job/[id]/page")).default;
@@ -277,6 +282,7 @@ describe("Job Detail Mobile Footer", () => {
       deadline: "0",
       token: "GTOKEN123",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     // Mock acceptJob to simulate loading state
@@ -323,6 +329,7 @@ describe("Job Detail Mobile Footer", () => {
       deadline: "0",
       token: "GTOKEN123",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     const JobDetailPage = (await import("@/app/job/[id]/page")).default;
@@ -349,6 +356,7 @@ describe("Job Detail Mobile Footer", () => {
       deadline: "0",
       token: "GTOKEN123",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     const JobDetailPage = (await import("@/app/job/[id]/page")).default;
@@ -384,6 +392,7 @@ describe("Job Detail Mobile Footer", () => {
       deadline: "0",
       token: "GTOKEN123",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     const JobDetailPage = (await import("@/app/job/[id]/page")).default;
@@ -414,6 +423,7 @@ describe("Job Detail Mobile Footer", () => {
       deadline: "0",
       token: "GTOKEN123",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     // Mock localStorage to return a long description
@@ -448,6 +458,7 @@ describe("Job Detail Mobile Footer", () => {
       deadline: "0",
       token: "GTOKEN123",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     const JobDetailPage = (await import("@/app/job/[id]/page")).default;
@@ -472,6 +483,7 @@ describe("Job Detail Mobile Footer", () => {
       deadline: "0",
       token: "GTOKEN123",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     const JobDetailPage = (await import("@/app/job/[id]/page")).default;

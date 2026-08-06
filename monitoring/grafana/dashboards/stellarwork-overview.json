@@ -389,6 +389,165 @@
           "legendFormat": "{{path}}"
         }
       ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "HTTP requests by route",
+      "datasource": { "type": "prometheus", "uid": "stellarwork-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "drawStyle": "line", "fillOpacity": 15, "lineWidth": 2, "stacking": { "mode": "normal" } }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "stellarwork-prometheus" },
+          "expr": "sum by (route) (rate(stellarwork_http_requests_total{instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "{{route}}"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "HTTP request latency (p95)",
+      "datasource": { "type": "prometheus", "uid": "stellarwork-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": { "drawStyle": "line", "fillOpacity": 0, "lineWidth": 2 },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 3000 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "stellarwork-prometheus" },
+          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(stellarwork_http_request_duration_milliseconds_bucket{instance=~\"$instance\"}[$__rate_interval])))",
+          "legendFormat": "{{route}}"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "stat",
+      "title": "HTTP error rate (1h)",
+      "description": "Percentage of HTTP responses with 4xx/5xx status codes.",
+      "datasource": { "type": "prometheus", "uid": "stellarwork-prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 44 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 0.01 },
+              { "color": "red", "value": 0.05 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "stellarwork-prometheus" },
+          "expr": "sum(rate(stellarwork_http_errors_total{instance=~\"$instance\"}[1h])) / clamp_min(sum(rate(stellarwork_http_requests_total{instance=~\"$instance\"}[1h])), 0.001)",
+          "legendFormat": "error rate"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "stat",
+      "title": "Active sessions (beacon)",
+      "description": "Approximate concurrent visitors based on beacon pings.",
+      "datasource": { "type": "prometheus", "uid": "stellarwork-prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 44 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "stellarwork-prometheus" },
+          "expr": "sum(increase(stellarwork_active_sessions_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "sessions"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Job views by job ID",
+      "datasource": { "type": "prometheus", "uid": "stellarwork-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 44 },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "bars", "fillOpacity": 60, "lineWidth": 1, "stacking": { "mode": "normal" } }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "stellarwork-prometheus" },
+          "expr": "topk(10, sum by (job_id) (increase(stellarwork_job_views_total{instance=~\"$instance\"}[$__rate_interval])))",
+          "legendFormat": "job {{job_id}}"
+        }
+      ]
     }
   ]
 }

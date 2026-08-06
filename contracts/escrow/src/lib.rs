@@ -357,6 +357,17 @@ pub struct PaymentSplit {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompletionCertificate {
+    pub job_id: u64,
+    pub client: Address,
+    pub freelancer: Address,
+    pub amount: i128,
+    pub completed_at: u64,
+    pub metadata_uri: soroban_sdk::String,
+}
+
+#[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
     JobsCount,
@@ -423,6 +434,12 @@ pub enum DataKey {
     // ── Payment splits ───────────────────────────────────────────────────────
     PaymentSplitCount(u64),
     PaymentSplit(u64, u32),
+    // ── Job view counter ─────────────────────────────────────────────────────
+    JobViewCount(u64),
+    JobViewDedup(u64, Address),
+    // ── Completion certificates ──────────────────────────────────────────────
+    CertificateCount(Address),
+    Certificate(Address, u64),
 }
 
 #[contracterror]
@@ -957,6 +974,24 @@ impl EscrowContract {
         let key = DataKey::UserCompletedJobs(freelancer.clone());
         env.storage().persistent().set(&key, &(user_count + 1));
         env.storage().persistent().extend_ttl(&key, 10000, 10000);
+
+        let cert_count: u64 = env.storage().persistent().get(&DataKey::CertificateCount(freelancer.clone())).unwrap_or(0);
+        let cert = CompletionCertificate {
+            job_id,
+            client: job.client.clone(),
+            freelancer: freelancer.clone(),
+            amount: job.amount,
+            completed_at: current_ledger(&env),
+            metadata_uri: soroban_sdk::String::from_str(&env, ""),
+        };
+        env.storage().persistent().set(&DataKey::Certificate(freelancer.clone(), cert_count), &cert);
+        env.storage().persistent().extend_ttl(&DataKey::Certificate(freelancer.clone(), cert_count), 10000, 10000);
+        env.storage().persistent().set(&DataKey::CertificateCount(freelancer.clone()), &(cert_count + 1));
+
+        env.events().publish(
+            (soroban_sdk::Symbol::new(&env, "certificate_minted"),),
+            (job_id, freelancer.clone(), cert_count),
+        );
     }
 
     pub fn cancel_job(env: Env, client: Address, job_id: u64) {
@@ -3212,6 +3247,40 @@ impl EscrowContract {
             }
         }
         result
+    }
+
+    pub fn record_job_view(e: Env, viewer: Address, job_id: u64) {
+        let dedup_key = DataKey::JobViewDedup(job_id, viewer.clone());
+        if e.storage().temporary().has(&dedup_key) {
+            return;
+        }
+        e.storage().temporary().set(&dedup_key, &true);
+        e.storage().temporary().extend_ttl(&dedup_key, 17_280, 17_280);
+
+        let count_key = DataKey::JobViewCount(job_id);
+        let current: u64 = e.storage().persistent().get(&count_key).unwrap_or(0);
+        e.storage().persistent().set(&count_key, &(current + 1));
+        e.storage().persistent().extend_ttl(&count_key, ACTIVE_JOB_LIFETIME_THRESHOLD, ACTIVE_JOB_BUMP_AMOUNT);
+    }
+
+    pub fn get_job_views(e: Env, job_id: u64) -> u64 {
+        e.storage().persistent().get(&DataKey::JobViewCount(job_id)).unwrap_or(0)
+    }
+
+    pub fn get_certificates(e: Env, freelancer: Address, start: u64, limit: u64) -> Vec<CompletionCertificate> {
+        let total: u64 = e.storage().persistent().get(&DataKey::CertificateCount(freelancer.clone())).unwrap_or(0);
+        let mut result: Vec<CompletionCertificate> = Vec::new(&e);
+        let end = if start + limit > total { total } else { start + limit };
+        for i in start..end {
+            if let Some(cert) = e.storage().persistent().get::<DataKey, CompletionCertificate>(&DataKey::Certificate(freelancer.clone(), i)) {
+                result.push_back(cert);
+            }
+        }
+        result
+    }
+
+    pub fn get_certificate_count(e: Env, freelancer: Address) -> u64 {
+        e.storage().persistent().get(&DataKey::CertificateCount(freelancer)).unwrap_or(0)
     }
 }
 

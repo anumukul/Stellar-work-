@@ -73,6 +73,7 @@ const JOB_FIXTURES = [
       deadline: "0",
       token: "GTOKEN",
       revision_count: 0,
+      submitted_at: "0",
     },
   },
   {
@@ -87,6 +88,7 @@ const JOB_FIXTURES = [
       deadline: "1720000000",
       token: "GTOKEN",
       revision_count: 0,
+      submitted_at: "0",
     },
   },
   {
@@ -101,6 +103,7 @@ const JOB_FIXTURES = [
       deadline: "1715000000",
       token: "GTOKEN",
       revision_count: 0,
+      submitted_at: "0",
     },
   },
 ];

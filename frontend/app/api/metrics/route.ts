@@ -1,7 +1,9 @@
 import {
   WEB_VITALS,
+  recordActiveSession,
   recordClientError,
   recordContractTx,
+  recordJobView,
   recordLayoutShift,
   recordPageView,
   recordRpcError,
@@ -79,6 +81,12 @@ function ingest(sample: Sample) {
       return;
     case "client_error":
       recordClientError(str(sample.kind), str(sample.path));
+      return;
+    case "job_view":
+      recordJobView(str(sample.jobId));
+      return;
+    case "session_ping":
+      recordActiveSession();
       return;
     default:
       return;

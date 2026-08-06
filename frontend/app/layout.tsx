@@ -3,7 +3,6 @@ import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages } from "next-intl/server";
-import dynamic from "next/dynamic";
 import { WalletProvider } from "@/lib/wallet-context";
 import { ToastProvider } from "@/components/ToastProvider";
 import { NotificationProvider } from "@/lib/notifications-context";
@@ -19,16 +18,8 @@ import JsonLd from "@/components/JsonLd";
 import AppFooter from "@/components/AppFooter";
 import OfflineIndicator from "@/components/OfflineIndicator";
 import DeferredClientFeatures from "@/components/DeferredClientFeatures";
+import { ClientProviders } from "./client-providers";
 import "./globals.css";
-
-const CommandPalette = dynamic(() => import("@/components/CommandPalette"), { ssr: false });
-const ShortcutCheatSheet = dynamic(() => import("@/components/ShortcutCheatSheet"), { ssr: false });
-const OnboardingProvider = dynamic(() => import("@/components/OnboardingProvider"), { ssr: false });
-const InstallPrompt = dynamic(() => import("@/components/InstallPrompt"), { ssr: false });
-const ServiceWorkerRegistration = dynamic(() => import("@/components/ServiceWorkerRegistration"), { ssr: false });
-const AnnouncementBanner = dynamic(() => import("@/components/AnnouncementBanner"), { ssr: false });
-const MetricsReporter = dynamic(() => import("@/components/MetricsReporter"), { ssr: false });
-const Sidebar = dynamic(() => import("@/components/Sidebar"), { ssr: false });
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -156,11 +147,8 @@ export default async function RootLayout({
             Skip to main content
           </a>
           <DeferredClientFeatures />
-          <ServiceWorkerRegistration />
-          <MetricsReporter />
-          <AnnouncementBanner />
+          <ClientProviders>
           <OfflineIndicator />
-          <Sidebar />
           <Navigation />
           <ScrollRestorer />
           <main id="main-content" tabIndex={-1} className="mx-auto w-full max-w-5xl flex-1 px-3 py-6 sm:px-4 sm:py-8 lg:ml-[220px]">
@@ -193,6 +181,7 @@ export default async function RootLayout({
             </div>
           </footer>
           <AppFooter />
+          </ClientProviders>
           </ToastProvider>
           </MeetingsProvider>
           </MessagingProvider>

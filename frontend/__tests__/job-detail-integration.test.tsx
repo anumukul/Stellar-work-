@@ -60,6 +60,7 @@ function makeJob(overrides: Partial<Job> = {}): Job {
     deadline: "0",
     token: "GTOKEN",
     revision_count: 0,
+    submitted_at: "0",
     ...overrides,
   };
 }
@@ -85,7 +86,7 @@ describe("Job detail page integration", () => {
 
   it("calls acceptJob with correct arguments and handles success", async () => {
     mockGetJob.mockResolvedValue(makeJob({ status: "Open" }));
-    vi.mocked(contract.acceptJob).mockResolvedValue({ hash: "txhash123" });
+    vi.mocked(contract.acceptJob).mockResolvedValue({ hash: "txhash123", status: "SUCCESS" });
 
     renderJobPage();
 
@@ -121,7 +122,7 @@ describe("Job detail page integration", () => {
     mockGetJob.mockResolvedValue(
       makeJob({ status: "InProgress", freelancer: "GFREELANCER" })
     );
-    vi.mocked(contract.submitWork).mockResolvedValue({ hash: "txhash456" });
+    vi.mocked(contract.submitWork).mockResolvedValue({ hash: "txhash456", status: "SUCCESS" });
 
     renderJobPage();
 
@@ -145,7 +146,7 @@ describe("Job detail page integration", () => {
     mockGetJob.mockResolvedValue(
       makeJob({ status: "SubmittedForReview", client: "GCLIENT", freelancer: "GFREELANCER" })
     );
-    vi.mocked(contract.approveWork).mockResolvedValue({ hash: "txhash789" });
+    vi.mocked(contract.approveWork).mockResolvedValue({ hash: "txhash789", status: "SUCCESS" });
 
     renderJobPage();
 
@@ -167,7 +168,7 @@ describe("Job detail page integration", () => {
       connectWallet: vi.fn(),
     });
     mockGetJob.mockResolvedValue(makeJob({ status: "Open", client: "GCLIENT" }));
-    vi.mocked(contract.cancelJob).mockResolvedValue({ hash: "txhash000" });
+    vi.mocked(contract.cancelJob).mockResolvedValue({ hash: "txhash000", status: "SUCCESS" });
 
     renderJobPage();
 

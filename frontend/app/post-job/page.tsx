@@ -100,7 +100,6 @@ export default function PostJobPage() {
     cooldownEndsAt: null,
     isLimited: false,
   });
-  const [category, setCategory] = useState("");
   const [tags, setTags] = useState<string[]>([]);
 
   // Draft saving state
@@ -348,7 +347,7 @@ export default function PostJobPage() {
             if (!tokenAddress.trim()) {
               nextFieldErrors.tokenAddress = "Token address is required.";
             } else if (
-              !StrKey.isValidContractId(tokenAddress.trim()) &&
+              !StrKey.isValidContract(tokenAddress.trim()) &&
               !StrKey.isValidEd25519PublicKey(tokenAddress.trim())
             ) {
               nextFieldErrors.tokenAddress = "Invalid Stellar address or contract ID.";

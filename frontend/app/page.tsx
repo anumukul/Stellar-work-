@@ -216,8 +216,6 @@ export default function HomePage() {
     sessionStorage.setItem(VIEW_MODE_STORAGE_KEY, viewMode);
   }, [viewMode]);
 
-  const totalPages = useMemo(() => Math.max(1, Math.ceil(totalJobs / pageSize)), [pageSize, totalJobs]);
-
   useEffect(() => {
     try {
       const stored = localStorage.getItem(BOOKMARK_STORAGE_KEY);
@@ -1023,7 +1021,7 @@ export default function HomePage() {
           const deadline = formatDeadline(job.deadline);
 
           // ✅ FIX: Check if the connected wallet is the job owner
-          const isOwnJob = wallet && wallet.address && job.client && wallet.address === job.client;
+          const isOwnJob = wallet && job.client && wallet === job.client;
 
           return (
             <li key={id}>
@@ -1084,9 +1082,6 @@ export default function HomePage() {
                   <Link href={`/job/${id}`} className="block" onClick={() => markJobViewed(id)}>
                     <h3 className="flex items-center gap-2 text-lg font-medium hover:underline">
                       Job #{id}
-                      {newJobIds.has(id) && (
-                    <h2 className="flex items-center gap-2 text-lg font-medium hover:underline">
-                      {job.title || `Job #${id}`}
                       {newJobIds.has(id) && (
                         <span
                           aria-hidden="true"

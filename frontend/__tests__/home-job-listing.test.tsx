@@ -78,6 +78,7 @@ describe("Home page job listing after getJobCount", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       })
       .mockResolvedValueOnce({
         client: "GCLIENT",
@@ -89,6 +90,7 @@ describe("Home page job listing after getJobCount", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       })
       .mockResolvedValueOnce({
         client: "GCLIENT",
@@ -100,6 +102,7 @@ describe("Home page job listing after getJobCount", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       });
 
     render(<HomePage />);
@@ -126,6 +129,7 @@ describe("Home page job listing after getJobCount", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       })
       .mockResolvedValueOnce({
         client: "GCLIENT",
@@ -137,6 +141,7 @@ describe("Home page job listing after getJobCount", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       })
       .mockResolvedValueOnce({
         client: "GCLIENT",
@@ -148,6 +153,7 @@ describe("Home page job listing after getJobCount", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       });
 
     render(<HomePage />);
@@ -205,6 +211,7 @@ describe("Home page job listing after getJobCount", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       })
       .mockResolvedValueOnce({
         client: "GCLIENT",
@@ -216,6 +223,7 @@ describe("Home page job listing after getJobCount", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       });
 
     render(<HomePage />);
@@ -242,6 +250,7 @@ describe("Home page job listing after getJobCount", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       })
       .mockRejectedValueOnce(new Error("network error"))
       .mockResolvedValueOnce({
@@ -254,6 +263,7 @@ describe("Home page job listing after getJobCount", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       });
 
     render(<HomePage />);

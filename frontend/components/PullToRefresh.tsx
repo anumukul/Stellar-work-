@@ -50,7 +50,7 @@ export default function PullToRefresh({ onRefresh, disabled = false, label = "Re
         className="pointer-events-none fixed left-1/2 top-0 z-40 flex -translate-x-1/2 justify-center"
         style={{
           transform: `translate3d(-50%, ${offset}px, 0)`,
-          opacity: visible ? Math.max(progress, phase === "idle" ? 0 : 0.4) : 0,
+          opacity: visible ? Math.max(progress, 0.4) : 0,
           transition: distance === 0 ? "transform 200ms ease-out, opacity 200ms ease-out" : "opacity 120ms linear",
         }}
       >
