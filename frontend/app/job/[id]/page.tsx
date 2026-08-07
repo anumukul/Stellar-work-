@@ -1,15 +1,36 @@
 "use client";
 
+import CancelJobConfirmModal from "@/components/CancelJobConfirmModal";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import InfoTooltip from "@/components/InfoTooltip";
-import LoadingState from "@/components/LoadingState";
 import { useToast } from "@/components/ToastProvider";
 import StatusPill from "@/components/StatusPill";
 import ShareButton from "@/components/ShareButton";
-import RichTextRenderer, { isRichText, PlainTextRenderer } from "@/components/RichTextRenderer";
+import RichTextRenderer, {
+  isRichText,
+  PlainTextRenderer,
+} from "@/components/RichTextRenderer";
+import TruncatedAddress from "@/components/TruncatedAddress";
+import { verifyHtmlMatchesHash } from "@/lib/crypto";
 import { useNotifications } from "@/lib/notifications-context";
-import { acceptJob, approveWork, cancelJob, freelancerCancelJob, getDescriptionCid, getJob, submitWork } from "@/lib/contract";
+import {
+  acceptJob,
+  approveWork,
+  cancelJob,
+  freelancerCancelJob,
+  getDescriptionCid,
+  getJob,
+  getJobViews,
+  recordJobView,
+  submitWork,
+} from "@/lib/contract";
 import { fetchFromIpfs } from "@/lib/ipfs-service";
+import {
+  hasViewedToday,
+  markViewed,
+  hasViewedThisSession,
+  markSessionViewed,
+} from "@/lib/job-views";
 import {
   fetchXlmFiatRates,
   formatDeadline,
@@ -20,15 +41,20 @@ import {
   type FiatCurrency,
   type XlmFiatRateCache,
 } from "@/lib/format";
-import { getExplorerTxUrl } from "@/lib/stellar";
+import { getExplorerTxUrl, parseContractError, getNativeBalance } from "@/lib/stellar";
 import { isConfirmSuppressed, CONFIRM_KEYS } from "@/lib/confirm-prefs";
 import type { Job } from "@/lib/types";
 import { useWallet } from "@/lib/wallet-context";
 import { useMeetings } from "@/lib/meetings-context";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
-type PendingAction = "cancelJob" | "approveWork" | "submitWork" | "freelancerCancelJob";
+import { Suspense, useEffect, useRef, useState } from "react";
+import JobDetailPageSkeleton from "@/components/JobDetailPageSkeleton";
+type PendingAction =
+  | "cancelJob"
+  | "approveWork"
+  | "submitWork"
+  | "freelancerCancelJob";
 
 const BOOKMARK_STORAGE_KEY = "stellarwork:bookmarked-jobs";
 
@@ -72,16 +98,18 @@ function getAutoApprovalCountdown(submittedAtStr: string | undefined) {
   };
 }
 
-export default function JobDetailPage() {
+function JobDetailPageContent() {
   const params = useParams<{ id: string }>();
   const id = params.id;
-  const { wallet } = useWallet();
+  const { wallet, connectWallet } = useWallet();
   const { showSuccess, showError } = useToast();
   const { addNotification } = useNotifications();
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
+  const [pendingAction, setPendingAction] = useState<PendingAction | null>(
+    null,
+  );
   const [fetching, setFetching] = useState(true);
   const [latestTxHash, setLatestTxHash] = useState<string | null>(null);
   const [invalidId, setInvalidId] = useState(false);
@@ -93,6 +121,7 @@ export default function JobDetailPage() {
   const [isBookmarked, setIsBookmarked] = useState(false);
   const [bookmarkAnimating, setBookmarkAnimating] = useState(false);
   const [statusAnnouncement, setStatusAnnouncement] = useState("");
+  const [viewCount, setViewCount] = useState(0);
   const { proposeMeeting, getMeetingsForJob } = useMeetings();
   const [showScheduleForm, setShowScheduleForm] = useState(false);
   const [meetingTitle, setMeetingTitle] = useState("");
@@ -101,7 +130,8 @@ export default function JobDetailPage() {
   const [slotEnd, setSlotEnd] = useState("");
 
   const numericId = Number(id);
-  const isIdValid = !isNaN(numericId) && numericId > 0 && Number.isInteger(numericId);
+  const isIdValid =
+    !isNaN(numericId) && numericId > 0 && Number.isInteger(numericId);
 
   async function load() {
     if (!isIdValid) {
@@ -119,14 +149,29 @@ export default function JobDetailPage() {
         const hash = data.description_hash;
         const stored = localStorage.getItem(`job-desc:${hash}`);
         if (stored) {
-          setDescription(stored);
+          try {
+            const ok = await verifyHtmlMatchesHash(stored, hash);
+            if (ok) {
+              setDescription(stored);
+            } else {
+              // Integrity mismatch — ignore stored value
+              setDescription(null);
+            }
+          } catch {
+            setDescription(null);
+          }
         } else {
           try {
             const cid = await getDescriptionCid(hash);
             if (cid) {
               const text = await fetchFromIpfs(cid);
-              setDescription(text);
-              localStorage.setItem(`job-desc:${hash}`, text);
+              const ok = await verifyHtmlMatchesHash(text, hash);
+              if (ok) {
+                setDescription(text);
+                localStorage.setItem(`job-desc:${hash}`, text);
+              } else {
+                setDescription(null);
+              }
             }
           } catch {
             setDescription(null);
@@ -193,19 +238,53 @@ export default function JobDetailPage() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!id || !isIdValid) return;
+    let cancelled = false;
+
+    getJobViews(id)
+      .then((count) => {
+        if (!cancelled) setViewCount(count);
+      })
+      .catch(() => {});
+
+    if (wallet && !hasViewedToday(id, wallet) && !hasViewedThisSession(id)) {
+      recordJobView(wallet, id)
+        .then(() => {
+          markViewed(id, wallet);
+          markSessionViewed(id);
+          if (!cancelled) setViewCount((prev) => prev + 1);
+        })
+        .catch(() => {});
+    } else if (!hasViewedThisSession(id)) {
+      markSessionViewed(id);
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [id, wallet, isIdValid]);
+
   const isClient = wallet && job && wallet === job.client;
   const isFreelancer = wallet && job && wallet === job.freelancer;
   const canAccept = Boolean(job && job.status === "Open");
   const canSubmit = Boolean(isFreelancer && job?.status === "InProgress");
   const canApprove = Boolean(isClient && job?.status === "SubmittedForReview");
   const canCancel = Boolean(isClient && job?.status === "Open");
-  const canFreelancerCancel = Boolean(isFreelancer && job?.status === "InProgress");
-  const hasPrimaryActions = canAccept || canSubmit || canApprove || canCancel || canFreelancerCancel;
+  const canFreelancerCancel = Boolean(
+    isFreelancer && job?.status === "InProgress",
+  );
+  const hasPrimaryActions = !wallet
+    ? Boolean(job && ["Open", "InProgress", "SubmittedForReview"].includes(job.status))
+    : canAccept || canSubmit || canApprove || canCancel || canFreelancerCancel;
 
   async function handleAction(
     action: () => Promise<{ hash?: string }>,
     successMessage = "Action completed successfully.",
-    notification?: { event: import("@/lib/types").NotificationEvent; message: string },
+    notification?: {
+      event: import("@/lib/types").NotificationEvent;
+      message: string;
+    },
   ) {
     if (loading) return;
     setError(null);
@@ -228,7 +307,16 @@ export default function JobDetailPage() {
       showSuccess(successMessage);
       setStatusAnnouncement(successMessage);
     } catch (e) {
-      const message = e instanceof Error ? e.message : "Transaction failed.";
+      // Fetch current balance to include in insufficient-balance messages (#620)
+      let balance: string | undefined;
+      if (wallet) {
+        try {
+          balance = await getNativeBalance(wallet);
+        } catch {
+          // Balance fetch failed — parseContractError will omit the balance detail
+        }
+      }
+      const message = parseContractError(e, balance);
       setError(message);
       showError(message);
     } finally {
@@ -259,21 +347,30 @@ export default function JobDetailPage() {
         await handleAction(
           () => cancelJob(wallet, id),
           "Job cancelled and funds refunded.",
-          { event: "job_cancelled", message: `Job #${id} was cancelled and funds refunded.` },
+          {
+            event: "job_cancelled",
+            message: `Job #${id} was cancelled and funds refunded.`,
+          },
         );
         break;
       case "approveWork":
         await handleAction(
           () => approveWork(wallet, id),
           "Work approved and payment released.",
-          { event: "work_approved", message: `Work for Job #${id} was approved and payment released.` },
+          {
+            event: "work_approved",
+            message: `Work for Job #${id} was approved and payment released.`,
+          },
         );
         break;
       case "submitWork":
         await handleAction(
           () => submitWork(wallet, id),
           "Work submitted for review.",
-          { event: "work_submitted", message: `Work for Job #${id} was submitted for review.` },
+          {
+            event: "work_submitted",
+            message: `Work for Job #${id} was submitted for review.`,
+          },
         );
         break;
       case "freelancerCancelJob":
@@ -330,8 +427,14 @@ export default function JobDetailPage() {
 
   // ── Confirm dialog configs ──────────────────────────────────────────────
 
-  const amountXlm = job ? formatXlmWithFiat(job.amount, fiatCurrency, fiatRates?.rates) : "";
-  const fiatTooltip = formatXlmFiatRateTooltip(fiatCurrency, fiatRates?.rates, fiatRates?.fetchedAt);
+  const amountXlm = job
+    ? formatXlmWithFiat(job.amount, fiatCurrency, fiatRates?.rates)
+    : "";
+  const fiatTooltip = formatXlmFiatRateTooltip(
+    fiatCurrency,
+    fiatRates?.rates,
+    fiatRates?.fetchedAt,
+  );
 
   const DIALOG_CONFIG: Record<
     PendingAction,
@@ -347,7 +450,8 @@ export default function JobDetailPage() {
   > = {
     cancelJob: {
       title: "Cancel this job?",
-      description: "Cancelling will close the job and return the escrowed funds to your wallet. This action cannot be undone.",
+      description:
+        "Cancelling will close the job and return the escrowed funds to your wallet. This action cannot be undone.",
       consequences: [
         "The job will move to Cancelled status permanently.",
         "The freelancer (if any) will lose access to the job.",
@@ -359,7 +463,8 @@ export default function JobDetailPage() {
     },
     approveWork: {
       title: "Approve and release payment?",
-      description: "Approving the submitted work releases the escrowed funds to the freelancer minus the platform fee. This action is final and cannot be reversed.",
+      description:
+        "Approving the submitted work releases the escrowed funds to the freelancer minus the platform fee. This action is final and cannot be reversed.",
       consequences: [
         "The job will move to Completed status permanently.",
         "You will not be able to request changes after approval.",
@@ -372,7 +477,8 @@ export default function JobDetailPage() {
     },
     submitWork: {
       title: "Submit work for review?",
-      description: "Submitting notifies the client that your work is ready for review. This action cannot be undone — you will not be able to make further changes until the client responds.",
+      description:
+        "Submitting notifies the client that your work is ready for review. This action cannot be undone — you will not be able to make further changes until the client responds.",
       consequences: [
         "The job will move to Submitted for Review status.",
         "The client will be able to approve or raise a dispute.",
@@ -383,7 +489,8 @@ export default function JobDetailPage() {
     },
     freelancerCancelJob: {
       title: "Cancel this job?",
-      description: "Cancelling as a freelancer will return the full escrowed amount to the client. This action cannot be undone.",
+      description:
+        "Cancelling as a freelancer will return the full escrowed amount to the client. This action cannot be undone.",
       consequences: [
         "The job will move to Cancelled status permanently.",
         "The full escrow amount is refunded to the client.",
@@ -413,14 +520,7 @@ export default function JobDetailPage() {
   }
 
   if (fetching) {
-    return (
-      <div className="py-16">
-        <LoadingState
-          text="Loading job details..."
-          className="mx-auto flex w-fit items-center gap-2 text-sm text-slate-700"
-        />
-      </div>
-    );
+    return <JobDetailPageSkeleton />;
   }
 
   if (!job) {
@@ -439,7 +539,10 @@ export default function JobDetailPage() {
                 Retry
               </button>
             )}
-            <Link href="/" className="rounded-md border border-slate-300 px-4 py-2 text-slate-700 hover:bg-slate-50">
+            <Link
+              href="/"
+              className="rounded-md border border-slate-300 px-4 py-2 text-slate-700 hover:bg-slate-50"
+            >
               Back to Home
             </Link>
           </div>
@@ -451,7 +554,7 @@ export default function JobDetailPage() {
   return (
     <section className="space-y-6 pb-6 sm:pb-6">
       {/* Screen reader announcer for job status transitions */}
-      <p role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+      <p aria-live="polite" aria-atomic="true" className="sr-only">
         {statusAnnouncement}
       </p>
 
@@ -459,11 +562,23 @@ export default function JobDetailPage() {
         <Link href="/" className="text-sm text-blue-600 hover:underline">
           Back
         </Link>
-        <h1 className="text-2xl font-semibold">Job #{id}</h1>
+        <h1 className="text-2xl font-semibold">
+          {job.title || `Job #${id}`}
+        </h1>
+        {job.category && (
+          <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600">
+            {job.category}
+          </span>
+        )}
       </div>
 
       {error && (
-        <p role="alert" aria-live="assertive" aria-atomic="true" className="rounded-md bg-red-100 p-3 text-sm text-red-700">
+        <p
+          role="alert"
+          aria-live="assertive"
+          aria-atomic="true"
+          className="rounded-md bg-red-100 p-3 text-sm text-red-700"
+        >
           {error}
         </p>
       )}
@@ -481,52 +596,80 @@ export default function JobDetailPage() {
         </p>
       )}
 
-      {job.status === "SubmittedForReview" && (() => {
-        const countdown = getAutoApprovalCountdown(job.submitted_at);
-        if (!countdown) return null;
-        return (
-          <div className={`rounded-lg border p-4 text-sm ${
-            countdown.expired
-              ? "border-red-200 bg-red-50 text-red-800"
-              : "border-amber-200 bg-amber-50 text-amber-800"
-          }`}>
-            <div className="flex items-start gap-3">
-              <svg className="h-5 w-5 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-              </svg>
-              <div>
-                <h4 className="font-semibold">{isClient ? "Action Required: Review Submitted Work" : "Work Under Review"}</h4>
-                <p className="mt-1 text-xs opacity-90">{countdown.text}</p>
+      {job.status === "SubmittedForReview" &&
+        (() => {
+          const countdown = getAutoApprovalCountdown(job.submitted_at);
+          if (!countdown) return null;
+          return (
+            <div
+              className={`rounded-lg border p-4 text-sm ${
+                countdown.expired
+                  ? "border-red-200 bg-red-50 text-red-800"
+                  : "border-amber-200 bg-amber-50 text-amber-800"
+              }`}
+            >
+              <div className="flex items-start gap-3">
+                <svg
+                  className="h-5 w-5 flex-shrink-0 mt-0.5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                  />
+                </svg>
+                <div>
+                  <h4 className="font-semibold">
+                    {isClient
+                      ? "Action Required: Review Submitted Work"
+                      : "Work Under Review"}
+                  </h4>
+                  <p className="mt-1 text-xs opacity-90">{countdown.text}</p>
+                </div>
               </div>
             </div>
-          </div>
-        );
-      })()}
+          );
+        })()}
 
       <article className="space-y-2 rounded-lg border border-slate-200 bg-white p-5 text-sm">
         <div className="flex items-center justify-between gap-2">
           <p>
             <strong>Status:</strong> <StatusPill status={job.status} />
           </p>
+          <span className="inline-flex items-center gap-1 text-slate-500" title={`${viewCount} people viewed this job`}>
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+            <span>{viewCount}</span>
+          </span>
           <div className="flex items-center gap-2">
             <ShareButton
               jobId={id}
               jobTitle={`Job #${id}`}
-              jobAmount={formatXlmWithFiat(job.amount, fiatCurrency, fiatRates?.rates)}
+              jobAmount={formatXlmWithFiat(
+                job.amount,
+                fiatCurrency,
+                fiatRates?.rates,
+              )}
             />
             <button
-            type="button"
-            onClick={toggleBookmark}
-            className={`rounded-md border px-3 py-1.5 text-sm font-medium transition-all duration-200 ${
-              isBookmarked
-                ? "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100"
-                : "border-slate-300 bg-white text-slate-600 hover:bg-slate-50"
-            } ${bookmarkAnimating ? "scale-110" : "scale-100"}`}
-            aria-pressed={isBookmarked}
-            title={isBookmarked ? "Remove bookmark" : "Bookmark this job"}
-          >
-            {isBookmarked ? "★ Saved" : "☆ Save"}
-          </button>
+              type="button"
+              onClick={toggleBookmark}
+              className={`rounded-md border px-3 py-1.5 text-sm font-medium transition-all duration-200 ${
+                isBookmarked
+                  ? "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                  : "border-slate-300 bg-white text-slate-600 hover:bg-slate-50"
+              } ${bookmarkAnimating ? "scale-110" : "scale-100"}`}
+              aria-pressed={isBookmarked}
+              title={isBookmarked ? "Remove bookmark" : "Bookmark this job"}
+            >
+              {isBookmarked ? "★ Saved" : "☆ Save"}
+            </button>
           </div>
         </div>
         <p>
@@ -535,7 +678,10 @@ export default function JobDetailPage() {
         <p>
           <strong>Freelancer:</strong>{" "}
           {job.freelancer ? (
-            <Link href={`/profile/${job.freelancer}`} className="font-mono text-blue-600 hover:underline text-sm">
+            <Link
+              href={`/profile/${job.freelancer}`}
+              className="font-mono text-blue-600 hover:underline text-sm"
+            >
               {job.freelancer}
             </Link>
           ) : (
@@ -543,12 +689,17 @@ export default function JobDetailPage() {
           )}
         </p>
         <p title={fiatTooltip}>
-          <strong>Amount:</strong> {formatXlmWithFiat(job.amount, fiatCurrency, fiatRates?.rates)}
+          <strong>Amount:</strong>{" "}
+          {formatXlmWithFiat(job.amount, fiatCurrency, fiatRates?.rates)}
         </p>
         <p>
           <strong>Token:</strong>{" "}
           <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-xs">
-            {job.token ? `${job.token.slice(0, 8)}...${job.token.slice(-4)}` : "N/A"}
+            {job.token ? (
+              <TruncatedAddress address={job.token} className="font-mono text-xs" />
+            ) : (
+              "N/A"
+            )}
           </code>
         </p>
         <div>
@@ -604,140 +755,203 @@ export default function JobDetailPage() {
         </p>
 
         {/* Message button — visible when the other party is known */}
-        {wallet && (() => {
-          const otherParty =
-            wallet === job.client ? job.freelancer :
-            wallet === job.freelancer ? job.client :
-            job.client;
-          if (!otherParty || otherParty === wallet) return null;
-          return (
-            <div className="flex flex-wrap gap-2 pt-1">
-              <Link
-                href={`/messages/${otherParty}`}
-                className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
-              >
-                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 16 16" stroke="currentColor" strokeWidth={1.5} aria-hidden="true">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M14 10c0 2.21-2.686 4-6 4a7.232 7.232 0 01-3.115-.674L2 14l.897-2.392A3.954 3.954 0 012 10c0-2.21 2.686-4 6-4s6 1.79 6 4z" />
-                </svg>
-                Message {wallet === job.client ? "Freelancer" : wallet === job.freelancer ? "Client" : "Client"}
-              </Link>
-              <button
-                type="button"
-                onClick={() => setShowScheduleForm(!showScheduleForm)}
-                className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
-              >
-                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} aria-hidden="true">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5" />
-                </svg>
-                {showScheduleForm ? "Cancel" : "Schedule Meeting"}
-              </button>
-            </div>
-          );
-        })()}
-
-        {/* Schedule meeting form */}
-        {showScheduleForm && wallet && (() => {
-          const otherParty =
-            wallet === job.client ? job.freelancer :
-            wallet === job.freelancer ? job.client :
-            job.client;
-          if (!otherParty) return null;
-          return (
-            <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm">
-              <h4 className="font-medium text-slate-800 mb-3">Propose a Meeting</h4>
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">Meeting title</label>
-                  <input
-                    type="text"
-                    value={meetingTitle}
-                    onChange={(e) => setMeetingTitle(e.target.value)}
-                    placeholder="e.g. Project kickoff call"
-                    className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  />
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-600 mb-1">Date</label>
-                    <input
-                      type="date"
-                      value={slotDate}
-                      onChange={(e) => setSlotDate(e.target.value)}
-                      className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        {wallet &&
+          (() => {
+            const otherParty =
+              wallet === job.client
+                ? job.freelancer
+                : wallet === job.freelancer
+                  ? job.client
+                  : job.client;
+            if (!otherParty || otherParty === wallet) return null;
+            return (
+              <div className="flex flex-wrap gap-2 pt-1">
+                <Link
+                  href={`/messages/${otherParty}`}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+                >
+                  <svg
+                    className="h-3.5 w-3.5"
+                    fill="none"
+                    viewBox="0 0 16 16"
+                    stroke="currentColor"
+                    strokeWidth={1.5}
+                    aria-hidden="true"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M14 10c0 2.21-2.686 4-6 4a7.232 7.232 0 01-3.115-.674L2 14l.897-2.392A3.954 3.954 0 012 10c0-2.21 2.686-4 6-4s6 1.79 6 4z"
                     />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-600 mb-1">Start time</label>
-                    <input
-                      type="time"
-                      value={slotStart}
-                      onChange={(e) => setSlotStart(e.target.value)}
-                      className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-600 mb-1">End time</label>
-                    <input
-                      type="time"
-                      value={slotEnd}
-                      onChange={(e) => setSlotEnd(e.target.value)}
-                      className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    />
-                  </div>
-                </div>
+                  </svg>
+                  Message{" "}
+                  {wallet === job.client
+                    ? "Freelancer"
+                    : wallet === job.freelancer
+                      ? "Client"
+                      : "Client"}
+                </Link>
                 <button
                   type="button"
-                  disabled={!meetingTitle || !slotDate || !slotStart || !slotEnd}
-                  onClick={() => {
-                    const start = `${slotDate}T${slotStart}:00`;
-                    const end = `${slotDate}T${slotEnd}:00`;
-                    proposeMeeting(
-                      numericId,
-                      meetingTitle,
-                      [{ start, end }],
-                      wallet,
-                      otherParty,
-                    );
-                    setMeetingTitle("");
-                    setSlotDate("");
-                    setSlotStart("");
-                    setSlotEnd("");
-                    setShowScheduleForm(false);
-                  }}
-                  className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={() => setShowScheduleForm(!showScheduleForm)}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
                 >
-                  Send Proposal
+                  <svg
+                    className="h-3.5 w-3.5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={1.5}
+                    aria-hidden="true"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"
+                    />
+                  </svg>
+                  {showScheduleForm ? "Cancel" : "Schedule Meeting"}
                 </button>
               </div>
-            </div>
-          );
-        })()}
+            );
+          })()}
+
+        {/* Schedule meeting form */}
+        {showScheduleForm &&
+          wallet &&
+          (() => {
+            const otherParty =
+              wallet === job.client
+                ? job.freelancer
+                : wallet === job.freelancer
+                  ? job.client
+                  : job.client;
+            if (!otherParty) return null;
+            return (
+              <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm">
+                <h4 className="font-medium text-slate-800 mb-3">
+                  Propose a Meeting
+                </h4>
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">
+                      Meeting title
+                    </label>
+                    <input
+                      type="text"
+                      value={meetingTitle}
+                      onChange={(e) => setMeetingTitle(e.target.value)}
+                      placeholder="e.g. Project kickoff call"
+                      className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1">
+                        Date
+                      </label>
+                      <input
+                        type="date"
+                        value={slotDate}
+                        onChange={(e) => setSlotDate(e.target.value)}
+                        className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1">
+                        Start time
+                      </label>
+                      <input
+                        type="time"
+                        value={slotStart}
+                        onChange={(e) => setSlotStart(e.target.value)}
+                        className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1">
+                        End time
+                      </label>
+                      <input
+                        type="time"
+                        value={slotEnd}
+                        onChange={(e) => setSlotEnd(e.target.value)}
+                        className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={
+                      !meetingTitle || !slotDate || !slotStart || !slotEnd
+                    }
+                    onClick={() => {
+                      const start = `${slotDate}T${slotStart}:00`;
+                      const end = `${slotDate}T${slotEnd}:00`;
+                      proposeMeeting(
+                        numericId,
+                        meetingTitle,
+                        [{ start, end }],
+                        wallet,
+                        otherParty,
+                      );
+                      setMeetingTitle("");
+                      setSlotDate("");
+                      setSlotStart("");
+                      setSlotEnd("");
+                      setShowScheduleForm(false);
+                    }}
+                    className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Send Proposal
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
 
         {/* Show existing meetings for this job */}
-        {wallet && (() => {
-          const jobMeetings = getMeetingsForJob(numericId);
-          if (jobMeetings.length === 0) return null;
-          return (
-            <div className="mt-3 space-y-2">
-              <h4 className="text-xs font-medium text-slate-600 uppercase tracking-wider">Meetings</h4>
-              {jobMeetings.map((m) => (
-                <div key={m.id} className="flex items-center justify-between rounded-md border border-slate-200 bg-white px-3 py-2 text-xs">
-                  <div>
-                    <span className="font-medium text-slate-800">{m.title}</span>
-                    <span className={`ml-2 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
-                      m.status === "confirmed" ? "bg-green-100 text-green-700" :
-                      m.status === "pending" ? "bg-amber-100 text-amber-700" :
-                      "bg-slate-100 text-slate-500"
-                    }`}>
-                      {m.status}
-                    </span>
+        {wallet &&
+          (() => {
+            const jobMeetings = getMeetingsForJob(numericId);
+            if (jobMeetings.length === 0) return null;
+            return (
+              <div className="mt-3 space-y-2">
+                <h4 className="text-xs font-medium text-slate-600 uppercase tracking-wider">
+                  Meetings
+                </h4>
+                {jobMeetings.map((m) => (
+                  <div
+                    key={m.id}
+                    className="flex items-center justify-between rounded-md border border-slate-200 bg-white px-3 py-2 text-xs"
+                  >
+                    <div>
+                      <span className="font-medium text-slate-800">
+                        {m.title}
+                      </span>
+                      <span
+                        className={`ml-2 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                          m.status === "confirmed"
+                            ? "bg-green-100 text-green-700"
+                            : m.status === "pending"
+                              ? "bg-amber-100 text-amber-700"
+                              : "bg-slate-100 text-slate-500"
+                        }`}
+                      >
+                        {m.status}
+                      </span>
+                    </div>
+                    <Link
+                      href="/meetings"
+                      className="text-blue-600 hover:underline"
+                    >
+                      View
+                    </Link>
                   </div>
-                  <Link href="/meetings" className="text-blue-600 hover:underline">View</Link>
-                </div>
-              ))}
-            </div>
-          );
-        })()}
+                ))}
+              </div>
+            );
+          })()}
 
         {!wallet && (
           <p className="text-xs text-amber-700">
@@ -753,7 +967,18 @@ export default function JobDetailPage() {
 
           <div className="fixed inset-x-0 bottom-0 z-20 border-t border-slate-200 bg-white/95 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 shadow-[0_-6px_24px_rgba(15,23,42,0.08)] backdrop-blur-sm sm:static sm:border-0 sm:bg-transparent sm:px-0 sm:py-0 sm:pb-0 sm:shadow-none sm:backdrop-blur-none">
             <div className="mx-auto flex w-full max-w-4xl flex-wrap gap-2 sm:justify-end">
-              {canAccept && (
+              {!wallet ? (
+                <button
+                  className="min-w-0 flex-1 rounded-md border border-slate-900 bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800 sm:flex-none sm:max-w-48 sm:py-2"
+                  onClick={async () => {
+                    try { await connectWallet(); } catch { /* cancelled */ }
+                  }}
+                >
+                  Connect Wallet
+                </button>
+              ) : (
+                <>
+                  {canAccept && (
                 <button
                   className="min-w-0 flex-1 rounded-md border border-blue-600 bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-500 sm:flex-none sm:max-w-48 sm:py-2"
                   onClick={() => {
@@ -761,14 +986,23 @@ export default function JobDetailPage() {
                     void handleAction(
                       () => acceptJob(wallet, id),
                       "Job accepted successfully.",
-                      { event: "job_accepted", message: `You accepted Job #${id}.` },
+                      {
+                        event: "job_accepted",
+                        message: `You accepted Job #${id}.`,
+                      },
                     );
                   }}
                   disabled={!wallet || loading}
-                  title={!wallet ? "Connect your wallet to accept this job." : undefined}
+                  title={
+                    !wallet
+                      ? "Connect your wallet to accept this job."
+                      : undefined
+                  }
                   aria-busy={loading}
                 >
-                  <span className="block truncate">{loading ? "Processing..." : "Accept Job"}</span>
+                  <span className="block truncate">
+                    {loading ? "Processing..." : "Accept Job"}
+                  </span>
                 </button>
               )}
 
@@ -780,7 +1014,9 @@ export default function JobDetailPage() {
                   aria-haspopup="dialog"
                   aria-busy={loading}
                 >
-                  <span className="block truncate">{loading ? "Processing..." : "Submit Work"}</span>
+                  <span className="block truncate">
+                    {loading ? "Processing..." : "Submit Work"}
+                  </span>
                 </button>
               )}
 
@@ -792,7 +1028,9 @@ export default function JobDetailPage() {
                   aria-haspopup="dialog"
                   aria-busy={loading}
                 >
-                  <span className="block truncate">{loading ? "Processing..." : "Approve Work"}</span>
+                  <span className="block truncate">
+                    {loading ? "Processing..." : "Approve Work"}
+                  </span>
                 </button>
               )}
 
@@ -815,8 +1053,12 @@ export default function JobDetailPage() {
                   aria-haspopup="dialog"
                   aria-busy={loading}
                 >
-                  <span className="block truncate">{loading ? "Processing..." : "Cancel as Freelancer"}</span>
+                  <span className="block truncate">
+                    {loading ? "Processing..." : "Cancel as Freelancer"}
+                  </span>
                 </button>
+              )}
+                </>
               )}
             </div>
           </div>
@@ -824,15 +1066,30 @@ export default function JobDetailPage() {
       )}
 
       {/* Confirmation dialogs */}
-      {pendingAction && (
+      {pendingAction === "cancelJob" ? (
+        <CancelJobConfirmModal
+          jobId={id}
+          loading={loading}
+          onClose={() => setPendingAction(null)}
+          onConfirm={() => void executeAction("cancelJob")}
+        />
+      ) : pendingAction !== null ? (
         <ConfirmDialog
-          open={pendingAction !== null}
+          open
           {...DIALOG_CONFIG[pendingAction]}
           loading={loading}
           onConfirm={() => void executeAction(pendingAction)}
           onCancel={() => setPendingAction(null)}
         />
-      )}
+      ) : null}
     </section>
+  );
+}
+
+export default function JobDetailPage() {
+  return (
+    <Suspense fallback={<JobDetailPageSkeleton />}>
+      <JobDetailPageContent />
+    </Suspense>
   );
 }

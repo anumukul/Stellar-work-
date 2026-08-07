@@ -137,6 +137,14 @@ export default function AppFooter() {
               Documentation
             </Link>
             <a
+              href="https://github.com/anoncon/Stellar-work-/blob/main/docs/TOKENOMICS.md"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="transition-colors hover:text-blue-600 dark:hover:text-blue-400"
+            >
+              Tokenomics
+            </a>
+            <a
               href="/LICENSE"
               target="_blank"
               rel="noopener noreferrer"

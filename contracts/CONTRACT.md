@@ -162,7 +162,9 @@ Values are estimates from local `soroban contract invoke` dry-runs against a sta
 
 4. **Fee tier lookups** iterate through all tiers on every fee calculation. When no tiers are configured, the function returns immediately using the default fee — this is already optimized.
 
-5. **Access control checks** (`require_active_access`) perform 2-3 storage reads per invocation (blacklist + whitelist mode + whitelist entry). These are called on every authenticated contract invocation and could be cached per-transaction.
+5. **Access control checks** (`require_active_access`) perform up to 2-3 storage reads per invocation (blacklist + whitelist mode + whitelist entry). PERF-01 short-circuits whitelist persistent reads when whitelist mode is off, and mutation helpers reuse a single job load for status checks.
+
+6. **PERF-01 batch reads.** Prefer `get_jobs_batch` for list views and `get_job_requiring_status` in write paths so job data and status are not fetched separately.
 
 ## Benchmarking
 

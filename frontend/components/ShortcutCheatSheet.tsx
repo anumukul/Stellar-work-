@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useModalFocusTrap } from "@/lib/modal";
 
 const SHORTCUTS = [
   {
@@ -32,6 +33,8 @@ const SHORTCUTS = [
 
 export default function ShortcutCheatSheet() {
   const [isOpen, setIsOpen] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const close = useCallback(() => setIsOpen(false), []);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -54,6 +57,8 @@ export default function ShortcutCheatSheet() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
+  useModalFocusTrap(isOpen, dialogRef, close);
+
   if (!isOpen) return null;
 
   return (
@@ -62,11 +67,13 @@ export default function ShortcutCheatSheet() {
       onClick={() => setIsOpen(false)}
     >
       <div 
+        ref={dialogRef}
         className="w-full max-w-2xl transform overflow-hidden rounded-2xl bg-white p-6 text-left align-middle shadow-xl transition-all dark:bg-slate-900 border border-slate-200 dark:border-slate-800"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-labelledby="shortcuts-title"
+        tabIndex={-1}
       >
         <div className="flex items-center justify-between mb-5">
           <h2 id="shortcuts-title" className="text-xl font-semibold text-slate-900 dark:text-white">Keyboard Shortcuts</h2>

@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ToastProvider, useToast } from "@/components/ToastProvider";
 
 function ToastHarness() {
-  const { showSuccess, showError } = useToast();
+  const { showSuccess, showError, showPending } = useToast();
   return (
     <div>
       <button type="button" onClick={() => showSuccess("Saved")}>
@@ -12,6 +12,9 @@ function ToastHarness() {
       </button>
       <button type="button" onClick={() => showError("Failed")}>
         Show error
+      </button>
+      <button type="button" onClick={() => showPending("Processing")}>
+        Show pending
       </button>
     </div>
   );
@@ -50,7 +53,7 @@ describe("ToastProvider", () => {
     expect(screen.getByRole("status")).toBeInTheDocument();
 
     act(() => {
-      vi.advanceTimersByTime(3500);
+      vi.advanceTimersByTime(5000);
     });
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     vi.useRealTimers();
@@ -80,7 +83,7 @@ describe("ToastProvider", () => {
 
     // Error toast should still auto-dismiss at correct time
     act(() => {
-      vi.advanceTimersByTime(3500);
+      vi.advanceTimersByTime(5000);
     });
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     vi.useRealTimers();
@@ -108,19 +111,61 @@ describe("ToastProvider", () => {
       screen.getByRole("button", { name: "Show error" }).click();
     });
 
-    // First toast should dismiss at 3.5s
+    // First toast should dismiss at 5s
     act(() => {
-      vi.advanceTimersByTime(2500);
+      vi.advanceTimersByTime(4000);
     });
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     expect(screen.getByRole("alert")).toBeInTheDocument();
 
-    // Second toast should dismiss 1s later (at 4.5s total)
+    // Second toast should dismiss 1s later (at 6s total)
     act(() => {
       vi.advanceTimersByTime(1000);
     });
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     vi.useRealTimers();
+  });
+
+  it("shows pending variant with spinning icon", () => {
+    render(
+      <ToastProvider>
+        <ToastHarness />
+      </ToastProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Show pending" }));
+    const toast = screen.getByRole("status");
+    expect(toast).toHaveTextContent("Processing");
+  });
+
+  it("stacks multiple variants simultaneously", () => {
+    render(
+      <ToastProvider>
+        <ToastHarness />
+      </ToastProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Show pending" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show success" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show error" }));
+
+    expect(screen.getByText("Processing")).toBeInTheDocument();
+    expect(screen.getByText("Saved")).toBeInTheDocument();
+    expect(screen.getByText("Failed")).toBeInTheDocument();
+  });
+
+  it("deduplicates pending toasts with same message", () => {
+    render(
+      <ToastProvider>
+        <ToastHarness />
+      </ToastProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Show pending" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show pending" }));
+
+    const statusElements = screen.getAllByRole("status");
+    expect(statusElements).toHaveLength(1);
   });
 
   describe("Toast deduplication", () => {
@@ -262,7 +307,7 @@ describe("ToastProvider", () => {
 
       // Advance time past auto-dismiss
       act(() => {
-        vi.advanceTimersByTime(3500);
+        vi.advanceTimersByTime(5000);
       });
 
       // Toast should be dismissed

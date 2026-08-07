@@ -2,9 +2,13 @@ name: Contract CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
 
 jobs:
   test:
@@ -66,3 +70,103 @@ jobs:
           files: coverage/lcov.info
           fail_ci_if_error: true
           verbose: true
+
+  deploy-testnet:
+    name: Deploy Contract to Testnet
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install soroban-cli
+        run: |
+          if ! command -v soroban &> /dev/null; then
+            cargo install soroban-cli --locked
+          fi
+
+      - name: Build contract
+        working-directory: contracts/escrow/
+        run: soroban contract build
+
+      - name: Configure testnet network
+        env:
+          STELLAR_SECRET_KEY: ${{ secrets.STELLAR_SECRET_KEY }}
+        run: |
+          soroban config network add testnet \
+            --rpc-url https://soroban-testnet.stellar.org \
+            --network-passphrase "Test SDF Network ; September 2015" || true
+          soroban config identity import deployer "$STELLAR_SECRET_KEY" >/dev/null 2>&1 || true
+          soroban config identity use deployer
+
+      - name: Deploy contract
+        id: deploy
+        working-directory: contracts/escrow/
+        run: |
+          set -e
+          LOG_FILE="$RUNNER_TEMP/soroban-deploy.log"
+          soroban contract deploy \
+            --wasm target/wasm32-unknown-unknown/release/escrow.wasm \
+            --network testnet \
+            --source deployer 2>&1 | tee "$LOG_FILE"
+
+          CONTRACT_ID=$(grep -oE 'C[A-Za-z0-9]+' "$LOG_FILE" | tail -n 1)
+          if [ -z "$CONTRACT_ID" ]; then
+            echo "Could not determine contract ID from deploy output" >&2
+            exit 1
+          fi
+          echo "contract_id=$CONTRACT_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Comment contract ID on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const contractId = '${{ steps.deploy.outputs.contract_id }}';
+            const body = [
+              '## 🚀 Contract Deployment',
+              '',
+              `Contract ID: \`${contractId}\``,
+              '',
+              `Commit: \`${context.sha}\``,
+            ].join('\n');
+
+            const prs = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: context.sha,
+            });
+
+            for (const pr of prs.data) {
+              const { data: comments } = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+              });
+
+              const existing = comments.find(c =>
+                c.user.login === 'github-actions[bot]' &&
+                c.body.includes('🚀 Contract Deployment')
+              );
+
+              if (existing) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existing.id,
+                  body,
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  body,
+                });
+              }
+            }

@@ -26,9 +26,34 @@ vi.mock("@/lib/wallet-context", () => ({
 
 vi.mock("@/lib/stellar", () => ({
   getExplorerTxUrl: (hash: string) => `https://example.test/tx/${hash}`,
+  isValidStellarAddress: (address: string) =>
+    /^[GC][A-Z2-7]{55}$/.test(address.trim()),
 }));
 
-const TOKEN_ADDRESS = "GTOKEN000000000000000000000000000000000000000000000000000";
+vi.mock("@/components/RichTextEditor", () => ({
+  __esModule: true,
+  default: ({
+    value,
+    onChange,
+    labelId,
+    required,
+  }: {
+    value: string;
+    onChange: (html: string) => void;
+    labelId?: string;
+    required?: boolean;
+  }) => (
+    <textarea
+      aria-labelledby={labelId}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      required={required}
+    />
+  ),
+  htmlToPlainText: (html: string) => html.replace(/<[^>]+>/g, "").trim(),
+}));
+
+const TOKEN_ADDRESS = "GABC7DEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUV";
 
 function fillRequiredFields({
   amount,
@@ -57,6 +82,11 @@ describe("Post job amount input validation", () => {
     mockUseWallet.mockReturnValue({
       wallet: "GWALLET000000000000000000000000000000000000000000000000000",
       connectWallet: vi.fn(),
+    });
+    vi.stubGlobal("crypto", {
+      subtle: {
+        digest: vi.fn().mockResolvedValue(new Uint8Array(32).buffer),
+      },
     });
   });
 

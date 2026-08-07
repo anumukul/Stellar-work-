@@ -67,17 +67,14 @@ export default function ImageGallery({ images, columns = 3 }: ImageGalleryProps)
             key={index}
             ref={(node) => thumbnailRef(node, index)}
             role="listitem"
-            className="group relative aspect-square cursor-pointer overflow-hidden rounded-lg border border-slate-200 bg-slate-100"
-            onClick={() => openLightbox(index)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                openLightbox(index);
-              }
-            }}
-            tabIndex={0}
-            aria-label={`${image.alt}${image.caption ? ` — ${image.caption}` : ""}`}
+            className="group relative aspect-square cursor-pointer rounded-lg border border-slate-200 bg-slate-100"
           >
+            <button
+              type="button"
+              onClick={() => openLightbox(index)}
+              className="h-full w-full overflow-hidden rounded-[inherit] text-left"
+              aria-label={`${image.alt}${image.caption ? ` — ${image.caption}` : ""}`}
+            >
             {loadedThumbnails.has(index) ? (
               <img
                 src={image.thumbnail || image.src}
@@ -101,6 +98,7 @@ export default function ImageGallery({ images, columns = 3 }: ImageGalleryProps)
                 </div>
               </div>
             )}
+            </button>
           </div>
         ))}
       </div>

@@ -70,6 +70,7 @@ describe("Dashboard filter chip toggling", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       })
       .mockResolvedValueOnce({
         client: "GTESTWALLET",
@@ -81,6 +82,7 @@ describe("Dashboard filter chip toggling", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       })
       .mockResolvedValueOnce({
         client: "GCLIENT",
@@ -92,6 +94,7 @@ describe("Dashboard filter chip toggling", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       });
   });
 
@@ -105,6 +108,7 @@ describe("Dashboard filter chip toggling", () => {
       expect(screen.getByRole("button", { name: /Submitted for Review filter, not selected/i })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: /Completed filter, not selected/i })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: /Cancelled filter, not selected/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Disputed filter, not selected/i })).toBeInTheDocument();
     });
   });
 
@@ -233,6 +237,7 @@ describe("Dashboard filter chip toggling", () => {
       deadline: "0",
       token: "GTOKEN",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     render(<DashboardPage />);
@@ -246,8 +251,10 @@ describe("Dashboard filter chip toggling", () => {
     fireEvent.click(cancelledFilter);
 
     await waitFor(() => {
-      expect(screen.getByText("No jobs match this filter")).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Clear filter" })).toBeInTheDocument();
+      expect(screen.getAllByText("No jobs match this filter")).toHaveLength(2);
+      expect(screen.getAllByRole("button", { name: "Clear filter" })).toHaveLength(2);
+      expect(screen.getAllByText("No jobs match this filter").length).toBeGreaterThan(0);
+      expect(screen.getAllByRole("button", { name: "Clear filter" }).length).toBeGreaterThan(0);
     });
   });
 
@@ -262,6 +269,7 @@ describe("Dashboard filter chip toggling", () => {
       deadline: "0",
       token: "GTOKEN",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     render(<DashboardPage />);
@@ -275,11 +283,11 @@ describe("Dashboard filter chip toggling", () => {
     fireEvent.click(cancelledFilter);
 
     await waitFor(() => {
-      expect(screen.getByText("No jobs match this filter")).toBeInTheDocument();
+      expect(screen.getAllByText("No jobs match this filter").length).toBeGreaterThan(0);
     });
 
     // Click Clear filter
-    const clearFilterButton = screen.getByRole("button", { name: "Clear filter" });
+    const clearFilterButton = screen.getAllByRole("button", { name: "Clear filter" })[0];
     fireEvent.click(clearFilterButton);
 
     await waitFor(() => {
