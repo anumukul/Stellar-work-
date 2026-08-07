@@ -23,11 +23,11 @@ export default function RichTextRenderer({ html, className }: RichTextRendererPr
       // Server-side: strip all tags as a safe fallback (SSR will be hydrated)
       return html.replace(/<[^>]+>/g, "");
     }
-    return DOMPurify.sanitize(html, {
+    const sanitized = DOMPurify.sanitize(html, {
       ALLOWED_TAGS: [
         "p", "br",
         "strong", "em", "b", "i",
-        "h1", "h2", "h3",
+        "h1", "h2", "h3", "h4", "h5", "h6",
         "ul", "ol", "li",
         "a",
         "img",
@@ -39,6 +39,9 @@ export default function RichTextRenderer({ html, className }: RichTextRendererPr
       // Force safe link attributes — prevent javascript: hrefs
       FORCE_BODY: true,
     });
+    return sanitized
+      .replace(/<h[1-6]([^>]*)>/gi, "<h2$1>")
+      .replace(/<\/h[1-6]>/gi, "</h2>");
   }, [html]);
 
   useEffect(() => {
@@ -97,9 +100,7 @@ export default function RichTextRenderer({ html, className }: RichTextRendererPr
       ref={containerRef}
       className={[
         "prose prose-sm max-w-none text-sm text-slate-900",
-        "[&_h1]:text-lg [&_h1]:font-semibold [&_h1]:mt-3 [&_h1]:mb-1",
         "[&_h2]:text-base [&_h2]:font-semibold [&_h2]:mt-3 [&_h2]:mb-1",
-        "[&_h3]:text-sm [&_h3]:font-semibold [&_h3]:mt-2 [&_h3]:mb-0.5",
         "[&_ul]:list-disc [&_ul]:pl-5 [&_ul]:my-1",
         "[&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:my-1",
         "[&_li]:my-0.5",

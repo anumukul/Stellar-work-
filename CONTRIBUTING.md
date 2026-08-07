@@ -228,6 +228,56 @@ See [PR title conventions](docs/pr-title-conventions.md) for details.
 - **Refactors**: existing tests must continue to pass. Update tests if behavior
   changes.
 
+## Feature Flags
+
+StellarWork uses a feature flag system (`frontend/lib/feature-flags.ts`) to enable gradual rollouts, A/B testing, and emergency feature disabling without deployments.
+
+### Available Flags
+
+| Flag | Description |
+|------|-------------|
+| `newDashboard` | New analytics dashboard layout |
+| `newMessaging` | Redesigned messaging interface |
+| `biddingSystem` | Freelancer bidding system for jobs |
+| `milestones` | Milestone-based payment releases |
+| `multiToken` | Support for multiple token types |
+
+### Using Flags in Code
+
+```typescript
+import { isEnabled } from "@/lib/feature-flags";
+
+if (isEnabled("newMessaging")) {
+  // render new messaging UI
+}
+```
+
+### Evaluation Order
+
+Flags are evaluated in this priority order (highest first):
+
+1. **URL parameters**: `?feature.newMessaging=true`
+2. **Environment variables**: `NEXT_PUBLIC_FF_NEWMESSAGING=true`
+3. **localStorage overrides**: Set via the admin panel
+4. **Default value**: Defined in `FLAG_DEFINITIONS`
+
+### Admin Panel
+
+Admins can toggle flags from the admin panel. Overrides are persisted in `localStorage` under the key `stellarwork:feature-flags`.
+
+### Adding a New Flag
+
+1. Add the flag to `FLAG_DEFINITIONS` in `frontend/lib/feature-flags.ts` with a default value and description.
+2. Use `isEnabled('yourFlag')` in components.
+3. Write tests covering both enabled and disabled states.
+4. Document the flag in the table above.
+
+### Development Helpers
+
+- Use `logActiveFlags()` to print all active flags to the console for debugging.
+- Use `getActiveFlags()` to inspect the current state of all flags programmatically.
+- Use URL overrides (`?feature.flagName=true`) to test flags without changing localStorage.
+
 ## Getting Help
 
 - **GitHub Issues**: Search existing issues or open a new one.

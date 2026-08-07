@@ -20,8 +20,11 @@ import {
 import {
   type StellarNetwork,
   getPersistedNetwork,
+  getExplicitNetwork,
   getNetworkConfig,
 } from "@/lib/network-config";
+import { recordRecentContractInteraction } from "@/lib/recent-contract-interactions";
+import { classifyError, reportContractTx, reportRpcError } from "@/lib/metrics-client";
 
 function getActiveNetwork(): StellarNetwork {
   if (typeof window !== "undefined") {
@@ -39,8 +42,7 @@ const getRpcUrl = () => getNetworkConfig(getActiveNetwork()).rpcUrl;
 export type { StellarNetwork };
 
 export function getConfiguredNetwork(): StellarNetwork | null {
-  const network = getActiveNetwork();
-  return network;
+  return getExplicitNetwork();
 }
 
 const getNetworkPassphrase = () => getNetworkConfig(getActiveNetwork()).passphrase;
@@ -50,6 +52,13 @@ export const getNetwork = (): StellarNetwork =>
 
 const DEFAULT_POLL_TIMEOUT = 30000;
 const DEFAULT_POLL_INTERVAL = 3000;
+
+// ─── Retry / backoff configuration (Issue #616) ────────────────────────────
+const MAX_RETRIES = 3;
+const RETRY_BACKOFF_MS = [1000, 2000, 4000]; // 1s → 2s → 4s
+
+export { MAX_RETRIES, RETRY_BACKOFF_MS };
+// ────────────────────────────────────────────────────────────────────────────
 
 interface TransactionResult {
   status: "SUCCESS" | "ERROR" | "PENDING";
@@ -101,7 +110,135 @@ export async function signTransaction(xdrValue: string): Promise<string> {
 
 const READONLY_SOURCE = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
 
+// ─── Retry helper with exponential backoff (Issue #616) ─────────────────────
+
+/**
+ * Retryable error patterns for transient network congestion.
+ * Read-only calls (simulations) are not retried — only submit-and-poll flows.
+ */
+function isRetryableNetworkError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err ?? "")).toLowerCase();
+  return (
+    msg.includes("timeout") ||
+    msg.includes("econnrefused") ||
+    msg.includes("econnreset") ||
+    msg.includes("etimedout") ||
+    msg.includes("enotfound") ||
+    msg.includes("network") ||
+    msg.includes("too many requests") ||
+    msg.includes("429") ||
+    msg.includes("503") ||
+    msg.includes("resource limit") ||
+    msg.includes("rate limit")
+  );
+}
+
+/**
+ * Wraps an async operation with exponential backoff retry logic.
+ *
+ * - Only retries transient network/congestion errors (not auth, validation, or
+ *   contract-logic errors).
+ * - Max {@link MAX_RETRIES} attempts with backoff {@link RETRY_BACKOFF_MS}.
+ * - Dispatches `stellar-retry-attempt` custom events on each retry so UI
+ *   components can show countdown / attempt indicators.
+ * - Fails gracefully after exhaustion with a descriptive error message.
+ */
+async function withRetry<T>(
+  operation: () => Promise<T>,
+  operationLabel: string,
+): Promise<T> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await operation();
+    } catch (err) {
+      lastError = err;
+
+      // Only retry on transient network errors, not on contract-logic failures
+      if (!isRetryableNetworkError(err)) {
+        throw err;
+      }
+
+      if (attempt < MAX_RETRIES) {
+        const delay = RETRY_BACKOFF_MS[attempt - 1] ?? RETRY_BACKOFF_MS[RETRY_BACKOFF_MS.length - 1];
+        const nextAttempt = attempt + 1;
+
+        // Dispatch custom event so UI can show retry countdown
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(
+            new CustomEvent("stellar-retry-attempt", {
+              detail: {
+                attempt,
+                nextAttempt,
+                maxRetries: MAX_RETRIES,
+                delayMs: delay,
+                operation: operationLabel,
+                error: err instanceof Error ? err.message : String(err),
+              },
+            }),
+          );
+        }
+
+        console.warn(
+          `[Stellar] ${operationLabel} attempt ${attempt}/${MAX_RETRIES} failed, retrying in ${delay}ms`,
+          (err as Error)?.message,
+        );
+
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        continue;
+      }
+
+      // Exhausted all retries
+      console.error(
+        `[Stellar] ${operationLabel} failed after ${MAX_RETRIES} attempts`,
+        (err as Error)?.message,
+      );
+      throw new Error(
+        `${operationLabel} failed after ${MAX_RETRIES} attempts: ${(err as Error)?.message ?? String(err)}`,
+      );
+    }
+  }
+
+  throw lastError;
+}
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Instrumented entry point: records invocation outcome and latency for the
+ * Prometheus/Grafana dashboards before handing the result back unchanged.
+ */
 export async function callContract(
+  contractId: string,
+  method: string,
+  args: xdr.ScVal[],
+  options?: { readOnly?: boolean; pollTimeout?: number },
+): Promise<TransactionResult> {
+  const operationLabel = `callContract(${contractId.slice(0, 8)}…, ${method})`;
+  const network = getActiveNetwork();
+  const startedAt = Date.now();
+
+  try {
+    const result = await invokeContract(contractId, method, args, options);
+    if (!options?.readOnly) {
+      reportContractTx(
+        method,
+        result.status === "ERROR" ? "error" : "success",
+        network,
+        Date.now() - startedAt,
+      );
+    }
+    return result;
+  } catch (error) {
+    reportRpcError(classifyError(error), network);
+    if (!options?.readOnly) {
+      reportContractTx(method, "error", network, Date.now() - startedAt);
+    }
+    throw error;
+  }
+}
+
+async function invokeContract(
   contractId: string,
   method: string,
   args: xdr.ScVal[],
@@ -111,38 +248,33 @@ export async function callContract(
   const networkPassphrase = getNetworkPassphrase();
   const contract = new Contract(contractId);
 
-  let account;
+  // Read-only calls: simulate once, no retry needed
   if (options?.readOnly) {
+    const server = new rpc.Server(getRpcUrl());
+    const networkPassphrase = getNetworkPassphrase();
+    const contract = new Contract(contractId);
+
+    let account;
     const source = await getPublicKey();
     if (source) {
       account = await server.getAccount(source);
     } else {
       account = new Account(READONLY_SOURCE, "0");
     }
-  } else {
-    const source = await getPublicKey();
-    if (!source) {
-      throw new Error("Connect Freighter before calling contract.");
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase,
+    })
+      .addOperation(contract.call(method, ...args))
+      .setTimeout(60)
+      .build();
+
+    const simulation = await server.simulateTransaction(tx);
+    if (rpc.Api.isSimulationError(simulation)) {
+      throw new Error(simulation.error);
     }
-    account = await server.getAccount(source);
-  }
 
-  const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase,
-  })
-    .addOperation(
-      contract.call(method, ...args)
-    )
-    .setTimeout(60)
-    .build();
-
-  const simulation = await server.simulateTransaction(tx);
-  if (rpc.Api.isSimulationError(simulation)) {
-    throw new Error(simulation.error);
-  }
-
-  if (options?.readOnly) {
     if (!rpc.Api.isSimulationSuccess(simulation)) {
       return { status: "ERROR", errorResult: "Simulation failed" };
     }
@@ -153,44 +285,99 @@ export async function callContract(
     return { status: "SUCCESS", data: scValToNative(retval) };
   }
 
-  const assembled = rpc.assembleTransaction(tx, simulation).build();
-  const prepared = await server.prepareTransaction(assembled);
-  const signedXdr = await signTransaction(prepared.toXDR());
-  const signedTx = TransactionBuilder.fromXDR(signedXdr, networkPassphrase);
-  const sent = await server.sendTransaction(signedTx);
+  // Write calls: wrap in retry for network congestion
+  return withRetry(async () => {
+    const server = new rpc.Server(getRpcUrl());
+    const networkPassphrase = getNetworkPassphrase();
+    const contract = new Contract(contractId);
 
-  if (sent.status === "ERROR") {
-    throw new Error(sent.errorResult?.toXDR().toString() ?? "Contract invocation failed.");
-  }
+    const source = await getPublicKey();
+    if (!source) {
+      throw new Error("Connect Freighter before calling contract.");
+    }
+    const account = await server.getAccount(source);
 
-  if (sent.status === "PENDING") {
-    const pollTimeout = options?.pollTimeout ?? DEFAULT_POLL_TIMEOUT;
-    const pollInterval = DEFAULT_POLL_INTERVAL;
-    const startTime = Date.now();
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase,
+    })
+      .addOperation(contract.call(method, ...args))
+      .setTimeout(60)
+      .build();
 
-    while (Date.now() - startTime < pollTimeout) {
-      await new Promise((resolve) => setTimeout(resolve, pollInterval));
-      const status = await server.getTransaction(sent.hash);
-
-      if (status.status === rpc.Api.GetTransactionStatus.SUCCESS) {
-        return { status: "SUCCESS", hash: sent.hash };
-      }
-
-      if (status.status === rpc.Api.GetTransactionStatus.FAILED) {
-        return {
-          status: "ERROR",
-          hash: sent.hash,
-          errorResult: "Transaction failed.",
-        };
-      }
+    const simulation = await server.simulateTransaction(tx);
+    if (rpc.Api.isSimulationError(simulation)) {
+      throw new Error(simulation.error);
     }
 
-    throw new Error(
-      `Transaction timed out after ${pollTimeout}ms. Hash: ${sent.hash}`,
-    );
-  }
+    const assembled = rpc.assembleTransaction(tx, simulation).build();
+    const prepared = await server.prepareTransaction(assembled);
+    const signedXdr = await signTransaction(prepared.toXDR());
+    const signedTx = TransactionBuilder.fromXDR(signedXdr, networkPassphrase);
+    const sent = await server.sendTransaction(signedTx);
 
-  return { status: "SUCCESS", hash: sent.hash };
+    if (sent.hash) {
+      recordRecentContractInteraction({
+        hash: sent.hash,
+        status: "PENDING",
+        timestamp: Date.now(),
+        method,
+      });
+    }
+
+    if (sent.status === "ERROR") {
+      if (sent.hash) {
+        recordRecentContractInteraction({
+          hash: sent.hash,
+          status: "ERROR",
+          timestamp: Date.now(),
+          method,
+        });
+      }
+      throw new Error(sent.errorResult?.toXDR().toString() ?? "Contract invocation failed.");
+    }
+
+    if (sent.status === "PENDING") {
+      const pollTimeout = options?.pollTimeout ?? DEFAULT_POLL_TIMEOUT;
+      const pollInterval = DEFAULT_POLL_INTERVAL;
+      const startTime = Date.now();
+
+      while (Date.now() - startTime < pollTimeout) {
+        await new Promise((resolve) => setTimeout(resolve, pollInterval));
+        const status = await server.getTransaction(sent.hash);
+
+        if (status.status === rpc.Api.GetTransactionStatus.SUCCESS) {
+          recordRecentContractInteraction({
+            hash: sent.hash,
+            status: "SUCCESS",
+            timestamp: Date.now(),
+            method,
+          });
+          return { status: "SUCCESS", hash: sent.hash } as TransactionResult;
+        }
+
+        if (status.status === rpc.Api.GetTransactionStatus.FAILED) {
+          recordRecentContractInteraction({
+            hash: sent.hash,
+            status: "ERROR",
+            timestamp: Date.now(),
+            method,
+          });
+          return {
+            status: "ERROR",
+            hash: sent.hash,
+            errorResult: "Transaction failed.",
+          } as TransactionResult;
+        }
+      }
+
+      throw new Error(
+        `Transaction timed out after ${pollTimeout}ms. Hash: ${sent.hash}`,
+      );
+    }
+
+    return { status: "SUCCESS", hash: sent.hash } as TransactionResult;
+  }, method);
 }
 
 export function decodeScVal<T = unknown>(value: xdr.ScVal): T {
@@ -208,3 +395,102 @@ export function truncateAddress(address: string, chars = 4): string {
   if (!address || address.length <= chars * 2 + 3) return address;
   return `${address.slice(0, chars + 2)}...${address.slice(-chars)}`;
 }
+
+/** Stellar account (G…) or contract (C…) StrKey — 56 chars, base32 alphabet. */
+const STELLAR_ADDRESS_RE = /^[GC][A-Z2-7]{55}$/;
+
+/**
+ * Validates a Stellar address string (account or contract).
+ * Matches the format used across profile/messages routes.
+ */
+export function isValidStellarAddress(address: string): boolean {
+  return STELLAR_ADDRESS_RE.test(address.trim());
+}
+
+// ─── Contract Error Parser (Issue #620) ──────────────────────────────────────
+
+/**
+ * Mapping from Soroban / Stellar error patterns to user-friendly messages.
+ *
+ * Soroban emits errors in several formats depending on where they originate:
+ *  - `HostError: Error(Contract, #N)` — contract-defined error codes
+ *  - `insufficient balance` / `balance` — token contract balance errors
+ *  - `op_underfunded` — Horizon transaction result code
+ *  - `tx_insufficient_fee` — fee account is underfunded
+ *  - simulation errors that include the phrase "balance" or "amount"
+ *
+ * This utility normalises all of them to readable sentences.
+ */
+export function parseContractError(error: unknown, currentBalance?: string): string {
+  const raw = error instanceof Error ? error.message : String(error ?? "Unknown error");
+  const lower = raw.toLowerCase();
+
+  // ── Insufficient balance patterns ────────────────────────────────────────
+  if (
+    lower.includes("insufficient balance") ||
+    lower.includes("balance is not sufficient") ||
+    lower.includes("op_underfunded") ||
+    lower.includes("underfunded") ||
+    // Soroban SAC (Stellar Asset Contract) emits Error(Contract, #10) for balance
+    /error\(contract,\s*#10\)/.test(lower) ||
+    // Generic "balance" near "error" or "fail"
+    (lower.includes("balance") && (lower.includes("fail") || lower.includes("error") || lower.includes("insufficient")))
+  ) {
+    if (currentBalance !== undefined) {
+      return `Insufficient balance. Your current balance is ${currentBalance} XLM. Please add funds and try again.`;
+    }
+    return "Insufficient balance. Please add funds to your wallet and try again.";
+  }
+
+  // ── Contract error codes ──────────────────────────────────────────────────
+  // Map known escrow contract error numbers (defined in contracts/escrow/src/lib.rs)
+  const contractErrorMatch = raw.match(/error\(contract,\s*#(\d+)\)/i);
+  if (contractErrorMatch) {
+    const code = Number(contractErrorMatch[1]);
+    const CONTRACT_ERRORS: Record<number, string> = {
+      1:  "Not authorized to perform this action.",
+      2:  "Job not found.",
+      3:  "Invalid job status for this action.",
+      4:  "Job amount must be greater than zero.",
+      5:  "Token is not allowed for this operation.",
+      6:  "The job description is too large.",
+      7:  "Platform is currently paused. Please try again later.",
+      8:  "Deadline must be in the future.",
+      9:  "You have reached the maximum number of active jobs.",
+      10: "Insufficient token balance. Please add funds and try again.",
+      11: "The deadline has not passed yet.",
+      12: "Only the assigned freelancer can perform this action.",
+      13: "Only the job client can perform this action.",
+      14: "Job revision limit reached.",
+      15: "Dispute already raised for this job.",
+    };
+    return CONTRACT_ERRORS[code] ?? `Contract error #${code}. Please try again or contact support.`;
+  }
+
+  // ── Wallet / signing errors ───────────────────────────────────────────────
+  if (lower.includes("user declined") || lower.includes("user rejected") || lower.includes("cancelled")) {
+    return "Transaction was cancelled.";
+  }
+  if (lower.includes("connect freighter") || lower.includes("wallet") && lower.includes("connect")) {
+    return "Please connect your Freighter wallet and try again.";
+  }
+
+  // ── Fee errors ────────────────────────────────────────────────────────────
+  if (lower.includes("tx_insufficient_fee") || lower.includes("insufficient fee")) {
+    return "Transaction fee is too low. Please try again — the fee will be adjusted automatically.";
+  }
+
+  // ── Network / timeout errors ──────────────────────────────────────────────
+  if (lower.includes("timeout") || lower.includes("timed out")) {
+    return "The transaction timed out. Please check your network connection and try again.";
+  }
+  if (lower.includes("econnrefused") || lower.includes("network") || lower.includes("fetch")) {
+    return "Network error. Please check your connection and try again.";
+  }
+
+  // ── Fallback: return the original message but trim XDR noise ─────────────
+  // Strip raw XDR blobs and long hex strings to keep messages readable.
+  const trimmed = raw.replace(/[A-Za-z0-9+/]{60,}={0,2}/g, "[data]").slice(0, 200);
+  return trimmed || "Transaction failed. Please try again.";
+}
+// ─────────────────────────────────────────────────────────────────────────────

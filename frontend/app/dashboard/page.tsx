@@ -8,6 +8,7 @@ import {
   getJob,
   getJobCount,
   getCompletedJobsCount,
+  getJobStatusCounts,
   submitWork,
   enforceDeadline,
 } from "@/lib/contract";
@@ -18,18 +19,23 @@ import ExportButton from "@/components/ExportButton";
 import InfoTooltip from "@/components/InfoTooltip";
 import JobCardSkeleton from "@/components/JobCardSkeleton";
 import NoResultsState from "@/components/NoResultsState";
+import PullToRefresh from "@/components/PullToRefresh";
 import SectionCard from "@/components/SectionCard";
 import StatusPill from "@/components/StatusPill";
+import TruncatedAddress from "@/components/TruncatedAddress";
 import { useToast } from "@/components/ToastProvider";
+import RecentContractInteractionsWidget from "@/app/dashboard/RecentContractInteractionsWidget";
+import DashboardWidgets from "@/components/DashboardWidgets";
 import { useNotifications, getEventLabel } from "@/lib/notifications-context";
 import { formatDeadline, toXlm } from "@/lib/format";
 import { isConfirmSuppressed, CONFIRM_KEYS } from "@/lib/confirm-prefs";
 import { useWallet } from "@/lib/wallet-context";
-import type { Job, JobStatus, NotificationEvent } from "@/lib/types";
+import type { Job, JobStatus, NotificationEvent, JobStatusCounts } from "@/lib/types";
+import { STATUS_TO_COUNTS_KEY } from "@/lib/types";
 import { useEffect, useState, useCallback, useRef, type KeyboardEvent } from "react";
 
 type PendingDashAction = {
-  type: "cancelJob" | "approveWork" | "submitWork" | "freelancerCancelJob";
+  type: "cancelJob" | "approveWork" | "submitWork" | "freelancerCancelJob" | "enforceDeadline";
   jobId: number;
   amountXlm: string;
 };
@@ -40,6 +46,7 @@ const STATUS_OPTIONS: JobStatus[] = [
   "SubmittedForReview",
   "Completed",
   "Cancelled",
+  "Disputed",
 ];
 
 const EVENT_DOT: Record<string, string> = {
@@ -88,6 +95,15 @@ export default function DashboardPage() {
   const [actionLoading, setActionLoading] = useState<number | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingDashAction | null>(null);
   const [completedJobsCount, setCompletedJobsCount] = useState<number | null>(null);
+  const [statusCounts, setStatusCounts] = useState<JobStatusCounts>({
+    open: 0,
+    in_progress: 0,
+    submitted_for_review: 0,
+    completed: 0,
+    cancelled: 0,
+    disputed: 0,
+    total: 0,
+  });
   const [selectedJobs, setSelectedJobs] = useState<Set<number>>(new Set());
   const [batchLoading, setBatchLoading] = useState(false);
   const [bookmarkedJobs, setBookmarkedJobs] = useState<Array<{ id: number; job: Job }>>([]);
@@ -120,6 +136,12 @@ export default function DashboardPage() {
       } catch {
         setCompletedJobsCount(null);
       }
+      try {
+        const counts = await getJobStatusCounts();
+        setStatusCounts(counts);
+      } catch {
+        // Silently ignore — status breakdown is non-critical
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to fetch jobs.");
     } finally {
@@ -134,6 +156,7 @@ export default function DashboardPage() {
       setAllJobs([]);
       setBookmarkedJobs([]);
       setCompletedJobsCount(null);
+      setStatusCounts({ open: 0, in_progress: 0, submitted_for_review: 0, completed: 0, cancelled: 0, disputed: 0, total: 0 });
       setLoading(false);
       setError(null);
     }
@@ -254,6 +277,12 @@ export default function DashboardPage() {
         jobId,
         undefined
       );
+    } else if (type === "enforceDeadline") {
+      await handleAction(
+        () => enforceDeadline(wallet, String(jobId)),
+        jobId,
+        undefined
+      );
     }
   };
 
@@ -268,6 +297,7 @@ export default function DashboardPage() {
       approveWork: CONFIRM_KEYS.approveWork,
       submitWork: CONFIRM_KEYS.submitWork,
       freelancerCancelJob: CONFIRM_KEYS.freelancerCancelJob,
+      enforceDeadline: CONFIRM_KEYS.enforceDeadline,
     };
     if (isConfirmSuppressed(keyMap[type])) {
       // Execute directly without dialog
@@ -298,6 +328,12 @@ export default function DashboardPage() {
         } else if (type === "freelancerCancelJob") {
           await handleAction(
             () => freelancerCancelJob(wallet, String(jobId)),
+            jobId,
+            undefined
+          );
+        } else if (type === "enforceDeadline") {
+          await handleAction(
+            () => enforceDeadline(wallet, String(jobId)),
             jobId,
             undefined
           );
@@ -401,7 +437,10 @@ export default function DashboardPage() {
   }
 
   return (
+    <DashboardWidgets>
     <section className="space-y-6">
+      <PullToRefresh onRefresh={fetchJobs} label="Refresh dashboard" />
+
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Dashboard</h1>
         <ExportButton jobs={allJobs} wallet={wallet} />
@@ -419,6 +458,33 @@ export default function DashboardPage() {
           <p className="text-xs text-slate-500">Your jobs on record</p>
         </div>
       </div>
+
+      {/* Platform-wide status breakdown */}
+      {statusCounts.total > 0 && (
+        <SectionCard title="Platform Overview">
+          <p className="mb-3 text-sm text-slate-500">Across all platform jobs</p>
+          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-7">
+            <div className="rounded-md border border-slate-200 p-3 text-center">
+              <p className="text-xl font-bold tabular-nums">{statusCounts.total}</p>
+              <p className="text-xs text-slate-500">Total</p>
+            </div>
+            {(Object.keys(STATUS_LABELS) as JobStatus[]).map((status) => {
+              const key = STATUS_TO_COUNTS_KEY[status];
+              const count = statusCounts[key] ?? 0;
+              return (
+                <div
+                  key={status}
+                  className="rounded-md border border-slate-200 p-3 text-center"
+                >
+                  <p className="text-xl font-bold tabular-nums">{count}</p>
+                  <p className="text-xs text-slate-500">{STATUS_LABELS[status]}</p>
+                </div>
+              );
+            })}
+          </div>
+        </SectionCard>
+      )}
+      <RecentContractInteractionsWidget />
 
       {/* Activity Feed */}
       {notifications.length > 0 && (
@@ -510,7 +576,7 @@ export default function DashboardPage() {
             onRequestAction={requestDashAction}
             onClearFilter={() => setStatusFilter("All")}
             selectedJobs={selectedJobs}
-            onToggleSelect={(id) => {
+            onToggleBatchSelect={(id) => {
               setSelectedJobs((prev) => {
                 const next = new Set(prev);
                 if (next.has(id)) next.delete(id);
@@ -521,7 +587,7 @@ export default function DashboardPage() {
             onBatchApprove={handleBatchApprove}
             batchLoading={batchLoading}
             selectedJobIds={selectedJobIds}
-            onToggleSelect={handleToggleSelect}
+            onToggleSelectBulk={handleToggleSelect}
             onSelectAll={handleSelectAllOpen}
             onDeselectAll={handleDeselectAll}
             onBulkCancel={() => setShowBulkConfirm(true)}
@@ -566,7 +632,14 @@ export default function DashboardPage() {
                     <li key={id}>
                       <article className="interactive-card h-full p-4">
                         <div className="flex items-start justify-between gap-2">
-                          <h3 className="font-medium">Job #{id}</h3>
+                          <div>
+                            <h3 className="font-medium">{job.title || `Job #${id}`}</h3>
+                            {job.category && (
+                              <span className="mt-0.5 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                                {job.category}
+                              </span>
+                            )}
+                          </div>
                           <StatusPill status={job.status} />
                         </div>
                         <div className="mt-2 space-y-1 text-sm text-slate-600">
@@ -577,7 +650,12 @@ export default function DashboardPage() {
                             <span className="shrink-0">XLM</span>
                           </p>
                           <p className="truncate font-mono text-xs text-slate-400">
-                            Token: {job.token ? `${job.token.slice(0, 8)}...${job.token.slice(-4)}` : "N/A"}
+                            Token:{" "}
+                            {job.token ? (
+                              <TruncatedAddress address={job.token} className="font-mono text-xs text-slate-400" />
+                            ) : (
+                              "N/A"
+                            )}
                           </p>
                           <p>
                             {(() => {
@@ -675,6 +753,14 @@ export default function DashboardPage() {
             variant: "danger" as const,
             suppressKey: CONFIRM_KEYS.freelancerCancelJob,
           },
+          enforceDeadline: {
+            title: "Enforce the deadline?",
+            description: "Enforcing finalizes the job at its stated deadline and settles the escrowed amount according to the contract terms. This action cannot be undone.",
+            consequences: ["The job is closed against its deadline.", "The escrowed funds are settled per the contract terms."],
+            confirmLabel: "Yes, enforce deadline",
+            variant: "danger" as const,
+            suppressKey: CONFIRM_KEYS.enforceDeadline,
+          },
         };
         const cfg = configs[type];
         return (
@@ -688,6 +774,7 @@ export default function DashboardPage() {
         );
       })()}
     </section>
+    </DashboardWidgets>
   );
 }
 
@@ -704,11 +791,11 @@ function JobSection({
   onRequestAction,
   onClearFilter,
   selectedJobs,
-  onToggleSelect,
+  onToggleBatchSelect,
   onBatchApprove,
   batchLoading,
   selectedJobIds = new Set(),
-  onToggleSelect,
+  onToggleSelectBulk,
   onSelectAll,
   onDeselectAll,
   onBulkCancel,
@@ -726,45 +813,25 @@ function JobSection({
   onRequestAction: (type: PendingDashAction["type"], jobId: number, amountXlm: string) => void;
   onClearFilter: () => void;
   selectedJobs?: Set<number>;
-  onToggleSelect?: (id: number) => void;
+  onToggleBatchSelect?: (id: number) => void;
   onBatchApprove?: () => void;
   batchLoading?: boolean;
-}) {
-  const pendingReviewIds = allJobs
-    .filter((j) => j.job.status === "SubmittedForReview")
-    .map((j) => j.id);
-  const hasPendingReview = pendingReviewIds.length > 0;
-
-  return (
-    <div>
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-semibold">{title}</h2>
-          <p className="mb-3 text-sm text-slate-500">{subtitle}</p>
-        </div>
-        {role === "client" && hasPendingReview && (
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-400">
-              {selectedJobs?.size ?? 0} of {pendingReviewIds.length} selected
-            </span>
-            <button
-              type="button"
-              onClick={onBatchApprove}
-              disabled={!selectedJobs || selectedJobs.size === 0 || batchLoading}
-              className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {batchLoading ? "Approving..." : `Approve Selected (${selectedJobs?.size ?? 0})`}
-            </button>
   selectedJobIds?: Set<number>;
+  onToggleSelectBulk?: (id: number) => void;
   onToggleSelect?: (id: number) => void;
   onSelectAll?: () => void;
   onDeselectAll?: () => void;
   onBulkCancel?: () => void;
   bulkCancelProgress?: { done: number; total: number; failed: number[] } | null;
 }) {
+  const pendingReviewIds = allJobs
+    .filter((j) => j.job.status === "SubmittedForReview")
+    .map((j) => j.id);
+  const hasPendingReview = pendingReviewIds.length > 0;
   const openClientJobs = role === "client" ? jobs.filter((j) => j.job.status === "Open") : [];
   const selectionCount = openClientJobs.filter((j) => selectedJobIds.has(j.id)).length;
-  const allOpenSelected = openClientJobs.length > 0 && openClientJobs.every((j) => selectedJobIds.has(j.id));
+  const allOpenSelected =
+    openClientJobs.length > 0 && openClientJobs.every((j) => selectedJobIds.has(j.id));
 
   return (
     <div>
@@ -773,31 +840,51 @@ function JobSection({
           <h2 className="text-lg font-semibold">{title}</h2>
           <p className="text-sm text-slate-500">{subtitle}</p>
         </div>
-        {/* Bulk cancel controls — client only, at least 1 open job */}
-        {role === "client" && openClientJobs.length > 0 && (
-          <div className="flex items-center gap-2">
-            <button
-              className="text-xs text-slate-500 underline underline-offset-2 hover:text-slate-800"
-              onClick={allOpenSelected ? onDeselectAll : onSelectAll}
-            >
-              {allOpenSelected ? "Deselect all" : "Select all open"}
-            </button>
-            {selectionCount >= 2 && (
+        <div className="flex flex-wrap items-center gap-2">
+          {role === "client" && hasPendingReview && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-400">
+                {selectedJobs?.size ?? 0} of {pendingReviewIds.length} selected
+              </span>
               <button
-                disabled={!!bulkCancelProgress}
-                className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-60 transition-colors"
-                onClick={onBulkCancel}
+                type="button"
+                onClick={onBatchApprove}
+                disabled={!selectedJobs || selectedJobs.size === 0 || batchLoading}
+                className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {bulkCancelProgress
-                  ? `Cancelling… ${bulkCancelProgress.done}/${bulkCancelProgress.total}`
-                  : `Cancel selected (${selectionCount})`}
+                {batchLoading ? "Approving..." : `Approve Selected (${selectedJobs?.size ?? 0})`}
               </button>
-            )}
-          </div>
-        )}
+            </div>
+          )}
+          {role === "client" && openClientJobs.length > 0 && (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="text-xs text-slate-500 underline underline-offset-2 hover:text-slate-800"
+                onClick={allOpenSelected ? onDeselectAll : onSelectAll}
+              >
+                {allOpenSelected ? "Deselect all" : "Select all open"}
+              </button>
+              {selectionCount >= 2 && (
+                <button
+                  type="button"
+                  disabled={!!bulkCancelProgress}
+                  className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-60 transition-colors"
+                  onClick={onBulkCancel}
+                >
+                  {bulkCancelProgress
+                    ? `Cancelling... ${bulkCancelProgress.done}/${bulkCancelProgress.total}`
+                    : `Cancel selected (${selectionCount})`}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       </div>
       {jobs.length === 0 ? (
-        filterActive && allJobs.length > 0 ? (
+        // The filter-empty CTA renders once (client section) instead of
+        // duplicating an identical message/button across both sections.
+        filterActive && allJobs.length > 0 && role === "client" ? (
           <NoResultsState
             title="No jobs match this filter"
             description="Try a different status or clear the filter to show every job in this section."
@@ -805,14 +892,26 @@ function JobSection({
             onAction={onClearFilter}
           />
         ) : (
-          <EmptyState
-            title="No jobs yet"
-            description="No jobs match this filter yet."
-          />
+          <EmptyState title="No jobs yet" description="No jobs match this filter yet." />
         )
       ) : (
-          <ul className="grid list-none gap-4 sm:grid-cols-2" aria-label={title}>
-            {jobs.map(({ id, job }) => (
+        <ul className="grid list-none gap-4 sm:grid-cols-2" aria-label={title}>
+          {jobs.map(({ id, job }) => {
+            const canBulkCancel = job.status === "Open" && role === "client";
+            const canBatchApprove = job.status === "SubmittedForReview" && role === "client";
+            const isSelected = canBulkCancel
+              ? selectedJobIds.has(id)
+              : canBatchApprove
+                ? (selectedJobs?.has(id) ?? false)
+                : false;
+            const toggle =
+              canBulkCancel
+                ? onToggleSelectBulk
+                : canBatchApprove
+                  ? onToggleBatchSelect
+                  : undefined;
+
+            return (
               <li key={id}>
                 <JobCard
                   id={id}
@@ -821,29 +920,14 @@ function JobSection({
                   role={role}
                   isLoading={actionLoading === id}
                   onAction={onAction}
-                  onRequestCancel={onRequestCancel}
-                  isSelected={selectedJobs?.has(id) ?? false}
-                  onToggleSelect={role === "client" ? onToggleSelect : undefined}
+                  onRequestAction={onRequestAction}
+                  isSelected={isSelected}
+                  onToggleSelect={toggle}
+                  selectMode={canBulkCancel ? "cancel" : canBatchApprove ? "approve" : undefined}
                 />
               </li>
-            ))}
-          </ul>
-        <ul className="grid list-none gap-4 sm:grid-cols-2" aria-label={title}>
-          {jobs.map(({ id, job }) => (
-            <li key={id}>
-              <JobCard
-                id={id}
-                job={job}
-                wallet={wallet}
-                role={role}
-                isLoading={actionLoading === id}
-                onAction={onAction}
-                onRequestAction={onRequestAction}
-                isSelected={selectedJobIds.has(id)}
-                onToggleSelect={job.status === "Open" && role === "client" ? onToggleSelect : undefined}
-              />
-            </li>
-          ))}
+            );
+          })}
         </ul>
       )}
     </div>
@@ -857,11 +941,10 @@ function JobCard({
   role,
   isLoading,
   onAction,
-  onRequestCancel,
-  isSelected,
   onRequestAction,
   isSelected = false,
   onToggleSelect,
+  selectMode,
 }: {
   id: number;
   job: Job;
@@ -869,38 +952,47 @@ function JobCard({
   role: "client" | "freelancer";
   isLoading: boolean;
   onAction: (fn: () => Promise<unknown>, jobId: number, notification?: { event: NotificationEvent; message: string }) => Promise<void>;
-  onRequestCancel: (jobId: number) => void;
   onRequestAction: (type: PendingDashAction["type"], jobId: number, amountXlm: string) => void;
   isSelected?: boolean;
   onToggleSelect?: (id: number) => void;
+  selectMode?: "cancel" | "approve";
 }) {
   const actions = getActions(id, job, wallet, role);
   const amountXlm = `${toXlm(job.amount)} XLM`;
+  const ringClass =
+    isSelected && selectMode === "approve"
+      ? "ring-2 ring-emerald-400"
+      : isSelected
+        ? "ring-2 ring-red-400"
+        : "";
 
   return (
-    <article className={`interactive-card h-full p-4 ${isSelected ? "ring-2 ring-emerald-400" : ""}`}>
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex items-center gap-2">
-          {onToggleSelect && job.status === "SubmittedForReview" && (
-            <input
-              type="checkbox"
-              checked={isSelected ?? false}
-              onChange={() => onToggleSelect(id)}
-              className="h-4 w-4 rounded border-slate-300 text-emerald-600"
-              aria-label={`Select Job #${id} for batch approval`}
-    <article className={`interactive-card h-full p-4 ${isSelected ? "ring-2 ring-red-400" : ""}`}>
+    <article className={`interactive-card h-full p-4 ${ringClass}`}>
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2">
           {onToggleSelect && (
             <input
               type="checkbox"
-              aria-label={`Select Job #${id} for bulk cancellation`}
+              aria-label={
+                selectMode === "approve"
+                  ? `Select Job #${id} for batch approval`
+                  : `Select Job #${id} for bulk cancellation`
+              }
               checked={isSelected}
               onChange={() => onToggleSelect(id)}
-              className="h-4 w-4 rounded border-slate-300 accent-red-600 cursor-pointer"
+              className={`h-4 w-4 rounded border-slate-300 cursor-pointer ${
+                selectMode === "approve" ? "text-emerald-600" : "accent-red-600"
+              }`}
             />
           )}
-          <h3 className="font-medium">Job #{id}</h3>
+          <div>
+            <h3 className="font-medium">{job.title || `Job #${id}`}</h3>
+            {job.category && (
+              <span className="mt-0.5 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                {job.category}
+              </span>
+            )}
+          </div>
         </div>
         <StatusPill status={job.status} />
       </div>
@@ -912,7 +1004,12 @@ function JobCard({
           <span className="shrink-0">XLM</span>
         </p>
         <p className="truncate font-mono text-xs text-slate-400">
-          Token: {job.token ? `${job.token.slice(0, 8)}...${job.token.slice(-4)}` : "N/A"}
+          Token:{" "}
+          {job.token ? (
+            <TruncatedAddress address={job.token} className="font-mono text-xs text-slate-400" />
+          ) : (
+            "N/A"
+          )}
         </p>
         <p>
           {(() => {
@@ -922,25 +1019,30 @@ function JobCard({
           })()}
         </p>
         {role === "client" && job.freelancer && (
-          <p className="truncate">Freelancer: {job.freelancer}</p>
+          <p className="truncate">
+            Freelancer: <TruncatedAddress address={job.freelancer} />
+          </p>
         )}
         {role === "freelancer" && (
-          <p className="truncate">Client: {job.client}</p>
+          <p className="truncate">
+            Client: <TruncatedAddress address={job.client} />
+          </p>
         )}
       </div>
       {actions.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-2">
           {actions.map((action) => {
-            // Actions that need a confirmation dialog
             const needsConfirm =
               action.label === "Cancel Job" ||
               action.label === "Approve Work" ||
-              action.label === "Submit Work";
+              action.label === "Submit Work" ||
+              action.label === "Enforce Deadline";
 
             const actionTypeMap: Record<string, PendingDashAction["type"]> = {
               "Cancel Job": role === "freelancer" ? "freelancerCancelJob" : "cancelJob",
               "Approve Work": "approveWork",
               "Submit Work": "submitWork",
+              "Enforce Deadline": "enforceDeadline",
             };
 
             return (

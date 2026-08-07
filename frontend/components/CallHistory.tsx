@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import TruncatedAddress from "@/components/TruncatedAddress";
 import { loadCallHistory, type CallRecord } from "@/lib/calling";
 
 function formatDuration(ms: number): string {
@@ -13,10 +14,6 @@ function formatDuration(ms: number): string {
 
 function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
-function shortAddr(addr: string): string {
-  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 }
 
 interface CallHistoryProps {
@@ -39,7 +36,7 @@ export default function CallHistory({ peerAddress }: CallHistoryProps) {
 
   return (
     <div className="mt-4 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
-      <h3 className="mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">Call History</h3>
+      <h2 className="mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">Call History</h2>
       <ul className="space-y-1" role="list" aria-label="Call history">
         {displayed.map((call) => (
           <li key={call.id} className="flex items-center justify-between text-xs text-slate-600 dark:text-slate-400">

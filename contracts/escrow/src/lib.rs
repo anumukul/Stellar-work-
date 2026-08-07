@@ -33,6 +33,24 @@ const ARCHIVAL_JOB_BUMP_AMOUNT: u32 = 120_960;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Env, Symbol, Vec};
+
+const PLATFORM_FEE_BPS: u64 = 250;
+const MAX_DESC_PAYLOAD: u32 = 8192;
+const SLA_PENALTY_DENOMINATOR: u32 = 10_000;
+const CANCELLATION_GRACE_PERIOD: u64 = 100;
+const INITIAL_JOB_VERSION: u32 = 1;
+/// Minimum job duration in ledgers — approx. 1 hour at ~5 s per ledger.
+const MIN_JOB_DURATION_LEDGERS: u64 = 720;
+/// Maximum job duration in ledgers — approx. 1 year at ~5 s per ledger.
+const MAX_JOB_DURATION_LEDGERS: u64 = 6_307_200;
+
+fn current_ledger(env: &Env) -> u64 {
+    u64::from(env.ledger().sequence())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
 pub enum JobStatus {
     Open,
     InProgress,
@@ -52,6 +70,8 @@ pub enum JobVisibility {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
 pub struct Job {
     pub client: Address,
     pub freelancer: Option<Address>,
@@ -62,9 +82,14 @@ pub struct Job {
     pub deadline: u64,
     pub token: Address,
     pub revision_count: u32,
+    pub submitted_at: u64,
+    pub title: BytesN<64>,
+    pub category: Symbol,
+    pub version: u32,
 }
 
 /// A single milestone within a milestone-based job.
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Milestone {
@@ -86,12 +111,12 @@ pub struct MilestoneInput {
     pub description_hash: BytesN<32>,
     pub amount: i128,
 }
-/// `client_bps` is the basis-points share (0ÔÇô10 000) awarded to the client.
+/// `client_bps` is the basis-points share (0–10 000) awarded to the client.
 /// The remainder goes to the freelancer (after platform fee).
 /// Examples:
-///   10_000 ÔåÆ client wins everything (no fee deducted, full refund)
-///       0 ÔåÆ freelancer wins everything (fee deducted from payout)
-///    5_000 ÔåÆ 50 / 50 split (fee deducted from total before splitting)
+///   10_000 → client wins everything (no fee deducted, full refund)
+///       0 → freelancer wins everything (fee deducted from payout)
+///    5_000 → 50 / 50 split (fee deducted from total before splitting)
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DashboardStats {
@@ -118,7 +143,7 @@ pub struct FeeTier {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DisputeResolution {
-    /// Basis-points share for the client (0 ÔÇô 10 000).
+    /// Basis-points share for the client (0 – 10 000).
     pub client_bps: u32,
 }
 
@@ -146,6 +171,204 @@ pub struct Attestation {
 
 #[contracttype]
 #[derive(Clone)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct SLAConfig {
+    pub response_time_ledgers: u64,
+    pub delivery_time_ledgers: u64,
+    pub penalty_bps: u64,
+    pub auto_escalate: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct SLAStatus {
+    pub has_config: bool,
+    pub response_time_ledgers: u64,
+    pub delivery_time_ledgers: u64,
+    pub penalty_bps: u64,
+    pub auto_escalate: bool,
+    pub accepted_at: u64,
+    pub breached: bool,
+    pub penalty_applied: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct CancellationRebateInfo {
+    pub grace_deadline: u64,
+    pub is_eligible: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct JobStatusCounts {
+    pub open: u64,
+    pub in_progress: u64,
+    pub submitted_for_review: u64,
+    pub completed: u64,
+    pub cancelled: u64,
+    pub disputed: u64,
+    pub total: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct DiscountTier {
+    pub min_completed_jobs: u32,
+    pub discount_bps: u32,
+}
+
+#[derive(Clone, Debug)]
+#[contracttype]
+pub struct Fees {
+    pub total_collected: i128,
+}
+
+#[derive(Clone, Copy, Debug)]
+#[contracttype]
+pub enum Error {
+    NotAuthorized = 1,
+    JobNotFound = 2,
+    JobNotOpen = 3,
+    JobNotInProgress = 4,
+    JobNotSubmitted = 5,
+    JobNotActive = 6,
+    JobAlreadyCompleted = 7,
+    JobAlreadyCancelled = 8,
+    AlreadyAccepted = 9,
+    InvalidDeadline = 10,
+    InvalidAmount = 11,
+    AmountMismatch = 12,
+    InsufficientBalance = 13,
+    TokenNotAllowed = 14,
+    AlreadyInitialized = 15,
+    NotInitialized = 16,
+    DeadlinePassed = 17,
+    NotWhitelisted = 18,
+    Blacklisted = 19,
+    MilestoneNotFound = 20,
+    NotTrustedForwarder = 21,
+    GracePeriodExpired = 22,
+    NotInGracePeriod = 23,
+    AlreadyWhitelisted = 24,
+    AlreadyBlacklisted = 25,
+    WhitelistModeNotEnabled = 26,
+    AlreadyTrustedForwarder = 27,
+    NegativeAmount = 28,
+    DeadlineTooSoon = 29,
+    PayloadTooLarge = 30,
+     RevisionLimitReached = 31,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RetainerStatus {
+    Active,
+    Completed,
+    Cancelled,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Retainer {
+    pub client: Address,
+    pub freelancer: Address,
+    pub amount: i128,
+    pub interval_ledgers: u64,
+    pub max_renewals: u32,
+    pub current_renewal: u32,
+    pub status: RetainerStatus,
+    pub created_at: u64,
+    pub token: Address,
+    pub last_renewed_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ChainStatus {
+    Pending,
+    Exported,
+    Imported,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CrossChainJob {
+    pub source_chain: String,
+    pub source_job_id: u64,
+    pub origin_contract: Address,
+    pub freelancer: Address,
+    pub amount: i128,
+    pub status: ChainStatus,
+    pub token: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Milestone {
+    pub id: u32,
+    pub description_hash: Bytes,
+    pub amount: i128,
+    pub is_released: bool,
+}
+
+/// Preference for swapping job payment to a different token upon approval.
+/// When set on a job, `approve_work` will swap the payout from the job's
+/// token to `desired_token` before transferring to the freelancer.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SwapPreference {
+    pub desired_token: Address,
+    /// Maximum slippage in basis points (0–10000).
+    pub max_slippage_bps: u32,
+}
+
+/// Aggregate platform statistics returned by `get_platform_stats` (issue #491).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlatformStats {
+    pub total_jobs_posted: u64,
+    pub total_jobs_completed: u64,
+    pub total_volume: i128,
+    pub total_fees_collected: i128,
+    pub unique_clients: u64,
+    pub unique_freelancers: u64,
+}
+
+/// A reusable job configuration saved by a client (issue #446).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct JobTemplate {
+    pub template_id: u64,
+    pub name: soroban_sdk::String,
+    pub description_hash: BytesN<32>,
+    pub amount: i128,
+    pub deadline_duration_ledgers: u64,
+    pub token: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PaymentSplit {
+    pub recipient: Address,
+    pub share_bps: u32,
+    pub reason: soroban_sdk::String,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompletionCertificate {
+    pub job_id: u64,
+    pub client: Address,
+    pub freelancer: Address,
+    pub amount: i128,
+    pub completed_at: u64,
+    pub metadata_uri: soroban_sdk::String,
+}
+
+#[contracttype]
+#[derive(Clone)]
 pub enum DataKey {
     JobsCount,
     Job(u64),
@@ -155,6 +378,8 @@ pub enum DataKey {
     AllowedToken(Address),
     TokenFees(Address),
     FeeBps,
+    /// Whether user-facing contract operations are paused by the administrator.
+    Paused,
     FeeTier(u32),
     FeeTierCount,
     DescriptionPayloadMaxBytes,
@@ -192,6 +417,29 @@ pub enum DataKey {
     UserAttestations(Address),
     JobVisibility(u64),
     InvitedFreelancer(u64, Address),
+    // ── Platform statistics (issue #491) ────────────────────────────────────
+    TotalVolume,
+    UniqueClients,
+    UniqueFreelancers,
+    UniqueClient(Address),
+    UniqueFreelancer(Address),
+    // ── Job templates (issue #446) ───────────────────────────────────────────
+    TemplateCount(Address),
+    Template(Address, u64),
+    // ── Job duration limits (issue #439) ─────────────────────────────────────
+    /// Minimum allowed job duration in ledgers (0 = no restriction).
+    MinJobDuration,
+    /// Maximum allowed job duration in ledgers (0 = no restriction).
+    MaxJobDuration,
+    // ── Payment splits ───────────────────────────────────────────────────────
+    PaymentSplitCount(u64),
+    PaymentSplit(u64, u32),
+    // ── Job view counter ─────────────────────────────────────────────────────
+    JobViewCount(u64),
+    JobViewDedup(u64, Address),
+    // ── Completion certificates ──────────────────────────────────────────────
+    CertificateCount(Address),
+    Certificate(Address, u64),
 }
 
 #[contracterror]
@@ -238,6 +486,60 @@ pub enum Error {
     AttestationNotFound = 34,
     JobNotVisible = 35,
     FreelancerNotInvited = 36,
+    ContractPaused = 37,
+    Fees,
+    CompletedJobsCount,
+    DescPayloadMax,
+    MilestoneCount(u64),
+    Milestone(u64, u32),
+    AllJobIds,
+    SLAConfig(u64),
+    SLAAcceptedAt(u64),
+    SLAPenaltyApplied(u64),
+    FreelancerJobs(Address),
+    ClientJobs(Address),
+    BaseFeeBps,
+    DiscountTiers,
+    UserCompletedJobs(Address),
+}
+
+fn require_admin(env: &Env) -> Address {
+    let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap_or_else(|| panic!("not initialized"));
+    admin.require_auth();
+    admin
+}
+
+fn is_whitelisted(env: &Env, addr: &Address) -> bool {
+    if !env.storage().instance().has(&DataKey::WhitelistMode) {
+        return true;
+    }
+    let mode: bool = env.storage().instance().get(&DataKey::WhitelistMode).unwrap();
+    if !mode {
+        return true;
+    }
+    env.storage().persistent().has(&DataKey::Whitelisted(addr.clone()))
+}
+
+fn is_blacklisted(env: &Env, addr: &Address) -> bool {
+    env.storage().persistent().has(&DataKey::Blacklisted(addr.clone()))
+}
+
+fn check_access(env: &Env, addr: &Address) {
+    if is_blacklisted(env, addr) {
+        panic!("blacklisted")
+    }
+    if !is_whitelisted(env, addr) {
+        panic!("not whitelisted")
+    }
+}
+
+fn get_job(env: &Env, job_id: u64) -> Job {
+    env.storage().persistent().get(&DataKey::Job(job_id)).unwrap_or_else(|| panic!("job not found"))
+}
+
+fn put_job(env: &Env, job_id: u64, job: &Job) {
+    env.storage().persistent().set(&DataKey::Job(job_id), job);
+    env.storage().persistent().extend_ttl(&DataKey::Job(job_id), 10000, 10000);
 }
 
 #[contract]
@@ -289,6 +591,53 @@ impl EscrowContract {
             INSTANCE_BUMP_AMOUNT,
         );
         bump_instance_ttl(&e);
+    pub fn initialize(env: Env, admin: Address, native_token: Address) {
+        if env.storage().instance().has(&DataKey::Admin) {
+            panic!("already initialized");
+        }
+        env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::NativeToken, &native_token);
+        env.storage().instance().set(&DataKey::JobCount, &0u64);
+        env.storage().instance().set(&DataKey::CompletedJobsCount, &0u64);
+        env.storage().instance().set(&DataKey::DescPayloadMax, &MAX_DESC_PAYLOAD);
+        env.storage().instance().set(&DataKey::Fees, &Fees { total_collected: 0 });
+        env.storage().instance().set(&DataKey::AllowedTokenCount, &0u32);
+        env.storage().instance().extend_ttl(10000, 10000);
+    }
+
+    pub fn set_desc_payload_max(env: Env, max: u32) {
+        require_admin(&env);
+        env.storage().instance().set(&DataKey::DescPayloadMax, &max);
+    }
+
+    pub fn get_desc_payload_max(env: Env) -> u32 {
+        env.storage().instance().get(&DataKey::DescPayloadMax).unwrap_or(MAX_DESC_PAYLOAD)
+    }
+
+    // ── Issue #439: job duration limits ───────────────────────────────────────
+
+    /// Set the minimum allowed job duration in ledgers (0 = no restriction).
+    /// Approx: 720 ledgers ≈ 1 hour at 5 s / ledger.
+    pub fn set_min_job_duration(env: Env, min_ledgers: u64) {
+        require_admin(&env);
+        env.storage().instance().set(&DataKey::MinJobDuration, &min_ledgers);
+    }
+
+    /// Set the maximum allowed job duration in ledgers (0 = no restriction).
+    /// Approx: 6_307_200 ledgers ≈ 1 year at 5 s / ledger.
+    pub fn set_max_job_duration(env: Env, max_ledgers: u64) {
+        require_admin(&env);
+        env.storage().instance().set(&DataKey::MaxJobDuration, &max_ledgers);
+    }
+
+    /// Return the configured minimum job duration in ledgers (0 = no restriction).
+    pub fn get_min_job_duration(env: Env) -> u64 {
+        env.storage().instance().get(&DataKey::MinJobDuration).unwrap_or(0)
+    }
+
+    /// Return the configured maximum job duration in ledgers (0 = no restriction).
+    pub fn get_max_job_duration(env: Env) -> u64 {
+        env.storage().instance().get(&DataKey::MaxJobDuration).unwrap_or(0)
     }
 
     pub fn post_job(
@@ -299,6 +648,9 @@ impl EscrowContract {
         description_payload_len: u32,
         deadline: u64,
         token: Address,
+        token_address: Address,
+        title: BytesN<64>,
+        category: Symbol,
     ) -> u64 {
         if amount <= 0 {
             panic_with_error!(&e, Error::InvalidAmount);
@@ -328,6 +680,33 @@ impl EscrowContract {
 
         let token_client = token::Client::new(&e, &token);
         token_client.transfer(&client, &e.current_contract_address(), &amount);
+        check_access(&env, &client);
+        if amount <= 0 { panic!("invalid amount"); }
+        if description_payload_len > Self::get_desc_payload_max(env.clone()) { panic!("payload too large"); }
+        if deadline <= current_ledger(&env) { panic!("deadline too soon"); }
+
+        // ── Issue #439: enforce configurable min/max duration limits ──────────
+        let duration = deadline.saturating_sub(current_ledger(&env));
+        let min_dur: u64 = env.storage().instance().get(&DataKey::MinJobDuration).unwrap_or(0);
+        if min_dur > 0 && duration < min_dur { panic!("job duration below minimum"); }
+        let max_dur: u64 = env.storage().instance().get(&DataKey::MaxJobDuration).unwrap_or(0);
+        if max_dur > 0 && duration > max_dur { panic!("job duration exceeds maximum"); }
+
+        let count: u64 = env.storage().instance().get(&DataKey::JobCount).unwrap_or(0);
+        let job_id = count + 1;
+        env.storage().instance().set(&DataKey::JobCount, &job_id);
+
+        let token_client = token::Client::new(&env, &token_address);
+        token_client.transfer(&client, &env.current_contract_address(), &amount);
+
+        // Track unique clients and cumulative volume for platform stats (#491).
+        if !env.storage().instance().has(&DataKey::UniqueClient(client.clone())) {
+            env.storage().instance().set(&DataKey::UniqueClient(client.clone()), &true);
+            let uc: u64 = env.storage().instance().get(&DataKey::UniqueClients).unwrap_or(0);
+            env.storage().instance().set(&DataKey::UniqueClients, &(uc + 1));
+        }
+        let vol: i128 = env.storage().instance().get(&DataKey::TotalVolume).unwrap_or(0i128);
+        env.storage().instance().set(&DataKey::TotalVolume, &(vol + amount));
 
         let job_id = next_job_id(&e);
         let job_token = token.clone();
@@ -335,6 +714,8 @@ impl EscrowContract {
         let job = Job {
             client: job_client,
             freelancer: Option::None,
+            client: client.clone(),
+            freelancer: None,
             amount,
             description_hash: desc_hash,
             status: JobStatus::Open,
@@ -342,15 +723,19 @@ impl EscrowContract {
             deadline,
             token: job_token,
             revision_count: 0,
+            submitted_at: 0,
+            title,
+            category,
+            version: INITIAL_JOB_VERSION,
         };
 
         set_job(&e, job_id, &job);
-        
+
         let mut all_ids: Vec<u64> = e.storage().persistent().get(&DataKey::AllJobIds).unwrap_or(Vec::new(&e));
         all_ids.push_back(job_id);
         e.storage().persistent().set(&DataKey::AllJobIds, &all_ids);
         e.storage().persistent().extend_ttl(&DataKey::AllJobIds, INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
-        
+
 
         bump_instance_ttl(&e);
 
@@ -391,6 +776,77 @@ impl EscrowContract {
             .publish((Symbol::new(&e, "job_accepted"),), (job_id, freelancer.clone()));
 
         Self::write_audit(&e, freelancer, "accept_job", Some(job_id), "Accepted job");
+
+        put_job(&env, job_id, &job);
+
+        let mut c_jobs: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ClientJobs(client.clone()))
+            .unwrap_or_else(|| Vec::new(&env));
+        c_jobs.push_back(job_id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ClientJobs(client.clone()), &c_jobs);
+
+        job_id
+    }
+
+    pub fn post_job_with_sla(
+        env: Env,
+        client: Address,
+        amount: i128,
+        desc_hash: BytesN<32>,
+        description_payload_len: u32,
+        deadline: u64,
+        token_address: Address,
+        title: BytesN<64>,
+        category: Symbol,
+        sla_config: SLAConfig,
+    ) -> u64 {
+        let job_id = Self::post_job(
+            env.clone(),
+            client,
+            amount,
+            desc_hash,
+            description_payload_len,
+            deadline,
+            token_address,
+            title,
+            category,
+        );
+        env.storage()
+            .persistent()
+            .set(&DataKey::SLAConfig(job_id), &sla_config);
+        job_id
+    }
+
+    pub fn accept_job(env: Env, freelancer: Address, job_id: u64) {
+        freelancer.require_auth();
+        check_access(&env, &freelancer);
+        let mut job = get_job(&env, job_id);
+        if job.status != JobStatus::Open { panic!("job not open"); }
+        if job.freelancer.is_some() { panic!("already accepted"); }
+
+        job.freelancer = Some(freelancer.clone());
+        job.status = JobStatus::InProgress;
+        put_job(&env, job_id, &job);
+
+        if env.storage().persistent().has(&DataKey::SLAConfig(job_id)) {
+            env.storage()
+                .persistent()
+                .set(&DataKey::SLAAcceptedAt(job_id), &current_ledger(&env));
+        }
+
+        let mut f_jobs: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::FreelancerJobs(freelancer.clone()))
+            .unwrap_or_else(|| Vec::new(&env));
+        f_jobs.push_back(job_id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::FreelancerJobs(freelancer.clone()), &f_jobs);
     }
 
     pub fn submit_work(e: Env, freelancer: Address, job_id: u64) {
@@ -428,12 +884,363 @@ impl EscrowContract {
         }
         if job.client != client {
             panic_with_error!(&e, Error::Unauthorized);
+        let mut job = get_job(&env, job_id);
+        if job.status != JobStatus::InProgress { panic!("job not in progress"); }
+        if job.freelancer != Some(freelancer.clone()) { panic!("not assigned freelancer"); }
+
+        job.status = JobStatus::SubmittedForReview;
+        job.submitted_at = current_ledger(&env);
+        put_job(&env, job_id, &job);
+
+        if let Some(sla_config) = env
+            .storage()
+            .persistent()
+            .get::<_, SLAConfig>(&DataKey::SLAConfig(job_id))
+        {
+            let accepted_at: u64 = env
+                .storage()
+                .persistent()
+                .get(&DataKey::SLAAcceptedAt(job_id))
+                .unwrap_or(0);
+            let current = current_ledger(&env);
+            if current > accepted_at + sla_config.delivery_time_ledgers {
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::SLAPenaltyApplied(job_id), &true);
+                env.events().publish(
+                    (soroban_sdk::Symbol::new(&env, "sla_breached"),),
+                    (job_id, freelancer.clone()),
+                );
+            }
+        }
+    }
+
+    pub fn approve_work(env: Env, client: Address, job_id: u64) {
+        client.require_auth();
+        let mut job = get_job(&env, job_id);
+        if job.client != client { panic!("not client"); }
+        if job.status != JobStatus::SubmittedForReview { panic!("job not submitted"); }
+
+        let freelancer = job.freelancer.clone().unwrap();
+
+        let effective_fee_bps = Self::calculate_effective_fee_bps(env.clone(), freelancer.clone());
+        let base_fee = job.amount * effective_fee_bps as i128 / 10_000;
+
+        let sla_penalty = if env
+            .storage()
+            .persistent()
+            .get::<_, bool>(&DataKey::SLAPenaltyApplied(job_id))
+            .unwrap_or(false)
+        {
+            if let Some(sla_cfg) = env
+                .storage()
+                .persistent()
+                .get::<_, SLAConfig>(&DataKey::SLAConfig(job_id))
+            {
+                job.amount * sla_cfg.penalty_bps as i128 / SLA_PENALTY_DENOMINATOR as i128
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
+        let total_deduction = base_fee + sla_penalty;
+        let payout = job.amount - total_deduction;
+
+        let mut fees: Fees = env.storage().instance().get(&DataKey::Fees).unwrap_or(Fees { total_collected: 0 });
+        fees.total_collected += base_fee;
+        env.storage().instance().set(&DataKey::Fees, &fees);
+
+        let token = token::Client::new(&env, &job.token);
+        if let Some(freelancer) = &job.freelancer {
+            // Track unique freelancers for platform stats (#491).
+            if !env.storage().instance().has(&DataKey::UniqueFreelancer(freelancer.clone())) {
+                env.storage().instance().set(&DataKey::UniqueFreelancer(freelancer.clone()), &true);
+                let uf: u64 = env.storage().instance().get(&DataKey::UniqueFreelancers).unwrap_or(0);
+                env.storage().instance().set(&DataKey::UniqueFreelancers, &(uf + 1));
+            }
+            token.transfer(&env.current_contract_address(), freelancer, &payout);
+        }
+        token.transfer(&env.current_contract_address(), &freelancer, &payout);
+
+        job.status = JobStatus::Completed;
+        put_job(&env, job_id, &job);
+
+        let current: u64 = env.storage().instance().get(&DataKey::CompletedJobsCount).unwrap_or(0);
+        env.storage().instance().set(&DataKey::CompletedJobsCount, &(current + 1));
+
+        let user_count = Self::get_user_completed_jobs(env.clone(), freelancer.clone());
+        let key = DataKey::UserCompletedJobs(freelancer.clone());
+        env.storage().persistent().set(&key, &(user_count + 1));
+        env.storage().persistent().extend_ttl(&key, 10000, 10000);
+
+        let cert_count: u64 = env.storage().persistent().get(&DataKey::CertificateCount(freelancer.clone())).unwrap_or(0);
+        let cert = CompletionCertificate {
+            job_id,
+            client: job.client.clone(),
+            freelancer: freelancer.clone(),
+            amount: job.amount,
+            completed_at: current_ledger(&env),
+            metadata_uri: soroban_sdk::String::from_str(&env, ""),
+        };
+        env.storage().persistent().set(&DataKey::Certificate(freelancer.clone(), cert_count), &cert);
+        env.storage().persistent().extend_ttl(&DataKey::Certificate(freelancer.clone(), cert_count), 10000, 10000);
+        env.storage().persistent().set(&DataKey::CertificateCount(freelancer.clone()), &(cert_count + 1));
+
+        env.events().publish(
+            (soroban_sdk::Symbol::new(&env, "certificate_minted"),),
+            (job_id, freelancer.clone(), cert_count),
+        );
+    }
+
+    pub fn cancel_job(env: Env, client: Address, job_id: u64) {
+        client.require_auth();
+        let mut job = get_job(&env, job_id);
+        if job.client != client { panic!("not client"); }
+        if job.status != JobStatus::Open { panic!("job not open"); }
+
+        let token = token::Client::new(&env, &job.token);
+        token.transfer(&env.current_contract_address(), &client, &job.amount);
+
+        job.status = JobStatus::Cancelled;
+        put_job(&env, job_id, &job);
+    }
+
+    pub fn cancel_with_rebate(env: Env, client: Address, job_id: u64) {
+        Self::cancel_job(env, client, job_id);
+    }
+
+    pub fn freelancer_cancel_job(env: Env, freelancer: Address, job_id: u64) {
+        freelancer.require_auth();
+        let mut job = get_job(&env, job_id);
+        if job.freelancer != Some(freelancer) { panic!("not freelancer"); }
+        if job.status != JobStatus::InProgress { panic!("job not in progress"); }
+        let token = token::Client::new(&env, &job.token);
+        token.transfer(&env.current_contract_address(), &job.client, &job.amount);
+        job.status = JobStatus::Cancelled;
+        put_job(&env, job_id, &job);
+    }
+
+    pub fn get_cancellation_rebate_info(env: Env, job_id: u64) -> CancellationRebateInfo {
+        let job = get_job(&env, job_id);
+        let grace_deadline = job.created_at + CANCELLATION_GRACE_PERIOD;
+        let is_eligible = current_ledger(&env) <= grace_deadline && job.status == JobStatus::Open;
+        CancellationRebateInfo { grace_deadline, is_eligible }
+    }
+
+    pub fn enforce_deadline(env: Env, caller: Address, job_id: u64) {
+        caller.require_auth();
+        let mut job = get_job(&env, job_id);
+        if job.client != caller && job.freelancer.as_ref() != Some(&caller) {
+            panic!("unauthorized");
+        }
+        if job.status != JobStatus::Open && job.status != JobStatus::InProgress { panic!("job not active"); }
+        if current_ledger(&env) <= job.deadline { panic!("deadline not passed"); }
+        let token = token::Client::new(&env, &job.token);
+        token.transfer(&env.current_contract_address(), &job.client, &job.amount);
+        job.status = JobStatus::Cancelled;
+        put_job(&env, job_id, &job);
+    }
+
+    pub fn raise_dispute(env: Env, caller: Address, job_id: u64) {
+        caller.require_auth();
+        let mut job = get_job(&env, job_id);
+        if job.client != caller && job.freelancer != Some(caller.clone()) {
+            panic!("unauthorized");
+        }
+        if job.status != JobStatus::InProgress && job.status != JobStatus::SubmittedForReview {
+            panic!("invalid job status for dispute");
         }
 
-        let freelancer = match job.freelancer.clone() {
-            Option::Some(addr) => addr,
-            Option::None => panic_with_error!(&e, Error::InvalidStatus),
+        job.status = JobStatus::Disputed;
+        put_job(&env, job_id, &job);
+    }
+
+    pub fn resolve_dispute(env: Env, admin: Address, job_id: u64, winner: Address) {
+        admin.require_auth();
+        require_admin(&env);
+        let mut job = get_job(&env, job_id);
+        if job.status != JobStatus::Disputed { panic!("job not disputed"); }
+        let fee = job.amount * PLATFORM_FEE_BPS as i128 / 10000;
+        let payout = job.amount - fee;
+        let mut fees: Fees = env.storage().instance().get(&DataKey::Fees).unwrap_or(Fees { total_collected: 0 });
+        fees.total_collected += fee;
+        env.storage().instance().set(&DataKey::Fees, &fees);
+
+        let token = token::Client::new(&env, &job.token);
+        token.transfer(&env.current_contract_address(), &winner, &payout);
+        job.status = JobStatus::Completed;
+        put_job(&env, job_id, &job);
+    }
+
+    pub fn get_job(env: Env, job_id: u64) -> Job {
+        get_job(&env, job_id)
+    }
+
+    pub fn get_job_count(env: Env) -> u64 {
+        env.storage().instance().get(&DataKey::JobCount).unwrap_or(0)
+    }
+
+    pub fn get_completed_jobs_count(env: Env) -> u64 {
+        env.storage().instance().get(&DataKey::CompletedJobsCount).unwrap_or(0)
+    }
+
+    pub fn get_freelancer_jobs(env: Env, freelancer: Address) -> Vec<u64> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::FreelancerJobs(freelancer))
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    pub fn get_client_jobs(env: Env, client: Address) -> Vec<u64> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::ClientJobs(client))
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    }
+
+    pub fn get_job(env: Env, job_id: u64) -> Job {
+        get_job(&env, job_id)
+    }
+
+    pub fn get_job_count(env: Env) -> u64 {
+        env.storage().instance().get(&DataKey::JobCount).unwrap_or(0)
+    }
+
+    pub fn get_completed_jobs_count(env: Env) -> u64 {
+        env.storage().instance().get(&DataKey::CompletedJobsCount).unwrap_or(0)
+    }
+
+    pub fn get_freelancer_jobs(env: Env, freelancer: Address) -> Vec<u64> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::FreelancerJobs(freelancer))
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    pub fn get_client_jobs(env: Env, client: Address) -> Vec<u64> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::ClientJobs(client))
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    pub fn get_job_status_counts(env: Env) -> JobStatusCounts {
+        let count: u64 = env.storage().instance().get(&DataKey::JobCount).unwrap_or(0);
+        let mut open: u64 = 0;
+        let mut in_progress: u64 = 0;
+        let mut submitted_for_review: u64 = 0;
+        let mut completed: u64 = 0;
+        let mut cancelled: u64 = 0;
+        let mut disputed: u64 = 0;
+        for i in 1..=count {
+            if let Some(job) = env.storage().persistent().get::<_, Job>(&DataKey::Job(i)) {
+                match job.status {
+                    JobStatus::Open => open += 1,
+                    JobStatus::InProgress => in_progress += 1,
+                    JobStatus::SubmittedForReview => submitted_for_review += 1,
+                    JobStatus::Completed => completed += 1,
+                    JobStatus::Cancelled => cancelled += 1,
+                    JobStatus::Disputed => disputed += 1,
+                }
+            }
+        }
+        let total = open + in_progress + submitted_for_review + completed + cancelled + disputed;
+        JobStatusCounts {
+            open,
+            in_progress,
+            submitted_for_review,
+            completed,
+            cancelled,
+            disputed,
+            total,
+        }
+    }
+
+    pub fn get_job_version(env: Env, job_id: u64) -> u32 {
+        let job = get_job(&env, job_id);
+        job.version
+    }
+
+    pub fn migrate_job_version(env: Env, caller: Address, job_id: u64, target_version: u32) -> u32 {
+        caller.require_auth();
+        let mut job = get_job(&env, job_id);
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != job.client && caller != admin {
+            panic!("unauthorized");
+        }
+        if target_version < job.version {
+            panic!("cannot downgrade version");
+        }
+        let old_version = job.version;
+        job.version = target_version;
+        put_job(&env, job_id, &job);
+
+        env.events().publish(
+            (soroban_sdk::Symbol::new(&env, "job_version_migrated"),),
+            (job_id, old_version, target_version),
+        );
+        target_version
+    }
+
+    pub fn get_sla_status(env: Env, job_id: u64) -> SLAStatus {
+        let has_config = env.storage().persistent().has(&DataKey::SLAConfig(job_id));
+        let (response_time_ledgers, delivery_time_ledgers, penalty_bps, auto_escalate) =
+            if has_config {
+                let cfg: SLAConfig = env.storage().persistent().get(&DataKey::SLAConfig(job_id)).unwrap();
+                (cfg.response_time_ledgers, cfg.delivery_time_ledgers, cfg.penalty_bps, cfg.auto_escalate)
+            } else {
+                (0u64, 0u64, 0u64, false)
+            };
+        let accepted_at: u64 = env.storage().persistent().get(&DataKey::SLAAcceptedAt(job_id)).unwrap_or(0);
+        let breached = if accepted_at > 0 && delivery_time_ledgers > 0 {
+            current_ledger(&env) > accepted_at + delivery_time_ledgers
+        } else {
+            false
         };
+        let penalty_applied: bool = env.storage().persistent().get(&DataKey::SLAPenaltyApplied(job_id)).unwrap_or(false);
+        SLAStatus {
+            has_config,
+            response_time_ledgers,
+            delivery_time_ledgers,
+            penalty_bps,
+            auto_escalate,
+            accepted_at,
+            breached,
+            penalty_applied,
+        }
+    }
+
+    pub fn get_sla_status(env: Env, job_id: u64) -> SLAStatus {
+        let has_config = env.storage().persistent().has(&DataKey::SLAConfig(job_id));
+        let (response_time_ledgers, delivery_time_ledgers, penalty_bps, auto_escalate) =
+            if has_config {
+                let cfg: SLAConfig = env.storage().persistent().get(&DataKey::SLAConfig(job_id)).unwrap();
+                (cfg.response_time_ledgers, cfg.delivery_time_ledgers, cfg.penalty_bps, cfg.auto_escalate)
+            } else {
+                (0u64, 0u64, 0u64, false)
+            };
+        let accepted_at: u64 = env.storage().persistent().get(&DataKey::SLAAcceptedAt(job_id)).unwrap_or(0);
+        let breached = if accepted_at > 0 && delivery_time_ledgers > 0 {
+            current_ledger(&env) > accepted_at + delivery_time_ledgers
+        } else {
+            false
+        };
+        let penalty_applied: bool = env.storage().persistent().get(&DataKey::SLAPenaltyApplied(job_id)).unwrap_or(false);
+        SLAStatus {
+            has_config,
+            response_time_ledgers,
+            delivery_time_ledgers,
+            penalty_bps,
+            auto_escalate,
+            accepted_at,
+            breached,
+            penalty_applied,
+        }
+    }
 
         // Check if client or freelancer is fee-exempted
         let client_exempted = Self::is_fee_exempted(e.clone(), job.client.clone());
@@ -451,14 +1258,25 @@ impl EscrowContract {
 
         let current_fees = get_token_fees(&e, &job.token);
         let updated_fees = checked_add(&e, current_fees, fee);
+    pub fn set_discount_tiers(env: Env, admin: Address, tiers: Vec<DiscountTier>) {
+        admin.require_auth();
+        require_admin(&env);
+        env.storage().instance().set(&DataKey::DiscountTiers, &tiers);
+    }
 
-        job.status = JobStatus::Completed;
-        set_job(&e, job_id, &job);
-        e.storage()
+    pub fn get_user_completed_jobs(env: Env, user: Address) -> u32 {
+        env.storage()
             .persistent()
-            .set(&DataKey::TokenFees(job.token.clone()), &updated_fees);
-        bump_token_fees_ttl(&e, &job.token);
-        bump_instance_ttl(&e);
+            .get(&DataKey::UserCompletedJobs(user))
+            .unwrap_or(0)
+    }
+
+    pub fn get_discount_tiers(env: Env) -> Vec<DiscountTier> {
+        env.storage()
+            .instance()
+            .get(&DataKey::DiscountTiers)
+            .unwrap_or_else(|| Vec::new(&env))
+    }
 
         let token_client = token::Client::new(&e, &job.token);
         token_client.transfer(&e.current_contract_address(), &freelancer, &payout);
@@ -586,6 +1404,7 @@ impl EscrowContract {
             .publish((Symbol::new(&e, "job_cancelled"),), (job_id, client));
     }
 
+
     /// SC-83: allow the original client to add funds to an existing job escrow.
     /// Eligible statuses: Open, InProgress, SubmittedForReview.
     pub fn top_up_escrow(e: Env, client: Address, job_id: u64, additional_amount: i128) {
@@ -666,7 +1485,112 @@ impl EscrowContract {
         }
         if e.ledger().timestamp() <= job.deadline {
             panic_with_error!(&e, Error::DeadlineNotExpired);
+    pub fn calculate_effective_fee_bps(env: Env, user: Address) -> u32 {
+        let base_fee: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::BaseFeeBps)
+            .unwrap_or(PLATFORM_FEE_BPS as u32);
+
+        let completed_jobs = Self::get_user_completed_jobs(env.clone(), user);
+        let tiers = Self::get_discount_tiers(env.clone());
+
+        let mut discount_bps = 0u32;
+        for tier in tiers.iter() {
+            if completed_jobs >= tier.min_completed_jobs {
+                discount_bps = tier.discount_bps;
+            }
         }
+
+        base_fee.saturating_sub(discount_bps)
+    }
+
+            .instance()
+            .get(&DataKey::DiscountTiers)
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    pub fn calculate_effective_fee_bps(env: Env, user: Address) -> u32 {
+        let base_fee: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::BaseFeeBps)
+            .unwrap_or(PLATFORM_FEE_BPS as u32);
+
+        let completed_jobs = Self::get_user_completed_jobs(env.clone(), user);
+        let tiers = Self::get_discount_tiers(env.clone());
+
+        let mut discount_bps = 0u32;
+        for tier in tiers.iter() {
+            if completed_jobs >= tier.min_completed_jobs {
+                discount_bps = tier.discount_bps;
+            }
+        }
+
+        base_fee.saturating_sub(discount_bps)
+    }
+
+    pub fn add_allowed_token(env: Env, admin: Address, token: Address) {
+        admin.require_auth();
+        require_admin(&env);
+        let count: u32 = env.storage().instance().get(&DataKey::AllowedTokenCount).unwrap_or(0);
+        for i in 0..count {
+            let existing: Address = env.storage().instance().get(&DataKey::AllowedToken(i)).unwrap();
+            if existing == token { return; }
+        }
+        env.storage().instance().set(&DataKey::AllowedToken(count), &token);
+        env.storage().instance().set(&DataKey::AllowedTokenCount, &(count + 1));
+    }
+
+    pub fn remove_allowed_token(env: Env, admin: Address, token_addr: Address) {
+        admin.require_auth();
+        require_admin(&env);
+        let count: u32 = env.storage().instance().get(&DataKey::AllowedTokenCount).unwrap_or(0);
+        let mut found = false;
+        for i in 0..count {
+            let existing: Address = env.storage().instance().get(&DataKey::AllowedToken(i)).unwrap();
+            if existing == token_addr {
+                env.storage().instance().remove(&DataKey::AllowedToken(i));
+                found = true;
+            } else if found {
+                let next: Address = env.storage().instance().get(&DataKey::AllowedToken(i)).unwrap();
+                env.storage().instance().set(&DataKey::AllowedToken(i - 1), &next);
+            }
+        }
+        if found {
+            env.storage().instance().remove(&DataKey::AllowedToken(count - 1));
+            env.storage().instance().set(&DataKey::AllowedTokenCount, &(count - 1));
+        }
+    }
+
+    pub fn is_token_allowed(env: Env, token_addr: Address) -> bool {
+        let count: u32 = env.storage().instance().get(&DataKey::AllowedTokenCount).unwrap_or(0);
+        if count == 0 { return true; }
+        for i in 0..count {
+            let existing: Address = env.storage().instance().get(&DataKey::AllowedToken(i)).unwrap();
+            if existing == token_addr { return true; }
+        }
+        false
+    }
+
+    pub fn set_whitelist_mode(env: Env, admin: Address, enabled: bool) {
+        admin.require_auth();
+        require_admin(&env);
+        env.storage().instance().set(&DataKey::WhitelistMode, &enabled);
+    }
+
+    pub fn is_whitelist_mode_enabled(env: Env) -> bool {
+        env.storage().instance().get(&DataKey::WhitelistMode).unwrap_or(false)
+    }
+
+    pub fn add_to_whitelist(env: Env, admin: Address, addr: Address) {
+        admin.require_auth();
+        require_admin(&env);
+        if env.storage().persistent().has(&DataKey::Whitelisted(addr.clone())) {
+            panic!("already whitelisted");
+        }
+        env.storage().persistent().set(&DataKey::Whitelisted(addr), &true);
+    }
 
         job.status = JobStatus::Cancelled;
         set_job(&e, job_id, &job);
@@ -719,13 +1643,36 @@ impl EscrowContract {
                 &e.current_contract_address(),
                 &freelancer,
                 &freelancer_share,
-        );
+            );
         }
 
         e.events().publish(
             (Symbol::new(&e, "job_mutually_cancelled"),),
             (job_id, client, freelancer, client_share, freelancer_share),
         );
+    }
+
+    pub fn remove_from_whitelist(env: Env, admin: Address, addr: Address) {
+        admin.require_auth();
+        require_admin(&env);
+        env.storage().persistent().remove(&DataKey::Whitelisted(addr));
+    }
+
+    pub fn is_whitelisted(env: Env, addr: Address) -> bool {
+        is_whitelisted(&env, &addr)
+    }
+
+    pub fn is_whitelisted_public(env: Env, addr: Address) -> bool {
+        is_whitelisted(&env, &addr)
+    }
+
+    pub fn add_to_blacklist(env: Env, admin: Address, addr: Address) {
+        admin.require_auth();
+        require_admin(&env);
+        if env.storage().persistent().has(&DataKey::Blacklisted(addr.clone())) {
+            panic!("already blacklisted");
+        }
+        env.storage().persistent().set(&DataKey::Blacklisted(addr), &true);
     }
 
     pub fn extend_job_ttl(e: Env, caller: Address, job_id: u64) {
@@ -786,6 +1733,109 @@ impl EscrowContract {
         );
     }
 
+    pub fn remove_from_blacklist(env: Env, admin: Address, addr: Address) {
+        admin.require_auth();
+        require_admin(&env);
+        env.storage().persistent().remove(&DataKey::Blacklisted(addr));
+    }
+
+    pub fn is_blacklisted(env: Env, addr: Address) -> bool {
+        is_blacklisted(&env, &addr)
+    }
+
+    pub fn is_blacklisted_public(env: Env, addr: Address) -> bool {
+        is_blacklisted(&env, &addr)
+    }
+
+    pub fn set_trusted_forwarder(env: Env, admin: Address, forwarder: Address) {
+        admin.require_auth();
+        require_admin(&env);
+        env.storage().persistent().set(&DataKey::TrustedForwarder(forwarder), &true);
+    }
+
+    pub fn is_trusted_forwarder(env: Env, forwarder: Address) -> bool {
+        env.storage().persistent().has(&DataKey::TrustedForwarder(forwarder))
+    }
+
+    pub fn relay_cancel_job(env: Env, forwarder: Address, client: Address, job_id: u64) {
+        forwarder.require_auth();
+        if !Self::is_trusted_forwarder(env.clone(), forwarder) { panic!("not trusted forwarder"); }
+        let mut job = get_job(&env, job_id);
+        if job.client != client { panic!("not authorized"); }
+        if job.status != JobStatus::Open { panic!("job not open"); }
+        let token = token::Client::new(&env, &job.token);
+        token.transfer(&env.current_contract_address(), &client, &job.amount);
+        job.status = JobStatus::Cancelled;
+        put_job(&env, job_id, &job);
+    }
+
+    pub fn get_native_token(env: Env) -> Address {
+        env.storage().instance().get(&DataKey::NativeToken).unwrap()
+    }
+
+    pub fn create_job_with_milestones(
+        env: Env,
+        client: Address,
+        milestones: Vec<Milestone>,
+        deadline: u64,
+        token_address: Address,
+        title: BytesN<64>,
+        category: Symbol,
+    ) -> u64 {
+        client.require_auth();
+        check_access(&env, &client);
+        let mut total: i128 = 0;
+        for m in milestones.iter() {
+            if m.amount <= 0 { panic!("invalid amount"); }
+            total += m.amount;
+        }
+        if total <= 0 { panic!("invalid amount"); }
+
+        let token = token::Client::new(&env, &token_address);
+        let balance = token.balance(&client);
+        if balance < total { panic!("insufficient balance"); }
+        token.transfer(&client, &env.current_contract_address(), &total);
+
+        let mut count: u64 = env.storage().instance().get(&DataKey::JobCount).unwrap_or(0);
+        count += 1;
+        env.storage().instance().set(&DataKey::JobCount, &count);
+
+        let milestone_count: u32 = milestones.len() as u32;
+        env.storage().persistent().set(&DataKey::MilestoneCount(count), &milestone_count);
+        for (i, m) in milestones.iter().enumerate() {
+            env.storage().persistent().set(&DataKey::Milestone(count, i as u32), &m);
+        }
+
+        let job = Job {
+            client: client.clone(),
+            freelancer: None,
+            amount: total,
+            description_hash: BytesN::from_array(&env, &[0u8; 32]),
+            status: JobStatus::Open,
+            created_at: current_ledger(&env),
+            deadline,
+            token: token_address,
+            revision_count: 0,
+            submitted_at: 0,
+            title,
+            category,
+            version: INITIAL_JOB_VERSION,
+        };
+        put_job(&env, count, &job);
+
+        let mut c_jobs: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ClientJobs(client.clone()))
+            .unwrap_or_else(|| Vec::new(&env));
+        c_jobs.push_back(count);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ClientJobs(client.clone()), &c_jobs);
+
+        count
+    }
+
     pub fn raise_dispute(e: Env, caller: Address, job_id: u64) {
         let mut job = get_job_or_panic(&e, job_id);
         caller.require_auth();
@@ -835,14 +1885,14 @@ impl EscrowContract {
     /// Resolve a disputed job.
     ///
     /// Only the admin may call this.  `resolution.client_bps` is the share
-    /// (in basis-points, 0 ÔÇô 10 000) of the escrowed amount returned to the
+    /// (in basis-points, 0 – 10 000) of the escrowed amount returned to the
     /// client.  The remainder is paid to the freelancer after deducting the
     /// platform fee.
     ///
     /// Special cases:
-    ///   client_bps == 10_000  ÔåÆ full refund to client, no fee, status = Cancelled
-    ///   client_bps == 0       ÔåÆ full payout to freelancer minus fee, status = Completed
-    ///   0 < client_bps < 10_000 ÔåÆ split: client gets their share (no fee on
+    ///   client_bps == 10_000  → full refund to client, no fee, status = Cancelled
+    ///   client_bps == 0       → full payout to freelancer minus fee, status = Completed
+    ///   0 < client_bps < 10_000 → split: client gets their share (no fee on
     ///                             client portion), freelancer gets remainder
     ///                             minus platform fee, status = Completed
     pub fn resolve_dispute(e: Env, job_id: u64, resolution: DisputeResolution) {
@@ -854,7 +1904,7 @@ impl EscrowContract {
     /// Resolve multiple disputed jobs in one contract call (admin only).
     ///
     /// `job_ids` and `resolutions` must be the same length and no longer than
-    /// `MAX_BATCH_DISPUTES` (20). All resolutions are processed atomically ÔÇö
+    /// `MAX_BATCH_DISPUTES` (20). All resolutions are processed atomically —
     /// if any single dispute fails (e.g. job is not in Disputed status) the
     /// entire batch reverts.
     pub fn batch_resolve_disputes(e: Env, job_ids: Vec<u64>, resolutions: Vec<DisputeResolution>) {
@@ -875,7 +1925,7 @@ impl EscrowContract {
         }
     }
 
-    /// Issue #463 ÔÇö Explicit split-outcome resolution.
+    /// Issue #463 — Explicit split-outcome resolution.
     ///
     /// Admin awards `client_payout_bps` basis-points of escrowed funds to the
     /// client; the remainder (minus platform fee) goes to the freelancer.
@@ -893,7 +1943,77 @@ impl EscrowContract {
         let mut job = get_job_or_panic(&e, job_id);
         if job.status != JobStatus::Disputed {
             panic_with_error!(&e, Error::InvalidStatus);
+        let token = token::Client::new(&env, &token_address);
+        let balance = token.balance(&client);
+        if balance < total { panic!("insufficient balance"); }
+        token.transfer(&client, &env.current_contract_address(), &total);
+
+        let mut count: u64 = env.storage().instance().get(&DataKey::JobCount).unwrap_or(0);
+        count += 1;
+        env.storage().instance().set(&DataKey::JobCount, &count);
+
+        let milestone_count: u32 = milestones.len() as u32;
+        env.storage().persistent().set(&DataKey::MilestoneCount(count), &milestone_count);
+        for (i, m) in milestones.iter().enumerate() {
+            env.storage().persistent().set(&DataKey::Milestone(count, i as u32), &m);
         }
+
+        let job = Job {
+            client: client.clone(),
+            freelancer: None,
+            amount: total,
+            description_hash: BytesN::from_array(&env, &[0u8; 32]),
+            status: JobStatus::Open,
+            created_at: current_ledger(&env),
+            deadline,
+            token: token_address,
+            revision_count: 0,
+            submitted_at: 0,
+            title,
+            category,
+            version: INITIAL_JOB_VERSION,
+        };
+        put_job(&env, count, &job);
+
+        let mut c_jobs: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ClientJobs(client.clone()))
+            .unwrap_or_else(|| Vec::new(&env));
+        c_jobs.push_back(count);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ClientJobs(client.clone()), &c_jobs);
+
+        count
+    }
+
+        let mut c_jobs: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ClientJobs(client.clone()))
+            .unwrap_or_else(|| Vec::new(&env));
+        c_jobs.push_back(count);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ClientJobs(client.clone()), &c_jobs);
+
+        count
+    }
+
+    pub fn approve_milestone(env: Env, client: Address, job_id: u64, milestone_id: u32) {
+        client.require_auth();
+        let job = get_job(&env, job_id);
+        if job.client != client { panic!("not authorized"); }
+        if job.status != JobStatus::InProgress && job.status != JobStatus::SubmittedForReview {
+            panic!("job not active");
+        }
+        let mut ms: Milestone = env.storage().persistent()
+            .get(&DataKey::Milestone(job_id, milestone_id))
+            .unwrap_or_else(|| panic!("milestone not found"));
+        if ms.is_released { panic!("already released"); }
+        ms.is_released = true;
+        env.storage().persistent().set(&DataKey::Milestone(job_id, milestone_id), &ms);
 
         let freelancer = match job.freelancer.clone() {
             Option::Some(addr) => addr,
@@ -940,7 +2060,7 @@ impl EscrowContract {
         );
     }
 
-    /// Issue #456 ÔÇö Admin-managed trusted-forwarder whitelist.
+    /// Issue #456 — Admin-managed trusted-forwarder whitelist.
     ///
     /// A trusted forwarder may submit transactions on behalf of users (gasless
     /// UX). Pass `is_trusted = true` to add, `false` to remove.
@@ -970,14 +2090,14 @@ impl EscrowContract {
         );
     }
 
-    /// Issue #456 ÔÇö Returns whether `forwarder` is on the trusted-forwarder whitelist.
+    /// Issue #456 — Returns whether `forwarder` is on the trusted-forwarder whitelist.
     pub fn is_trusted_forwarder(e: Env, forwarder: Address) -> bool {
         e.storage()
             .persistent()
             .has(&DataKey::TrustedForwarder(forwarder))
     }
 
-    /// Issue #456 ÔÇö Gasless job cancellation via a trusted forwarder.
+    /// Issue #456 — Gasless job cancellation via a trusted forwarder.
     ///
     /// The relayer pays the Stellar transaction fee; the client does not need XLM.
     /// The relayer must be on the admin-managed trusted-forwarder whitelist.
@@ -1023,8 +2143,13 @@ impl EscrowContract {
         if new_fee_bps < 0 || new_fee_bps > MAX_FEE_BPS {
             panic_with_error!(&e, Error::FeeTooHigh);
         }
+        let previous_fee_bps = get_fee_bps_storage(&e);
         e.storage().instance().set(&DataKey::FeeBps, &new_fee_bps);
         bump_instance_ttl(&e);
+        e.events().publish(
+            (Symbol::new(&e, "fee_changed"),),
+            (admin, previous_fee_bps, new_fee_bps),
+        );
     }
 
     pub fn get_fee_bps(e: Env) -> i128 {
@@ -1047,12 +2172,16 @@ impl EscrowContract {
         if new_fee < 0 {
             panic_with_error!(&e, Error::InvalidAmount);
         }
+        let previous_fee = get_dispute_fee_storage(&e);
         e.storage()
             .instance()
             .set(&DataKey::DisputeFee, &new_fee);
         bump_instance_ttl(&e);
         e.events()
-            .publish((Symbol::new(&e, "dispute_fee_updated"),), (admin, new_fee));
+            .publish(
+                (Symbol::new(&e, "fee_changed"),),
+                (admin, previous_fee, new_fee),
+            );
     }
 
     pub fn get_job(e: Env, job_id: u64) -> Job {
@@ -1129,7 +2258,7 @@ impl EscrowContract {
             .publish((Symbol::new(&e, "admin_transferred"),), (caller, new_admin));
     }
 
-    // ÔöÇÔöÇ Issue #460: two-step ownership transfer ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── Issue #460: two-step ownership transfer ──────────────────────────────
 
     /// Step 1: nominate `new_admin` as the pending admin.
     ///
@@ -1178,6 +2307,10 @@ impl EscrowContract {
         bump_instance_ttl(&e);
         e.events().publish(
             (Symbol::new(&e, "ownership_transferred"),),
+            (old_admin.clone(), new_admin.clone()),
+        );
+        e.events().publish(
+            (Symbol::new(&e, "admin_transferred"),),
             (old_admin, new_admin),
         );
     }
@@ -1303,6 +2436,103 @@ impl EscrowContract {
             .unwrap_or(JobVisibility::Public)
     }
 
+    pub fn approve_milestone(env: Env, client: Address, job_id: u64, milestone_id: u32) {
+        client.require_auth();
+        let job = get_job(&env, job_id);
+        if job.client != client { panic!("not authorized"); }
+        if job.status != JobStatus::InProgress && job.status != JobStatus::SubmittedForReview {
+            panic!("job not active");
+        }
+        let mut ms: Milestone = env.storage().persistent()
+            .get(&DataKey::Milestone(job_id, milestone_id))
+            .unwrap_or_else(|| panic!("milestone not found"));
+        if ms.is_released { panic!("already released"); }
+        ms.is_released = true;
+        env.storage().persistent().set(&DataKey::Milestone(job_id, milestone_id), &ms);
+
+        let fee = ms.amount * PLATFORM_FEE_BPS as i128 / 10_000;
+        let payout = ms.amount - fee;
+
+        let mut fees: Fees = env.storage().instance().get(&DataKey::Fees).unwrap_or(Fees { total_collected: 0 });
+        fees.total_collected += fee;
+        env.storage().instance().set(&DataKey::Fees, &fees);
+
+        let token = token::Client::new(&env, &job.token);
+        if let Some(freelancer) = &job.freelancer {
+            token.transfer(&env.current_contract_address(), freelancer, &payout);
+        }
+    }
+
+    pub fn complete_milestone(env: Env, client: Address, job_id: u64, milestone_id: u32) {
+        Self::approve_milestone(env, client, job_id, milestone_id);
+    }
+
+    pub fn get_milestones(env: Env, job_id: u64) -> Vec<Milestone> {
+        let count: u32 = env.storage().persistent()
+            .get(&DataKey::MilestoneCount(job_id))
+            .unwrap_or(0);
+        let mut result: Vec<Milestone> = Vec::new(&env);
+        for i in 0..count {
+            let ms: Milestone = env.storage().persistent()
+                .get(&DataKey::Milestone(job_id, i))
+                .unwrap();
+            result.push_back(ms);
+        }
+        result
+    }
+
+    pub fn admin_get_all_jobs(env: Env, admin: Address) -> Vec<Job> {
+        admin.require_auth();
+        require_admin(&env);
+        let count: u64 = env.storage().instance().get(&DataKey::JobCount).unwrap_or(0);
+        let mut jobs: Vec<Job> = Vec::new(&env);
+        for i in 1..=count {
+            if let Some(job) = env.storage().persistent().get(&DataKey::Job(i)) {
+                jobs.push_back(job);
+            }
+        }
+        jobs
+    }
+
+    pub fn admin_get_job_count(env: Env, admin: Address) -> u64 {
+        admin.require_auth();
+        require_admin(&env);
+        env.storage().instance().get(&DataKey::JobCount).unwrap_or(0)
+    }
+
+    pub fn admin_get_jobs_by_status(env: Env, admin: Address, status: JobStatus) -> Vec<Job> {
+        admin.require_auth();
+        require_admin(&env);
+        let count: u64 = env.storage().instance().get(&DataKey::JobCount).unwrap_or(0);
+        let mut result: Vec<Job> = Vec::new(&env);
+        for i in 1..=count {
+            if let Some(job) = env.storage().persistent().get::<_, Job>(&DataKey::Job(i)) {
+                if job.status == status {
+                    result.push_back(job);
+                }
+            }
+        }
+        result
+    }
+
+    pub fn withdraw_fees(env: Env, admin: Address, amount: i128, token_addr: Address) {
+        admin.require_auth();
+        require_admin(&env);
+        let mut fees: Fees = env.storage().instance().get(&DataKey::Fees).unwrap_or(Fees { total_collected: 0 });
+        if amount > fees.total_collected { panic!("insufficient fees"); }
+
+        fees.total_collected -= amount;
+        env.storage().instance().set(&DataKey::Fees, &fees);
+
+        let token = token::Client::new(&env, &token_addr);
+        token.transfer(&env.current_contract_address(), &admin, &amount);
+    }
+
+    pub fn get_fees(env: Env) -> i128 {
+        let fees: Fees = env.storage().instance().get(&DataKey::Fees).unwrap_or(Fees { total_collected: 0 });
+        fees.total_collected
+    }
+
     pub fn set_job_visibility(e: Env, client: Address, job_id: u64, visibility: JobVisibility) {
         client.require_auth();
         let job = get_job_or_panic(&e, job_id);
@@ -1395,11 +2625,15 @@ impl EscrowContract {
             panic_with_error!(&e, Error::InvalidAmount);
         }
 
+        let previous_fee_bps = get_fee_bps_storage(&e);
         e.storage().instance().set(&DataKey::FeeBps, &new_fee_bps);
         bump_instance_ttl(&e);
 
         e.events()
-            .publish((Symbol::new(&e, "fee_updated"),), (caller, new_fee_bps));
+            .publish(
+                (Symbol::new(&e, "fee_changed"),),
+                (caller, previous_fee_bps, new_fee_bps),
+            );
     }
 
     pub fn update_fee_tier(e: Env, caller: Address, tier_index: u32, min_amount: i128, fee_bps: i128) {
@@ -1510,11 +2744,15 @@ impl EscrowContract {
             .persistent()
             .set(&DataKey::AllowedToken(token.clone()), &true);
         e.storage().persistent().extend_ttl(
-            &DataKey::AllowedToken(token),
+            &DataKey::AllowedToken(token.clone()),
             ACTIVE_JOB_LIFETIME_THRESHOLD,
             INSTANCE_BUMP_AMOUNT,
         );
         bump_instance_ttl(&e);
+        e.events().publish(
+            (Symbol::new(&e, "token_whitelist_changed"),),
+            (admin, token, true),
+        );
     }
 
     pub fn remove_allowed_token(e: Env, token: Address) {
@@ -1522,8 +2760,31 @@ impl EscrowContract {
         admin.require_auth();
         e.storage()
             .persistent()
-            .remove(&DataKey::AllowedToken(token));
+            .remove(&DataKey::AllowedToken(token.clone()));
         bump_instance_ttl(&e);
+        e.events().publish(
+            (Symbol::new(&e, "token_whitelist_changed"),),
+            (admin, token, false),
+        );
+    }
+
+    /// Pause or resume user-facing contract operations.
+    pub fn set_paused(e: Env, caller: Address, paused: bool) {
+        caller.require_auth();
+        if caller != load_admin(&e) {
+            panic_with_error!(&e, Error::Unauthorized);
+        }
+        e.storage().instance().set(&DataKey::Paused, &paused);
+        bump_instance_ttl(&e);
+        e.events()
+            .publish((Symbol::new(&e, "pause_toggled"),), (caller, paused));
+    }
+
+    pub fn is_paused(e: Env) -> bool {
+        e.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
     }
 
     pub fn is_token_allowed(e: Env, token: Address) -> bool {
@@ -1625,7 +2886,7 @@ impl EscrowContract {
         );
     }
 
-    // ÔöÇÔöÇ Issue #412: Referral reward system ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── Issue #412: Referral reward system ─────────────────────────────────
 
     /// Register a referral code tied to the caller.
     /// The `referrer` must auth.  Code is case-sensitive and globally unique.
@@ -1719,7 +2980,7 @@ impl EscrowContract {
             (referrer, earnings),
         );
     }
-    
+
     // --- Access Control Endpoints ---
     pub fn set_whitelist_mode(e: Env, admin: Address, enabled: bool) {
         admin.require_auth();
@@ -1924,6 +3185,143 @@ impl EscrowContract {
             total_volume,
         }
     }
+
+    pub fn approve_with_splits(e: Env, client: Address, job_id: u64, splits: Vec<PaymentSplit>) {
+        client.require_auth();
+        require_active_access(&e, &client);
+
+        let mut job = get_job_or_panic(&e, job_id);
+        if job.client != client {
+            panic_with_error!(&e, Error::Unauthorized);
+        }
+        if job.status != JobStatus::SubmittedForReview {
+            panic_with_error!(&e, Error::InvalidStatus);
+        }
+
+        let freelancer = match job.freelancer.clone() {
+            Option::Some(addr) => addr,
+            Option::None => panic_with_error!(&e, Error::InvalidStatus),
+        };
+
+        let mut total_bps: u32 = 0;
+        for i in 0..splits.len() {
+            let split = splits.get(i).unwrap();
+            if split.share_bps > 5_000 {
+                panic_with_error!(&e, Error::InvalidAmount);
+            }
+            total_bps += split.share_bps;
+        }
+        if total_bps != BPS_DENOMINATOR as u32 {
+            panic_with_error!(&e, Error::InvalidAmount);
+        }
+
+        let fee_bps = get_fee_bps_storage(&e);
+        let total_fee = checked_mul_div(&e, job.amount, fee_bps, BPS_DENOMINATOR);
+        let distributable = checked_sub(&e, job.amount, total_fee);
+
+        let current_fees = get_token_fees(&e, &job.token);
+        let updated_fees = checked_add(&e, current_fees, total_fee);
+        e.storage().persistent().set(&DataKey::TokenFees(job.token.clone()), &updated_fees);
+        bump_token_fees_ttl(&e, &job.token);
+
+        let token_client = token::Client::new(&e, &job.token);
+        for i in 0..splits.len() {
+            let split = splits.get(i).unwrap();
+            let share_amount = checked_mul_div(&e, distributable, split.share_bps as i128, BPS_DENOMINATOR);
+            if share_amount > 0 {
+                token_client.transfer(&e.current_contract_address(), &split.recipient, &share_amount);
+            }
+            e.events().publish(
+                (Symbol::new(&e, "payment_split_released"),),
+                (job_id, split.recipient.clone(), share_amount, split.reason.clone()),
+            );
+        }
+
+        job.status = JobStatus::Completed;
+        set_job(&e, job_id, &job);
+        bump_instance_ttl(&e);
+
+        e.events().publish(
+            (Symbol::new(&e, "job_approved"),),
+            (job_id, client.clone(), freelancer.clone(), distributable),
+        );
+    }
+
+    pub fn set_payment_splits(e: Env, client: Address, job_id: u64, splits: Vec<PaymentSplit>) {
+        client.require_auth();
+        let job = get_job_or_panic(&e, job_id);
+        if job.client != client {
+            panic_with_error!(&e, Error::Unauthorized);
+        }
+        if job.status != JobStatus::Open {
+            panic_with_error!(&e, Error::InvalidStatus);
+        }
+
+        let mut total_bps: u32 = 0;
+        for i in 0..splits.len() {
+            let split = splits.get(i).unwrap();
+            if split.share_bps > 5_000 {
+                panic_with_error!(&e, Error::InvalidAmount);
+            }
+            total_bps += split.share_bps;
+        }
+        if total_bps != BPS_DENOMINATOR as u32 {
+            panic_with_error!(&e, Error::InvalidAmount);
+        }
+
+        let count = splits.len();
+        e.storage().persistent().set(&DataKey::PaymentSplitCount(job_id), &(count as u32));
+        for i in 0..count {
+            let split = splits.get(i as u32).unwrap();
+            e.storage().persistent().set(&DataKey::PaymentSplit(job_id, i as u32), &split);
+        }
+        bump_instance_ttl(&e);
+    }
+
+    pub fn get_available_splits(e: Env, job_id: u64) -> Vec<PaymentSplit> {
+        let count: u32 = e.storage().persistent().get(&DataKey::PaymentSplitCount(job_id)).unwrap_or(0);
+        let mut result: Vec<PaymentSplit> = Vec::new(&e);
+        for i in 0..count {
+            if let Some(split) = e.storage().persistent().get::<DataKey, PaymentSplit>(&DataKey::PaymentSplit(job_id, i)) {
+                result.push_back(split);
+            }
+        }
+        result
+    }
+
+    pub fn record_job_view(e: Env, viewer: Address, job_id: u64) {
+        let dedup_key = DataKey::JobViewDedup(job_id, viewer.clone());
+        if e.storage().temporary().has(&dedup_key) {
+            return;
+        }
+        e.storage().temporary().set(&dedup_key, &true);
+        e.storage().temporary().extend_ttl(&dedup_key, 17_280, 17_280);
+
+        let count_key = DataKey::JobViewCount(job_id);
+        let current: u64 = e.storage().persistent().get(&count_key).unwrap_or(0);
+        e.storage().persistent().set(&count_key, &(current + 1));
+        e.storage().persistent().extend_ttl(&count_key, ACTIVE_JOB_LIFETIME_THRESHOLD, ACTIVE_JOB_BUMP_AMOUNT);
+    }
+
+    pub fn get_job_views(e: Env, job_id: u64) -> u64 {
+        e.storage().persistent().get(&DataKey::JobViewCount(job_id)).unwrap_or(0)
+    }
+
+    pub fn get_certificates(e: Env, freelancer: Address, start: u64, limit: u64) -> Vec<CompletionCertificate> {
+        let total: u64 = e.storage().persistent().get(&DataKey::CertificateCount(freelancer.clone())).unwrap_or(0);
+        let mut result: Vec<CompletionCertificate> = Vec::new(&e);
+        let end = if start + limit > total { total } else { start + limit };
+        for i in start..end {
+            if let Some(cert) = e.storage().persistent().get::<DataKey, CompletionCertificate>(&DataKey::Certificate(freelancer.clone(), i)) {
+                result.push_back(cert);
+            }
+        }
+        result
+    }
+
+    pub fn get_certificate_count(e: Env, freelancer: Address) -> u64 {
+        e.storage().persistent().get(&DataKey::CertificateCount(freelancer)).unwrap_or(0)
+    }
 }
 
 /// Core dispute resolution logic shared by `resolve_dispute` and `batch_resolve_disputes`.
@@ -2039,6 +3437,9 @@ fn resolve_single_dispute(e: &Env, admin: &Address, job_id: u64, resolution: Dis
 }
 
 fn require_active_access(e: &Env, address: &Address) {
+    if e.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+        panic_with_error!(e, Error::ContractPaused);
+    }
     if e.storage().persistent().get(&DataKey::Blacklisted(address.clone())).unwrap_or(false) {
         panic_with_error!(e, Error::BlacklistedUser);
     }
@@ -2343,7 +3744,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         assert_eq!(client.get_job_count(), 1);
 
@@ -2378,7 +3779,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         assert_eq!(job_id, 1);
         assert_eq!(client.get_job_count(), 1);
@@ -2419,7 +3820,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
@@ -2450,7 +3851,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.cancel_job(&user, &job_id);
 
@@ -2470,7 +3871,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.approve_work(&user, &job_id);
     }
@@ -2485,7 +3886,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
@@ -2512,7 +3913,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
@@ -2531,7 +3932,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.reject_work(&user, &job_id);
@@ -2548,7 +3949,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
 
@@ -2571,7 +3972,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
@@ -2589,7 +3990,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.extend_job_ttl(&user, &job_id);
         assert_eq!(client.get_job(&job_id).status, JobStatus::Open);
@@ -2605,7 +4006,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.extend_job_ttl(&freelancer, &job_id);
@@ -2623,7 +4024,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let stranger = Address::generate(&env);
         client.extend_job_ttl(&stranger, &job_id);
@@ -2641,7 +4042,7 @@ mod test {
             &32u32,
             &deadline,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
 
@@ -2662,7 +4063,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
 
@@ -2688,7 +4089,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
 
@@ -2706,7 +4107,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
 
@@ -2724,7 +4125,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
 
@@ -2760,7 +4161,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.submit_work(&user, &job_id);
     }
@@ -2776,7 +4177,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
@@ -2796,7 +4197,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
@@ -2817,7 +4218,7 @@ mod test {
             &32u32,
             &deadline,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
 
@@ -2844,7 +4245,7 @@ mod test {
             &32u32,
             &deadline,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.enforce_deadline(&user, &job_id);
@@ -2861,7 +4262,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
 
@@ -2884,7 +4285,7 @@ mod test {
             &32u32,
             &deadline,
             &native_token,
-        
+
             );
 
         env.ledger().with_mut(|li| {
@@ -2904,7 +4305,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
 
         let events = env.events().all();
@@ -2921,7 +4322,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
@@ -3046,7 +4447,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
@@ -3118,13 +4519,13 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.raise_dispute(&user, &job_id);
         assert_eq!(client.get_job(&job_id).status, JobStatus::Disputed);
 
-        // client_bps = 10_000 ÔåÆ full refund to client
+        // client_bps = 10_000 → full refund to client
         client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 10_000 });
         let post_balance = token_client.balance(&user);
         assert_eq!(post_balance, pre_balance);
@@ -3141,7 +4542,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
@@ -3150,7 +4551,7 @@ mod test {
         let token_client = token::Client::new(&env, &native_token);
         let pre_balance = token_client.balance(&freelancer);
 
-        // client_bps = 0 ÔåÆ full payout to freelancer minus fee
+        // client_bps = 0 → full payout to freelancer minus fee
         client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 0 });
 
         let post_balance = token_client.balance(&freelancer);
@@ -3169,7 +4570,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.raise_dispute(&freelancer, &job_id);
@@ -3189,7 +4590,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
@@ -3206,7 +4607,7 @@ mod test {
         assert_eq!(client.get_native_token(), native_token);
     }
 
-    // ÔöÇÔöÇ cancel_job negative / auth tests (issue #19) ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── cancel_job negative / auth tests (issue #19) ─────────────────────────
 
     /// A stranger (neither the job's client nor any authorized party) must not
     /// be able to cancel an Open job. The contract checks ownership AFTER the
@@ -3225,10 +4626,10 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
 
-        // A completely unrelated address attempts to cancel ÔÇö must be rejected
+        // A completely unrelated address attempts to cancel — must be rejected
         let stranger = Address::generate(&env);
         client.cancel_job(&stranger, &job_id);
     }
@@ -3248,7 +4649,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
 
         // Advance the job to InProgress
@@ -3272,7 +4673,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
 
         // Drive the job through the full happy-path to Completed
@@ -3296,7 +4697,7 @@ mod test {
             &32u32,
             &past_deadline,
             &native_token,
-        
+
             );
     }
 
@@ -3311,7 +4712,7 @@ mod test {
             &32u32,
             &future_deadline,
             &native_token,
-        
+
             );
         let job = client.get_job(&job_id);
         assert_eq!(job.status, JobStatus::Open);
@@ -3328,7 +4729,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let job = client.get_job(&job_id);
         assert_eq!(job.status, JobStatus::Open);
@@ -3341,6 +4742,20 @@ mod test {
     fn get_fee_bps_returns_default() {
         let (_, client, _, _, _, _) = setup();
         assert_eq!(client.get_fee_bps(), 250);
+    }
+
+    #[test]
+    fn admin_can_toggle_pause() {
+        let (env, client, admin, _, _, _) = setup();
+        let events_before = env.events().all().len();
+
+        client.set_paused(&admin, &true);
+
+        assert!(client.is_paused());
+        assert_eq!(env.events().all().len(), events_before + 1);
+
+        client.set_paused(&admin, &false);
+        assert!(!client.is_paused());
     }
 
     #[test]
@@ -3371,7 +4786,7 @@ mod test {
         client.update_fee(&1_001i128);
     }
 
-    // ÔöÇÔöÇ resolve_dispute new tests ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── resolve_dispute new tests ────────────────────────────────────────────
 
     #[test]
     fn resolve_dispute_50_50_split() {
@@ -3383,7 +4798,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.raise_dispute(&user, &job_id);
@@ -3414,7 +4829,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.raise_dispute(&freelancer, &job_id);
@@ -3445,7 +4860,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.raise_dispute(&user, &job_id);
@@ -3453,7 +4868,7 @@ mod test {
         // Disable mock auths so the non-admin call actually fails
         let env2 = Env::default();
         let _ = env2; // env with mock_all_auths won't help here; use a fresh address
-                      // The contract uses admin.require_auth() ÔÇö with mock_all_auths any address
+                      // The contract uses admin.require_auth() — with mock_all_auths any address
                       // passes require_auth, but the admin address stored is different from a
                       // random caller. We test the guard by checking the admin address mismatch
                       // causes the require_auth to be for the stored admin, not the random caller.
@@ -3466,9 +4881,9 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
-        // job_id2 is Open, not Disputed ÔåÆ InvalidStatus (#3), but we want Unauthorized (#2)
+        // job_id2 is Open, not Disputed → InvalidStatus (#3), but we want Unauthorized (#2)
         // So raise dispute then call with wrong admin via a separate env without mock_all_auths
         let _ = job_id2;
         // Simplest approach: call resolve_dispute on a non-disputed job to get InvalidStatus
@@ -3488,7 +4903,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 10_000 });
     }
@@ -3504,7 +4919,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         // InProgress, not Disputed
@@ -3521,7 +4936,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.raise_dispute(&user, &job_id);
@@ -3550,7 +4965,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.raise_dispute(&user, &job_id);
@@ -3578,7 +4993,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
@@ -3603,7 +5018,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let second = client.post_job(
             &user,
@@ -3612,7 +5027,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let third = client.post_job(
             &user,
@@ -3621,7 +5036,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         assert_eq!(first, 1);
         assert_eq!(second, 2);
@@ -3644,7 +5059,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let empty_from_future = client.get_jobs_batch(&99u64, &5u32);
         assert_eq!(empty_from_future.len(), 0);
@@ -3677,7 +5092,7 @@ mod test {
         client.transfer_admin(&caller, &new_admin);
     }
 
-    // ÔöÇÔöÇ Issue #92: InvalidAmount error variant ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── Issue #92: InvalidAmount error variant ────────────────────────────────
 
     #[test]
     #[should_panic(expected = "Error(Contract, #11)")]
@@ -3693,7 +5108,7 @@ mod test {
         client.post_job(&user, &-1i128, &hash(&env), &32u32, &0u64, &native_token);
     }
 
-    // ÔöÇÔöÇ Issue #91: Description hash length guard ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── Issue #91: Description hash length guard ──────────────────────────────
 
     #[test]
     #[should_panic(expected = "Error(Contract, #12)")]
@@ -3707,7 +5122,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
     }
 
@@ -3723,12 +5138,12 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         assert_eq!(client.get_job(&job_id).description_hash, valid_hash);
     }
 
-    // ÔöÇÔöÇ Issue #90: get_open_jobs_count ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── Issue #90: get_open_jobs_count ────────────────────────────────────────
 
     #[test]
     fn get_open_jobs_count_starts_at_zero() {
@@ -3747,7 +5162,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         assert_eq!(client.get_open_jobs_count(), 1);
         client.post_job(
@@ -3757,7 +5172,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         assert_eq!(client.get_open_jobs_count(), 2);
     }
@@ -3772,7 +5187,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         assert_eq!(client.get_open_jobs_count(), 1);
         client.accept_job(&freelancer, &job_id);
@@ -3789,7 +5204,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         assert_eq!(client.get_open_jobs_count(), 1);
         client.cancel_job(&user, &job_id);
@@ -3807,7 +5222,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let j2 = client.post_job(
             &user,
@@ -3816,7 +5231,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.post_job(
             &user,
@@ -3825,15 +5240,15 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         assert_eq!(client.get_open_jobs_count(), 3);
 
-        // Accept j1 ÔåÆ InProgress
+        // Accept j1 → InProgress
         client.accept_job(&freelancer, &j1);
         assert_eq!(client.get_open_jobs_count(), 2);
 
-        // Cancel j2 ÔåÆ Cancelled
+        // Cancel j2 → Cancelled
         client.cancel_job(&user, &j2);
         assert_eq!(client.get_open_jobs_count(), 1);
     }
@@ -3848,7 +5263,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
@@ -3872,7 +5287,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
@@ -3890,7 +5305,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.raise_dispute(&user, &job_id);
@@ -3908,7 +5323,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let job_id2 = client.post_job(
             &user,
@@ -3917,7 +5332,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
 
         client.accept_job(&freelancer, &job_id1);
@@ -3947,7 +5362,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         assert_eq!(client.get_cancelled_jobs_count(), 0);
         client.cancel_job(&user, &job_id);
@@ -3966,7 +5381,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.cancel_job(&user, &job_id1);
         assert_eq!(client.get_cancelled_jobs_count(), 1);
@@ -3980,7 +5395,7 @@ mod test {
             &32u32,
             &deadline,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id2);
         env.ledger().with_mut(|li| {
@@ -3997,7 +5412,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id3);
         client.raise_dispute(&user, &job_id3);
@@ -4016,7 +5431,7 @@ mod test {
             &32u32,
             &deadline,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
 
@@ -4039,7 +5454,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.raise_dispute(&user, &job_id);
@@ -4059,7 +5474,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
 
@@ -4086,7 +5501,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
 
         // Client tries to accept their own job
@@ -4105,7 +5520,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let j2 = client.post_job(
             &user,
@@ -4114,7 +5529,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let j3 = client.post_job(
             &user,
@@ -4123,7 +5538,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let j4 = client.post_job(
             &user,
@@ -4132,7 +5547,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
 
         // Complete j1
@@ -4183,7 +5598,7 @@ mod test {
             &128u32,
             &0u64,
             &native_token,
-        
+
             );
         assert_eq!(job_id, 1);
     }
@@ -4199,7 +5614,7 @@ mod test {
             &63u32,
             &0u64,
             &native_token,
-        
+
             );
         assert_eq!(job_id, 1);
     }
@@ -4216,7 +5631,7 @@ mod test {
             &65u32,
             &0u64,
             &native_token,
-        
+
             );
     }
 
@@ -4231,7 +5646,7 @@ mod test {
             &64u32,
             &0u64,
             &native_token,
-        
+
             );
         assert_eq!(job_id, 1);
     }
@@ -4542,7 +5957,7 @@ mod test {
         }
     }
 
-    // ÔöÇÔöÇ Issue #94: Invariant tests for fee accounting ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── Issue #94: Invariant tests for fee accounting ─────────────────────────
 
     #[test]
     fn fee_invariant_fees_never_exceed_total_approvals() {
@@ -4588,7 +6003,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
@@ -4656,7 +6071,7 @@ mod test {
         );
     }
 
-    // ÔöÇÔöÇ Issue #131: Fee update bounds tests ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── Issue #131: Fee update bounds tests ──────────────────────────────
 
     #[test]
     fn fee_update_valid_value_accepted() {
@@ -4673,7 +6088,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let freelancer = Address::generate(&env);
         client.accept_job(&freelancer, &job_id);
@@ -4725,7 +6140,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let freelancer = Address::generate(&env);
         client.accept_job(&freelancer, &job_id);
@@ -4786,7 +6201,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.post_job(
             &user,
@@ -4795,7 +6210,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.post_job(
             &user,
@@ -4804,7 +6219,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         assert_eq!(client.get_client_active_jobs_count(&user), 3);
     }
@@ -4820,7 +6235,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.post_job(
             &user,
@@ -4829,7 +6244,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         assert_eq!(client.get_client_active_jobs_count(&user), 2);
     }
@@ -4846,7 +6261,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.post_job(
             &user,
@@ -4855,7 +6270,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.post_job(
             &user,
@@ -4864,7 +6279,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
     }
 
@@ -4879,7 +6294,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.cancel_job(&user, &job_id);
         assert_eq!(client.get_client_active_jobs_count(&user), 0);
@@ -4890,7 +6305,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         assert_eq!(repost_id, 2);
         assert_eq!(client.get_job(&repost_id).status, JobStatus::Open);
@@ -4916,7 +6331,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let id2 = client.post_job(
             &user,
@@ -4925,7 +6340,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let id3 = client.post_job(
             &user,
@@ -4934,7 +6349,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
 
         // Accept job 2 and 3
@@ -4967,7 +6382,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
@@ -4990,7 +6405,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
@@ -5213,7 +6628,7 @@ mod test {
         }));
         assert!(result.is_err());
     }
-    // ÔöÇÔöÇ cancel_job after accept tests (issue #269) ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── cancel_job after accept tests (issue #269) ────────────────────────────
     //
     // The Open-state cancel_job path is already covered by
     // `cancel_job_refunds_client`. The InProgress (#3 InvalidStatus) path is
@@ -5240,7 +6655,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         // Funds are escrowed during post_job
         assert_eq!(token_client.balance(&user), pre_balance - 750_000);
@@ -5267,7 +6682,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         assert_eq!(client.get_job(&job_id).status, JobStatus::InProgress);
@@ -5292,19 +6707,19 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
 
-        // Client attempts to cancel an in-progress job ÔÇö must be rejected.
+        // Client attempts to cancel an in-progress job — must be rejected.
         client.cancel_job(&user, &job_id);
     }
 
-    // ÔöÇÔöÇ double accept_job tests (issue #279) ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── double accept_job tests (issue #279) ──────────────────────────────────
     //
     // accept_job must reject a second acceptance. Because the contract
     // transitions status to InProgress on the first accept, the wrong-status
-    // guard fires before the JobAlreadyAccepted guard ÔÇö error #3 is the
+    // guard fires before the JobAlreadyAccepted guard — error #3 is the
     // observable behaviour for a same-freelancer retry. We assert that and
     // explicitly cover the JobAlreadyAccepted path by exercising it via the
     // internal invariant: any second accept (different freelancer included)
@@ -5325,7 +6740,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
 
@@ -5347,7 +6762,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
 
@@ -5369,7 +6784,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
 
@@ -5385,7 +6800,7 @@ mod test {
         assert_eq!(job_after.freelancer, Option::Some(freelancer));
     }
 
-    // ÔöÇÔöÇ get_fees after multiple approvals tests (issue #278) ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── get_fees after multiple approvals tests (issue #278) ──────────────────
 
     /// get_fees returns zero before any job has been approved.
     #[test]
@@ -5402,7 +6817,7 @@ mod test {
 
         assert_eq!(client.get_fees(&native_token), 0);
 
-        // First job: 1_000_000 amount, default fee 250 bps ÔåÆ 25_000 fee
+        // First job: 1_000_000 amount, default fee 250 bps → 25_000 fee
         let job_id_a = client.post_job(
             &user,
             &1_000_000i128,
@@ -5410,14 +6825,14 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id_a);
         client.submit_work(&freelancer, &job_id_a);
         client.approve_work(&user, &job_id_a);
         assert_eq!(client.get_fees(&native_token), 25_000);
 
-        // Second job: 2_000_000 amount ÔåÆ 50_000 fee. Accrued should sum.
+        // Second job: 2_000_000 amount → 50_000 fee. Accrued should sum.
         let job_id_b = client.post_job(
             &user,
             &2_000_000i128,
@@ -5425,7 +6840,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id_b);
         client.submit_work(&freelancer, &job_id_b);
@@ -5441,14 +6856,14 @@ mod test {
         assert_eq!(client.get_fees(&native_token), 0);
     }
 
-    // ÔöÇÔöÇ SC-TEST-35 (#314): cancel_job unauthorized non-client ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── SC-TEST-35 (#314): cancel_job unauthorized non-client ────────────────
     //
     // The existing `cancel_job_unauthorized_caller_panics` covers ONE case
     // (random stranger). The issue calls out the full matrix: freelancer
     // AND random address must both fail, and the legitimate client path
     // is preserved as a regression guard.
 
-    /// Freelancer (the *accepted* contractor) cannot cancel ÔÇö only the
+    /// Freelancer (the *accepted* contractor) cannot cancel — only the
     /// client may. The expected panic is `Error(Contract, #2)` =
     /// `Error::Unauthorized`, the canonical "caller is not the
     /// authorised role" reject path.
@@ -5464,9 +6879,9 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
-        // The freelancer is registered (accept_job) ÔÇö but cancel_job
+        // The freelancer is registered (accept_job) — but cancel_job
         // is still client-only. Use a fresh Open job so we exercise the
         // role check, not the status check.
         let _ = freelancer; // acknowledge the binding
@@ -5489,7 +6904,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let attacker = Address::generate(&env);
         client.cancel_job(&attacker, &job_id);
@@ -5513,10 +6928,10 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         // Some other address attempted to cancel and was rejected
-        // (covered above) ÔÇö we don't replay it here because
+        // (covered above) — we don't replay it here because
         // should_panic tests cannot continue after the panic. The
         // assertion that matters: the legitimate client cancel
         // still works.
@@ -5527,12 +6942,12 @@ mod test {
         assert_eq!(token_client.balance(&user), pre_balance);
     }
 
-    // ÔöÇÔöÇ SC-TEST-40 (#319): description_hash persistence on get_job ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── SC-TEST-40 (#319): description_hash persistence on get_job ───────────
     //
     // The hash supplied at post_job must be stored verbatim and round-trip
     // through get_job. Different jobs must keep their distinct hashes.
 
-    /// post_job ÔåÆ get_job returns the exact same `description_hash`
+    /// post_job → get_job returns the exact same `description_hash`
     /// bytes the client supplied.
     #[test]
     fn description_hash_round_trips_through_get_job() {
@@ -5546,7 +6961,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
 
         let job = client.get_job(&job_id);
@@ -5554,7 +6969,7 @@ mod test {
     }
 
     /// Two posts with different hashes must produce two jobs with
-    /// distinct stored hashes ÔÇö there's no global slot that can
+    /// distinct stored hashes — there's no global slot that can
     /// shadow the per-job value.
     #[test]
     fn description_hash_distinct_per_job_no_collision() {
@@ -5589,7 +7004,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let job: Job = client.get_job(&job_id);
         // The point of the test: `description_hash` lives on the
@@ -5602,7 +7017,7 @@ mod test {
         assert_eq!(job.status, JobStatus::Open);
     }
 
-    // ÔöÇÔöÇ SC-TEST-41 (#320): concurrent post_job escrow balances ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── SC-TEST-41 (#320): concurrent post_job escrow balances ───────────────
     //
     // Multiple clients posting in the same test flow must produce a
     // contract escrow balance equal to the sum of locked amounts, and
@@ -5638,7 +7053,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let id_other = client.post_job(
             &user_two,
@@ -5647,7 +7062,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
 
         assert_eq!(client.get_job(&id_user).amount, amount_user);
@@ -5678,7 +7093,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let b = client.post_job(
             &user,
@@ -5687,7 +7102,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let c = client.post_job(
             &user,
@@ -5696,7 +7111,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let _ = (a, c); // only assert on the cancellation of `b`
         let total_posted = 1_000_000 + 2_000_000 + 3_000_000;
@@ -5753,7 +7168,7 @@ mod test {
         assert_eq!(escrow_after - escrow_before, total);
     }
 
-    // ÔöÇÔöÇ SC-TEST-48 (#327): Large job amount fee calculation ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── SC-TEST-48 (#327): Large job amount fee calculation ────────────────────
     //
     // Verify fee math for large token amounts does not overflow and matches
     // the contract formula. Check conservation invariant: payout + fee = amount.
@@ -5782,7 +7197,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         assert_eq!(client.get_job(&job_id).amount, large_amount);
 
@@ -5902,7 +7317,7 @@ mod test {
         );
     }
 
-    // ÔöÇÔöÇ SC-TEST-49 (#328): raise_dispute invalid-status panics ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── SC-TEST-49 (#328): raise_dispute invalid-status panics ─────────────────
     //
     // raise_dispute is only valid on InProgress and SubmittedForReview jobs.
     // Calling it on any other status must panic with Error::InvalidStatus (#3)
@@ -5920,7 +7335,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         // Only InProgress and SubmittedForReview are disputable; Open must panic.
         client.raise_dispute(&user, &job_id);
@@ -5938,7 +7353,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
@@ -5959,7 +7374,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.cancel_job(&user, &job_id);
         // Cancelled jobs are final; dispute cannot be raised.
@@ -5978,7 +7393,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.raise_dispute(&freelancer, &job_id);
@@ -5986,7 +7401,7 @@ mod test {
         client.raise_dispute(&user, &job_id);
     }
 
-    // ÔöÇÔöÇ freelancer_cancel_job tests ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── freelancer_cancel_job tests ────────────────────────────────────────────
 
     #[test]
     fn freelancer_cancel_job_full_refund_to_client() {
@@ -6001,7 +7416,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         assert_eq!(client.get_job(&job_id).status, JobStatus::InProgress);
@@ -6024,7 +7439,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         // Status is Open, not InProgress
         client.freelancer_cancel_job(&freelancer, &job_id);
@@ -6041,7 +7456,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         let stranger = Address::generate(&env);
@@ -6059,7 +7474,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
@@ -6077,7 +7492,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.freelancer_cancel_job(&freelancer, &job_id);
@@ -6102,18 +7517,18 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.freelancer_cancel_job(&freelancer, &job_id);
 
-        // Freelancer forfeits payment ÔÇö balance stays unchanged
+        // Freelancer forfeits payment — balance stays unchanged
         let freelancer_post = token_client.balance(&freelancer);
         assert_eq!(freelancer_post, freelancer_pre);
         assert_eq!(client.get_job(&job_id).status, JobStatus::Cancelled);
     }
 
-    // ÔöÇÔöÇ description_cid storage tests ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── description_cid storage tests ─────────────────────────────────────────
 
     #[test]
     fn store_and_get_description_cid_round_trip() {
@@ -6163,14 +7578,14 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
 
         // Capture pre-failure state
         let job_before = client.get_job(&job_id);
         let escrow_before = token::Client::new(&env, &native_token).balance(&contract_address);
 
-        // Attempt raise_dispute on Open job ÔÇö must panic
+        // Attempt raise_dispute on Open job — must panic
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             client.raise_dispute(&user, &job_id);
         }));
@@ -6197,7 +7612,7 @@ mod test {
         );
     }
 
-    // ÔöÇÔöÇ SC-TEST-50 (#329): resolve_dispute invalid-status panics ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── SC-TEST-50 (#329): resolve_dispute invalid-status panics ──────────────
     //
     // resolve_dispute is only valid on Disputed jobs. Calling it on any other
     // status must panic with Error::InvalidStatus (#3). No token transfers
@@ -6215,11 +7630,11 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
-        // SubmittedForReview is not Disputed ÔÇö must panic.
+        // SubmittedForReview is not Disputed — must panic.
         client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 5_000 });
     }
 
@@ -6235,12 +7650,12 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
         client.approve_work(&user, &job_id);
-        // Completed jobs are final ÔÇö must panic.
+        // Completed jobs are final — must panic.
         client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 5_000 });
     }
 
@@ -6256,10 +7671,10 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.cancel_job(&user, &job_id);
-        // Cancelled jobs are final ÔÇö must panic.
+        // Cancelled jobs are final — must panic.
         client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 5_000 });
     }
 
@@ -6276,7 +7691,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
 
         let token_client = token::Client::new(&env, &native_token);
@@ -6285,7 +7700,7 @@ mod test {
         let escrow_before = token_client.balance(&contract_address);
         let job_before = client.get_job(&job_id);
 
-        // Attempt resolve_dispute on Open job ÔÇö must panic
+        // Attempt resolve_dispute on Open job — must panic
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 5_000 });
         }));
@@ -6320,13 +7735,13 @@ mod test {
         assert_eq!(job_after.amount, job_before.amount);
     }
 
-    // ÔöÇÔöÇ SC-TEST-51 (#330): Full lifecycle state transitions ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── SC-TEST-51 (#330): Full lifecycle state transitions ───────────────────
     //
-    // End-to-end test covering Open ÔåÆ Accepted ÔåÆ Submitted ÔåÆ Completed (and
+    // End-to-end test covering Open → Accepted → Submitted → Completed (and
     // optional cancel path) with explicit status assertions at each step and
     // token balance checks for client, freelancer, and escrow.
 
-    /// Happy path: post_job ÔåÆ accept_job ÔåÆ submit_work ÔåÆ approve_work with
+    /// Happy path: post_job → accept_job → submit_work → approve_work with
     /// status assertions after each transition and balance checks at completion.
     #[test]
     fn full_lifecycle_happy_path_status_and_balances() {
@@ -6338,7 +7753,7 @@ mod test {
         let freelancer_pre = token_client.balance(&freelancer);
         let escrow_pre = token_client.balance(&contract_address);
 
-        // Step 1: post_job ÔåÆ Open
+        // Step 1: post_job → Open
         let amount: i128 = 1_000_000;
         let job_id = client.post_job(&user, &amount, &hash(&env), &32u32, &0u64, &native_token);
         let job = client.get_job(&job_id);
@@ -6352,7 +7767,7 @@ mod test {
             "escrow must hold the job amount after post"
         );
 
-        // Step 2: accept_job ÔåÆ InProgress
+        // Step 2: accept_job → InProgress
         client.accept_job(&freelancer, &job_id);
         let job = client.get_job(&job_id);
         assert_eq!(job.status, JobStatus::InProgress);
@@ -6362,12 +7777,12 @@ mod test {
             "freelancer must be assigned after accept"
         );
 
-        // Step 3: submit_work ÔåÆ SubmittedForReview
+        // Step 3: submit_work → SubmittedForReview
         client.submit_work(&freelancer, &job_id);
         let job = client.get_job(&job_id);
         assert_eq!(job.status, JobStatus::SubmittedForReview);
 
-        // Step 4: approve_work ÔåÆ Completed
+        // Step 4: approve_work → Completed
         client.approve_work(&user, &job_id);
         let job = client.get_job(&job_id);
         assert_eq!(job.status, JobStatus::Completed);
@@ -6478,7 +7893,7 @@ mod test {
             "escrow must hold only the fee after job completion"
         );
 
-        // Withdraw fees ÔåÆ escrow back to pre-post balance
+        // Withdraw fees → escrow back to pre-post balance
         client.withdraw_fees(&native_token);
         assert_eq!(
             token_client.balance(&contract_address),
@@ -6487,7 +7902,7 @@ mod test {
         );
     }
 
-    // ÔöÇÔöÇ SC-TEST-47 (#326): get_job returns full Job struct fields ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── SC-TEST-47 (#326): get_job returns full Job struct fields ─────────────
     //
     // get_job must return every documented field of the Job struct with the
     // correct type and value across lifecycle steps. We compare against a
@@ -6524,9 +7939,9 @@ mod test {
         assert_eq!(client.get_job(&job_id), expected);
     }
 
-    /// accept_job mutates exactly two fields ÔÇö freelancer (None ÔåÆ Some) and
-    /// status (Open ÔåÆ InProgress) ÔÇö and leaves everything else untouched.
-    /// submit_work then advances status (InProgress ÔåÆ SubmittedForReview)
+    /// accept_job mutates exactly two fields — freelancer (None → Some) and
+    /// status (Open → InProgress) — and leaves everything else untouched.
+    /// submit_work then advances status (InProgress → SubmittedForReview)
     /// while preserving the assigned freelancer and all immutable fields.
     #[test]
     fn get_job_fields_update_across_accept_and_submit() {
@@ -6541,7 +7956,7 @@ mod test {
         assert_eq!(posted.freelancer, None);
         assert_eq!(posted.status, JobStatus::Open);
 
-        // accept_job: freelancer assigned, status ÔåÆ InProgress.
+        // accept_job: freelancer assigned, status → InProgress.
         client.accept_job(&freelancer, &job_id);
         let after_accept = client.get_job(&job_id);
         let expected_accept = Job {
@@ -6557,7 +7972,7 @@ mod test {
         };
         assert_eq!(after_accept, expected_accept);
 
-        // submit_work: status ÔåÆ SubmittedForReview, everything else stable.
+        // submit_work: status → SubmittedForReview, everything else stable.
         client.submit_work(&freelancer, &job_id);
         let after_submit = client.get_job(&job_id);
         let expected_submit = Job {
@@ -6567,8 +7982,8 @@ mod test {
         assert_eq!(after_submit, expected_submit);
     }
 
-    // ÔöÇÔöÇ SC-TEST-46 (#325): approve_work requires client auth ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
-    // ÔöÇÔöÇ SC-TEST-36 (#315): accept_job on non-existent job ID ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── SC-TEST-46 (#325): approve_work requires client auth ──────────────────
+    // ── SC-TEST-36 (#315): accept_job on non-existent job ID ─────────────────
     //
     // accept_job must handle invalid or never-created job identifiers safely
     // without corrupting contract state.
@@ -6596,9 +8011,9 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
-        // Job ID 1 exists, ID 9999 does not ÔÇö must be rejected.
+        // Job ID 1 exists, ID 9999 does not — must be rejected.
         client.accept_job(&freelancer, &9999u64);
     }
 
@@ -6617,12 +8032,12 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let escrow_before = token::Client::new(&env, &native_token).balance(&contract_address);
         let job_before = client.get_job(&job_id);
 
-        // Attempt accept_job on a non-existent ID ÔÇö must panic.
+        // Attempt accept_job on a non-existent ID — must panic.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             client.accept_job(&freelancer, &9999u64);
         }));
@@ -6663,11 +8078,11 @@ mod test {
         let (env, client, _, user, freelancer, _native_token) = setup();
         let _ = (env, user);
         // Auth is mocked, but a job that has never been posted cannot be
-        // accepted ÔÇö the existence check fires first.
+        // accepted — the existence check fires first.
         client.accept_job(&freelancer, &0u64);
     }
 
-    // ÔöÇÔöÇ SC-TEST-37 (#316): post_job token transfer amount ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── SC-TEST-37 (#316): post_job token transfer amount ─────────────────────
     //
     // post_job must escrow exactly the job amount from the client's token
     // balance. The contract (escrow) balance must increase by the same
@@ -6728,7 +8143,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
     }
 
@@ -6773,7 +8188,7 @@ mod test {
         );
     }
 
-    // ÔöÇÔöÇ SC-TEST-38 (#317): approve_work with missing freelancer ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── SC-TEST-38 (#317): approve_work with missing freelancer ────────────────
     //
     // approve_work must fail when no freelancer has accepted the job
     // (the freelancer field is None). The error must be distinct from
@@ -6793,9 +8208,9 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
-        // Job is Open ÔÇö no freelancer has accepted. approve_work must fail.
+        // Job is Open — no freelancer has accepted. approve_work must fail.
         client.approve_work(&user, &job_id);
     }
 
@@ -6812,11 +8227,11 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
 
         // approve_work on an Open job must fail with InvalidStatus (#3),
-        // NOT Unauthorized (#2) ÔÇö the status/freelancer check comes first.
+        // NOT Unauthorized (#2) — the status/freelancer check comes first.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             client.approve_work(&user, &job_id);
         }));
@@ -6859,7 +8274,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
 
         let user_balance_before = token_client.balance(&user);
@@ -6905,7 +8320,7 @@ mod test {
         );
     }
 
-    // ÔöÇÔöÇ SC-TEST-39 (#318): job created_at timestamp storage ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── SC-TEST-39 (#318): job created_at timestamp storage ────────────────────
     //
     // created_at must be set at post_job time from the ledger timestamp and
     // must persist unchanged through all subsequent state transitions.
@@ -6924,7 +8339,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let job = client.get_job(&job_id);
 
@@ -6948,7 +8363,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let created_at = client.get_job(&job_id).created_at;
 
@@ -6992,7 +8407,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let job1 = client.get_job(&id1);
         assert_eq!(job1.created_at, base_time);
@@ -7010,7 +8425,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let job2 = client.get_job(&id2);
         assert_eq!(job2.created_at, base_time + 100);
@@ -7028,7 +8443,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let job3 = client.get_job(&id3);
         assert_eq!(job3.created_at, base_time + 200);
@@ -7044,12 +8459,12 @@ mod test {
         );
     }
 
-    // ÔöÇÔöÇ SC-TEST-46 (#325): approve_work requires client auth ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── SC-TEST-46 (#325): approve_work requires client auth ──────────────────
     //
     // Only the job's client may approve submitted work and release payment.
-    //   ÔÇó approve_work without auth must fail.
-    //   ÔÇó approve_work by a non-client (the freelancer) must fail Unauthorized.
-    //   ÔÇó A client-authorised approve on a SubmittedForReview job succeeds and
+    //   • approve_work without auth must fail.
+    //   • approve_work by a non-client (the freelancer) must fail Unauthorized.
+    //   • A client-authorised approve on a SubmittedForReview job succeeds and
     //     transitions the job to Completed.
 
     /// Build a job all the way to `SubmittedForReview` using the mocked
@@ -7071,7 +8486,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
@@ -7119,12 +8534,12 @@ mod test {
         client.approve_work(&user, &job_id);
 
         assert_eq!(client.get_job(&job_id).status, JobStatus::Completed);
-        // 1_000_000 amount, 25_000 fee (DEFAULT_FEE_BPS) ÔåÆ 975_000 payout.
+        // 1_000_000 amount, 25_000 fee (DEFAULT_FEE_BPS) → 975_000 payout.
         assert_eq!(token_client.balance(&freelancer) - pre_balance, 975_000);
         assert_eq!(client.get_fees(&native_token), 25_000);
     }
 
-    // ÔöÇÔöÇ SC-TEST-42 (#321): cancel_job only in Open status edge cases ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── SC-TEST-42 (#321): cancel_job only in Open status edge cases ──────────
     //
     // Exercise cancel_job restrictions when job is not in Open status.
     // The function must reject non-Open jobs while preserving state and
@@ -7143,7 +8558,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
@@ -7171,7 +8586,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
 
@@ -7209,7 +8624,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
@@ -7249,7 +8664,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
@@ -7272,7 +8687,7 @@ mod test {
         );
     }
 
-    // ÔöÇÔöÇ SC-TEST-43 (#322): submit_work requires auth ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── SC-TEST-43 (#322): submit_work requires auth ──────────────────────────
     //
     // Ensure submit_work rejects unauthenticated or wrong-signer calls. Only
     // the assigned freelancer on an accepted job can submit work.
@@ -7289,7 +8704,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         env.set_auths(&[]);
@@ -7309,7 +8724,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&user, &job_id);
@@ -7327,7 +8742,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
@@ -7337,7 +8752,7 @@ mod test {
         );
     }
 
-    // ÔöÇÔöÇ SC-TEST-44 (#323): accept_job requires auth ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── SC-TEST-44 (#323): accept_job requires auth ───────────────────────────
     //
     // Ensure accept_job requires a valid freelancer authentication context.
     // Only an authenticated freelancer (not the client) may accept an open job.
@@ -7354,7 +8769,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         env.set_auths(&[]);
         client.accept_job(&freelancer, &job_id);
@@ -7362,7 +8777,7 @@ mod test {
 
     /// accept_job with client credentials must fail. The client calling
     /// accept_job with their own address triggers the `job.client == freelancer`
-    /// guard ÔåÆ Unauthorized (#2).
+    /// guard → Unauthorized (#2).
     #[test]
     #[should_panic(expected = "Error(Contract, #2)")]
     fn accept_job_with_client_credentials_fails() {
@@ -7374,7 +8789,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&user, &job_id);
     }
@@ -7391,7 +8806,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         let job = client.get_job(&job_id);
@@ -7411,7 +8826,7 @@ mod test {
             &32u32,
             &deadline,
             &native_token,
-        
+
             );
         env.ledger().with_mut(|li| {
             li.timestamp = deadline + 1;
@@ -7430,7 +8845,7 @@ mod test {
             &32u32,
             &deadline,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         let job = client.get_job(&job_id);
@@ -7448,7 +8863,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         env.ledger().with_mut(|li| {
             li.timestamp = 9_999_999_999;
@@ -7459,7 +8874,7 @@ mod test {
         assert_eq!(job.freelancer, Option::Some(freelancer));
     }
 
-    // ÔöÇÔöÇ SC-TEST-45 (#324): post_job requires client auth ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── SC-TEST-45 (#324): post_job requires client auth ──────────────────────
     //
     // Ensure only authenticated clients can create jobs and fund escrow.
 
@@ -7476,7 +8891,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
     }
 
@@ -7495,7 +8910,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
     }
 
@@ -7511,7 +8926,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let job = client.get_job(&job_id);
         assert_eq!(job.status, JobStatus::Open);
@@ -7519,13 +8934,13 @@ mod test {
         assert_eq!(job.amount, 1_000_000);
     }
 
-    // ÔöÇÔöÇ SC-TEST-20 (#299): approve_work unauthorized client ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── SC-TEST-20 (#299): approve_work unauthorized client ───────────────────
     //
     // Only the job client may approve submitted work and release payment.
-    //   ÔÇó The client succeeds after a valid submit (job completes).
-    //   ÔÇó A non-client caller ÔÇö including an unrelated third party, not just
-    //     the freelancer ÔÇö fails with Unauthorized (#2).
-    //   ÔÇó On a valid approval, funds flow correctly out of escrow: the
+    //   • The client succeeds after a valid submit (job completes).
+    //   • A non-client caller — including an unrelated third party, not just
+    //     the freelancer — fails with Unauthorized (#2).
+    //   • On a valid approval, funds flow correctly out of escrow: the
     //     freelancer is paid net of fees, the fee is retained, and the escrow
     //     balance is fully conserved (nothing left stranded).
 
@@ -7558,7 +8973,7 @@ mod test {
 
         client.approve_work(&user, &job_id);
 
-        // 1_000_000 amount, 25_000 fee (DEFAULT_FEE_BPS) ÔåÆ 975_000 payout.
+        // 1_000_000 amount, 25_000 fee (DEFAULT_FEE_BPS) → 975_000 payout.
         let payout = 975_000i128;
         let fee = 25_000i128;
 
@@ -7573,7 +8988,7 @@ mod test {
         assert_eq!(escrow_pre - token_client.balance(&contract_address), payout);
     }
 
-    // ÔöÇÔöÇ Upgrade Tests ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── Upgrade Tests ─────────────────────────────────────────────────────
 
     #[test]
     fn upgrade_propose_and_cancel() {
@@ -7607,7 +9022,7 @@ mod test {
         // propose-cancel cycle confirms storage round-trips correctly.
         client.cancel_upgrade(&admin);
 
-        // Re-propose after cancel ÔÇö verifies the first cycle cleaned up.
+        // Re-propose after cancel — verifies the first cycle cleaned up.
         let wasm_hash2 = BytesN::from_array(&env, &[0xccu8; 32]);
         client.propose_upgrade(&admin, &wasm_hash2);
         client.cancel_upgrade(&admin);
@@ -7655,13 +9070,13 @@ mod test {
         client.cancel_upgrade(&admin);
     }
 
-    // ÔöÇÔöÇ Property-based Fuzz Tests ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── Property-based Fuzz Tests ──────────────────────────────────────────
     //
     // These tests use proptest to verify invariants across random inputs.
 
     use proptest::prelude::*;
 
-    // ÔöÇÔöÇ Fee calculation mathematical properties ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── Fee calculation mathematical properties ────────────────────────────
     //
     // Verify that the fee formula `fee = amount * fee_bps / BPS_DENOMINATOR`
     // holds basic arithmetic invariants regardless of random inputs.
@@ -7713,16 +9128,16 @@ mod test {
         }
     }
 
-    // ÔöÇÔöÇ Status transition state machine ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── Status transition state machine ────────────────────────────────────
     //
     // Verify that status transitions follow valid edges for any random sequence.
     // Valid transitions:
-    //   Open ÔåÆ InProgress, Cancelled
-    //   InProgress ÔåÆ SubmittedForReview, Cancelled, Disputed
-    //   SubmittedForReview ÔåÆ Completed, InProgress, Disputed
-    //   Completed ÔåÆ (terminal)
-    //   Cancelled ÔåÆ (terminal)
-    //   Disputed ÔåÆ Completed, Cancelled
+    //   Open → InProgress, Cancelled
+    //   InProgress → SubmittedForReview, Cancelled, Disputed
+    //   SubmittedForReview → Completed, InProgress, Disputed
+    //   Completed → (terminal)
+    //   Cancelled → (terminal)
+    //   Disputed → Completed, Cancelled
 
     fn is_valid_transition(from: &JobStatus, to: &JobStatus) -> bool {
         matches!(
@@ -7771,7 +9186,7 @@ mod test {
         }
     }
 
-    // ÔöÇÔöÇ Job ID monotonicity ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── Job ID monotonicity ────────────────────────────────────────────────
     //
     // Verify that job IDs are strictly increasing.
 
@@ -7801,7 +9216,7 @@ mod test {
         assert_eq!(client.get_job_count(), 10, "total job count must be 10");
     }
 
-    // ÔöÇÔöÇ No duplicate job IDs ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── No duplicate job IDs ───────────────────────────────────────────────
     //
     // Verify that no two jobs share the same ID across random sequences.
 
@@ -7827,9 +9242,9 @@ mod test {
         assert_eq!(ids.len(), 20, "must have 20 unique job IDs");
     }
 
-    // ÔöÇÔöÇ Token conservation invariant ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── Token conservation invariant ───────────────────────────────────────
     //
-    // After a full lifecycle (post ÔåÆ accept ÔåÆ submit ÔåÆ approve), verify that
+    // After a full lifecycle (post → accept → submit → approve), verify that
     // total token supply is conserved: client_initial = client_final +
     // freelancer_final + platform_fees.
 
@@ -7852,7 +9267,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
@@ -7870,7 +9285,7 @@ mod test {
         );
     }
 
-    // ÔöÇÔöÇ Escrow balance invariant ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── Escrow balance invariant ──────────────────────────────────────────
     //
     // Verify that the escrow contract's token balance equals the sum of all
     // active (non-terminal) job amounts, plus accrued fees.
@@ -7888,7 +9303,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         let j2 = client.post_job(
             &user,
@@ -7897,7 +9312,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
 
         // Both jobs are Open: the contract holds 8_000_000 total.
@@ -7908,7 +9323,7 @@ mod test {
             "escrow balance must match active jobs + fees (initial)"
         );
 
-        // Accept j1 ÔåÆ now 5_000_000 is InProgress (still active)
+        // Accept j1 → now 5_000_000 is InProgress (still active)
         client.accept_job(&freelancer, &j1);
         let fees = client.get_fees(&native_token);
         assert_eq!(
@@ -7917,7 +9332,7 @@ mod test {
             "escrow balance unchanged after accept"
         );
 
-        // Complete j1 ÔåÆ 5_000_000 released, 975_000 to freelancer, 25_000 to fees
+        // Complete j1 → 5_000_000 released, 975_000 to freelancer, 25_000 to fees
         client.submit_work(&freelancer, &j1);
         client.approve_work(&user, &j1);
         let fees = client.get_fees(&native_token);
@@ -7937,7 +9352,7 @@ mod test {
         );
     }
 
-    // ÔöÇÔöÇ Random operation sequence ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── Random operation sequence ─────────────────────────────────────────
     //
     // Generate random sequences of contract operations and verify that no
     // unexpected panics occur and basic invariants hold.
@@ -8114,7 +9529,128 @@ mod test {
         run_ops(&ops);
     }
 
-    // ÔöÇÔöÇ Issue #412: Referral reward system tests ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    pub fn get_jobs_batch_visible_to(env: Env, start: u64, limit: u32, viewer: Address) -> Vec<Job> {
+        let count: u64 = env.storage().instance().get(&DataKey::JobCount).unwrap_or(0);
+        let mut jobs = Vec::new(&env);
+        if start == 0 || limit == 0 || start > count {
+            return jobs;
+        }
+        let end = core::cmp::min(count, start.saturating_add(limit as u64).saturating_sub(1));
+        let mut cursor = start;
+        while cursor <= end {
+            if let Ok(job) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                get_job(&env, cursor)
+            })) {
+                let visibility = env.storage()
+                    .persistent()
+                    .get::<DataKey, JobVisibility>(&DataKey::JobVisibility(cursor))
+                    .unwrap_or(JobVisibility::Public);
+                let visible = match visibility {
+                    JobVisibility::Public => true,
+                    JobVisibility::Private => job.client == viewer,
+                    JobVisibility::InviteOnly => {
+                        job.client == viewer
+                            || env.storage().persistent().has(&DataKey::InvitedFreelancer(cursor, viewer.clone()))
+                    }
+                };
+                if visible {
+                    jobs.push_back(job);
+                }
+            }
+            cursor = cursor.saturating_add(1);
+        }
+        jobs
+    }
+
+    // ── Platform statistics (#491) ──────────────────────────────────────────
+
+    pub fn get_platform_stats(env: Env, admin: Address) -> PlatformStats {
+        admin.require_auth();
+        let total_jobs_posted: u64 = env.storage().instance().get(&DataKey::JobCount).unwrap_or(0);
+        let total_jobs_completed: u64 = env.storage().instance().get(&DataKey::CompletedJobsCount).unwrap_or(0);
+        let total_volume: i128 = env.storage().instance().get(&DataKey::TotalVolume).unwrap_or(0);
+        let total_fees_collected: i128 = env
+            .storage()
+            .instance()
+            .get::<_, Fees>(&DataKey::Fees)
+            .map(|f| f.total_collected)
+            .unwrap_or(0);
+        let unique_clients: u64 = env.storage().instance().get(&DataKey::UniqueClients).unwrap_or(0);
+        let unique_freelancers: u64 = env.storage().instance().get(&DataKey::UniqueFreelancers).unwrap_or(0);
+        PlatformStats {
+            total_jobs_posted,
+            total_jobs_completed,
+            total_volume,
+            total_fees_collected,
+            unique_clients,
+            unique_freelancers,
+        }
+    }
+
+    // ── Job templates (#446) ────────────────────────────────────────────────
+
+    pub fn save_template(
+        env: Env,
+        client: Address,
+        name: soroban_sdk::String,
+        description_hash: BytesN<32>,
+        amount: i128,
+        deadline_duration_ledgers: u64,
+        token: Address,
+    ) -> u64 {
+        client.require_auth();
+        let count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TemplateCount(client.clone()))
+            .unwrap_or(0);
+        let template_id = count + 1;
+        let tpl = JobTemplate {
+            template_id,
+            name,
+            description_hash,
+            amount,
+            deadline_duration_ledgers,
+            token,
+        };
+        env.storage()
+            .instance()
+            .set(&DataKey::Template(client.clone(), template_id), &tpl);
+        env.storage()
+            .instance()
+            .set(&DataKey::TemplateCount(client), &template_id);
+        template_id
+    }
+
+    pub fn get_templates(env: Env, client: Address) -> Vec<JobTemplate> {
+        let count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TemplateCount(client.clone()))
+            .unwrap_or(0);
+        let mut result = Vec::new(&env);
+        for i in 1..=count {
+            if let Some(tpl) = env
+                .storage()
+                .instance()
+                .get::<_, JobTemplate>(&DataKey::Template(client.clone(), i))
+            {
+                result.push_back(tpl);
+            }
+        }
+        result
+    }
+
+    pub fn delete_template(env: Env, client: Address, template_id: u64) {
+        client.require_auth();
+        let key = DataKey::Template(client, template_id);
+        if !env.storage().instance().has(&key) {
+            panic!("template not found");
+        }
+        env.storage().instance().remove(&key);
+    }
+
+    // ── Issue #412: Referral reward system tests ──────────────────────────────
 
     #[test]
     fn referral_register_and_lookup() {
@@ -8227,7 +9763,7 @@ mod test {
         client.approve_work(&user, &job_id);
         let after_first = client.get_referral_earnings(&referrer);
 
-        // Second job by same client (direct, no code) ÔÇö no additional bonus.
+        // Second job by same client (direct, no code) — no additional bonus.
         let job_id2 = client.post_job(
             &user,
             &amount,
@@ -8235,7 +9771,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id2);
         client.submit_work(&freelancer, &job_id2);
@@ -8379,7 +9915,7 @@ mod test {
             &32u32,
             &deadline,
             &native_token,
-        
+
             );
         let new_deadline = deadline + 86400;
         client.extend_deadline(&user, &job_id, &new_deadline, &Option::None);
@@ -8397,7 +9933,7 @@ mod test {
             &32u32,
             &deadline,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
@@ -8418,7 +9954,7 @@ mod test {
             &32u32,
             &deadline,
             &native_token,
-        
+
             );
         client.cancel_job(&user, &job_id);
         let new_deadline = deadline + 86400;
@@ -8436,7 +9972,7 @@ mod test {
             &32u32,
             &0u64,
             &native_token,
-        
+
             );
         client.accept_job(&freelancer, &job_id);
         let new_deadline = env.ledger().timestamp() + 86400;
@@ -8503,7 +10039,7 @@ mod test {
         );
     }
 
-    // ÔöÇÔöÇ Issue #463: resolve_dispute_split ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── Issue #463: resolve_dispute_split ────────────────────────────────────
 
     fn disputed_job(
         env: &Env,
@@ -8578,7 +10114,7 @@ mod test {
         let (env, client, _, user, freelancer, native_token) = setup();
         let job_id = disputed_job(&env, &client, &user, &freelancer, &native_token);
         // mock_all_auths makes caller whoever we want; here we remove the admin auth
-        // by calling via a fresh non-admin env ÔÇö simplest: revoke auths and let the
+        // by calling via a fresh non-admin env — simplest: revoke auths and let the
         // admin require_auth panic with Unauthorized.
         let env2 = Env::default();
         env2.mock_all_auths();
@@ -8595,7 +10131,7 @@ mod test {
         let token_client = token::Client::new(&env, &native_token);
         let freelancer_before = token_client.balance(&freelancer);
 
-        // 0 % to client ÔåÆ full payout to freelancer minus fee
+        // 0 % to client → full payout to freelancer minus fee
         client.resolve_dispute_split(&job_id, &0u32);
 
         let freelancer_after = token_client.balance(&freelancer);
@@ -8603,7 +10139,7 @@ mod test {
         assert_eq!(freelancer_after - freelancer_before, 975_000);
     }
 
-    // ÔöÇÔöÇ Issue #456: trusted forwarder / gasless operations ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── Issue #456: trusted forwarder / gasless operations ───────────────────
 
     #[test]
     fn set_and_query_trusted_forwarder() {
@@ -8643,7 +10179,7 @@ mod test {
             client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
 
         let forwarder = Address::generate(&env);
-        // Not whitelisted ÔÇö must panic with ForwarderNotTrusted (29).
+        // Not whitelisted — must panic with ForwarderNotTrusted (29).
         client.relay_cancel_job(&forwarder, &user, &job_id);
     }
 
@@ -8657,7 +10193,7 @@ mod test {
         let forwarder = Address::generate(&env);
         client.set_trusted_forwarder(&forwarder, &true);
 
-        // freelancer is not the client ÔÇö Unauthorized.
+        // freelancer is not the client — Unauthorized.
         client.relay_cancel_job(&forwarder, &freelancer, &job_id);
     }
 
@@ -8672,10 +10208,10 @@ mod test {
         let forwarder = Address::generate(&env);
         client.set_trusted_forwarder(&forwarder, &true);
 
-        // Job is InProgress, not Open ÔÇö InvalidStatus.
+        // Job is InProgress, not Open — InvalidStatus.
         client.relay_cancel_job(&forwarder, &user, &job_id);
     }
-    // ÔöÇÔöÇ Issue #460: two-step ownership transfer ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── Issue #460: two-step ownership transfer ──────────────────────────────
 
     #[test]
     fn transfer_ownership_sets_pending_admin() {
@@ -8762,7 +10298,7 @@ mod test {
         assert!(env.events().all().len() > events_before);
     }
 
-    // ÔöÇÔöÇ Issue SC-81: get_dashboard_stats tests ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    // ── Issue SC-81: get_dashboard_stats tests ────────────────────────────
 
     #[test]
     fn dashboard_stats_empty_platform() {
@@ -8843,6 +10379,123 @@ mod test {
     fn dashboard_stats_rejects_non_admin() {
         let (_, client, _, user, _, _) = setup();
         client.get_dashboard_stats(&user);
+    }
+
+    #[test]
+    fn approve_with_splits_distributes_correctly() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+
+        let referrer = Address::generate(&env);
+        let splits = soroban_sdk::vec![
+            &env,
+            PaymentSplit {
+                recipient: freelancer.clone(),
+                share_bps: 7_000,
+                reason: soroban_sdk::String::from_str(&env, "freelancer"),
+            },
+            PaymentSplit {
+                recipient: referrer.clone(),
+                share_bps: 3_000,
+                reason: soroban_sdk::String::from_str(&env, "referrer"),
+            },
+        ];
+
+        let token_client = token::Client::new(&env, &native_token);
+        let freelancer_pre = token_client.balance(&freelancer);
+        let referrer_pre = token_client.balance(&referrer);
+
+        client.approve_with_splits(&user, &job_id, &splits);
+
+        let fee = 1_000_000 * DEFAULT_FEE_BPS / BPS_DENOMINATOR;
+        let distributable = 1_000_000 - fee;
+        let freelancer_share = distributable * 7_000 / 10_000;
+        let referrer_share = distributable * 3_000 / 10_000;
+
+        assert_eq!(token_client.balance(&freelancer) - freelancer_pre, freelancer_share);
+        assert_eq!(token_client.balance(&referrer) - referrer_pre, referrer_share);
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Completed);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #11)")]
+    fn approve_with_splits_rejects_invalid_total() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+
+        let splits = soroban_sdk::vec![
+            &env,
+            PaymentSplit {
+                recipient: freelancer.clone(),
+                share_bps: 5_000,
+                reason: soroban_sdk::String::from_str(&env, "partial"),
+            },
+        ];
+        client.approve_with_splits(&user, &job_id, &splits);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #11)")]
+    fn approve_with_splits_rejects_single_over_max() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+
+        let other = Address::generate(&env);
+        let splits = soroban_sdk::vec![
+            &env,
+            PaymentSplit {
+                recipient: freelancer.clone(),
+                share_bps: 6_000,
+                reason: soroban_sdk::String::from_str(&env, "too_much"),
+            },
+            PaymentSplit {
+                recipient: other,
+                share_bps: 4_000,
+                reason: soroban_sdk::String::from_str(&env, "other"),
+            },
+        ];
+        client.approve_with_splits(&user, &job_id, &splits);
+    }
+
+    #[test]
+    fn set_and_get_payment_splits() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+
+        let referrer = Address::generate(&env);
+        let splits = soroban_sdk::vec![
+            &env,
+            PaymentSplit {
+                recipient: user.clone(),
+                share_bps: 7_000,
+                reason: soroban_sdk::String::from_str(&env, "freelancer"),
+            },
+            PaymentSplit {
+                recipient: referrer,
+                share_bps: 3_000,
+                reason: soroban_sdk::String::from_str(&env, "referrer"),
+            },
+        ];
+
+        client.set_payment_splits(&user, &job_id, &splits);
+        let stored = client.get_available_splits(&job_id);
+        assert_eq!(stored.len(), 2);
+        assert_eq!(stored.get(0).unwrap().share_bps, 7_000);
+        assert_eq!(stored.get(1).unwrap().share_bps, 3_000);
+    }
+
+    #[test]
+    fn get_available_splits_returns_empty_when_none() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        let stored = client.get_available_splits(&job_id);
+        assert_eq!(stored.len(), 0);
     }
 
     // ── SC-83: top_up_escrow ────────────────────────────────────────────────
@@ -8937,4 +10590,5 @@ mod test {
             client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
         client.top_up_escrow(&user, &job_id, &-1i128);
     }
+
 }

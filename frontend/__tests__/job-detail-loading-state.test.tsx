@@ -2,6 +2,7 @@ import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import JobDetailPage from "@/app/job/[id]/page";
+import JobDetailPageSkeleton from "@/components/JobDetailPageSkeleton";
 import { ToastProvider } from "@/components/ToastProvider";
 import type { Job } from "@/lib/types";
 
@@ -39,12 +40,34 @@ vi.mock("@/lib/notifications-context", () => ({
     addNotification: vi.fn(),
     markAsSeen: vi.fn(),
     markAllAsSeen: vi.fn(),
-    preferences: { job_accepted: true, work_submitted: true, work_approved: true, job_cancelled: true, dispute_raised: true, dispute_resolved: true },
+    preferences: {
+      job_accepted: true,
+      work_submitted: true,
+      work_approved: true,
+      job_cancelled: true,
+      dispute_raised: true,
+      dispute_resolved: true,
+    },
     setPreference: vi.fn(),
     clearNotifications: vi.fn(),
   }),
-  NotificationProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  NotificationProvider: ({ children }: { children: React.ReactNode }) => (
+    <>{children}</>
+  ),
   getEventLabel: (event: string) => event,
+}));
+
+vi.mock("@/lib/meetings-context", () => ({
+  useMeetings: () => ({
+    meetings: [],
+    proposeMeeting: vi.fn(),
+    cancelMeeting: vi.fn(),
+    confirmMeeting: vi.fn(),
+    getMeetingsForJob: () => [],
+    getUpcomingMeetings: () => [],
+    getPastMeetings: () => [],
+  }),
+  MeetingsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
 function makeJob(overrides: Partial<Job> = {}): Job {
@@ -58,6 +81,7 @@ function makeJob(overrides: Partial<Job> = {}): Job {
     deadline: "0",
     token: "GTOKEN",
     revision_count: 0,
+    submitted_at: "0",
     ...overrides,
   };
 }
@@ -83,7 +107,11 @@ describe("Job detail loading state", () => {
 
   it("shows the loading indicator while getJob is pending", () => {
     // A promise that never resolves keeps the component in the fetching state
-    mockGetJob.mockReturnValue(new Promise(() => { void 0; }));
+    mockGetJob.mockReturnValue(
+      new Promise(() => {
+        void 0;
+      }),
+    );
     renderJobPage();
 
     const status = screen.getByRole("status");
@@ -91,17 +119,38 @@ describe("Job detail loading state", () => {
     expect(status).toHaveTextContent("Loading job details...");
   });
 
+  it("renders a dedicated skeleton view for job detail loading", () => {
+    render(<JobDetailPageSkeleton />);
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Loading job details...",
+    );
+    expect(screen.getByText("Preparing job details")).toBeInTheDocument();
+  });
+
   it("does not render job content while fetch is still pending", () => {
-    mockGetJob.mockReturnValue(new Promise(() => { void 0; }));
+    mockGetJob.mockReturnValue(
+      new Promise(() => {
+        void 0;
+      }),
+    );
     renderJobPage();
 
     expect(screen.queryByText("Job #42")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Accept Job" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Cancel Job" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Accept Job" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Cancel Job" }),
+    ).not.toBeInTheDocument();
   });
 
   it("does not render the error state while fetch is still pending", () => {
-    mockGetJob.mockReturnValue(new Promise(() => { void 0; }));
+    mockGetJob.mockReturnValue(
+      new Promise(() => {
+        void 0;
+      }),
+    );
     renderJobPage();
 
     expect(screen.queryByText("Job not found.")).not.toBeInTheDocument();
@@ -111,37 +160,53 @@ describe("Job detail loading state", () => {
   // ── Transition to loaded content ──────────────────────────────────────────
 
   it("removes the loading indicator after getJob resolves", async () => {
-    mockGetJob.mockResolvedValue(makeJob({ status: "Open", client: "GCLIENT" }));
+    mockGetJob.mockResolvedValue(
+      makeJob({ status: "Open", client: "GCLIENT" }),
+    );
     renderJobPage();
 
     await waitFor(() =>
-      expect(screen.queryByText("Loading job details...")).not.toBeInTheDocument(),
+      expect(
+        screen.queryByText("Loading job details..."),
+      ).not.toBeInTheDocument(),
     );
   });
 
   it("renders job heading after a successful fetch", async () => {
-    mockGetJob.mockResolvedValue(makeJob({ status: "Open", client: "GCLIENT" }));
+    mockGetJob.mockResolvedValue(
+      makeJob({ status: "Open", client: "GCLIENT" }),
+    );
     renderJobPage();
 
     await waitFor(() =>
-      expect(screen.getByRole("heading", { name: "Job #42" })).toBeInTheDocument(),
+      expect(
+        screen.getByRole("heading", { name: "Job #42" }),
+      ).toBeInTheDocument(),
     );
   });
 
   it("renders job status after a successful fetch", async () => {
-    mockGetJob.mockResolvedValue(makeJob({ status: "Open", client: "GCLIENT" }));
+    mockGetJob.mockResolvedValue(
+      makeJob({ status: "Open", client: "GCLIENT" }),
+    );
     renderJobPage();
 
-    await waitFor(() => expect(screen.getByText("Job #42")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("Job #42")).toBeInTheDocument(),
+    );
     // Status label is present in the article
     expect(screen.getByText("Status:")).toBeInTheDocument();
   });
 
   it("renders client address after a successful fetch", async () => {
-    mockGetJob.mockResolvedValue(makeJob({ status: "Open", client: "GCLIENT" }));
+    mockGetJob.mockResolvedValue(
+      makeJob({ status: "Open", client: "GCLIENT" }),
+    );
     renderJobPage();
 
-    await waitFor(() => expect(screen.getByText("GCLIENT")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("GCLIENT")).toBeInTheDocument(),
+    );
   });
 
   // ── Transition to error / not-found states ────────────────────────────────
@@ -151,7 +216,9 @@ describe("Job detail loading state", () => {
     renderJobPage();
 
     await waitFor(() =>
-      expect(screen.queryByText("Loading job details...")).not.toBeInTheDocument(),
+      expect(
+        screen.queryByText("Loading job details..."),
+      ).not.toBeInTheDocument(),
     );
     expect(screen.getByText("Job not found.")).toBeInTheDocument();
   });
@@ -161,7 +228,9 @@ describe("Job detail loading state", () => {
     renderJobPage();
 
     await waitFor(() =>
-      expect(screen.queryByText("Loading job details...")).not.toBeInTheDocument(),
+      expect(
+        screen.queryByText("Loading job details..."),
+      ).not.toBeInTheDocument(),
     );
     expect(screen.getByText("Network error")).toBeInTheDocument();
   });
@@ -173,18 +242,27 @@ describe("Job detail loading state", () => {
     mockGetJob.mockImplementation(
       () =>
         new Promise<Job>((resolve) =>
-          setTimeout(() => resolve(makeJob({ status: "Open", client: "GCLIENT" })), 50),
+          setTimeout(
+            () => resolve(makeJob({ status: "Open", client: "GCLIENT" })),
+            50,
+          ),
         ),
     );
     renderJobPage();
 
     // Loading indicator must be present immediately
-    expect(screen.getByRole("status")).toHaveTextContent("Loading job details...");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Loading job details...",
+    );
 
     // After the promise settles, content must appear and loading must be gone
     await waitFor(() =>
-      expect(screen.getByRole("heading", { name: "Job #42" })).toBeInTheDocument(),
+      expect(
+        screen.getByRole("heading", { name: "Job #42" }),
+      ).toBeInTheDocument(),
     );
-    expect(screen.queryByText("Loading job details...")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Loading job details..."),
+    ).not.toBeInTheDocument();
   });
 });

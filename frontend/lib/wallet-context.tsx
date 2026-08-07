@@ -15,6 +15,8 @@ import {
   getNativeBalance,
 } from "@/lib/stellar";
 import LegalConsentModal, { hasAcceptedLegal, acceptLegal } from "@/components/LegalConsentModal";
+import ConfirmDialog from "@/components/ConfirmDialog";
+import { CONFIRM_KEYS } from "@/lib/confirm-prefs";
 import { toXlm } from "@/lib/format";
 
 // Storage keys
@@ -168,6 +170,7 @@ export function useWallet() {
 export function WalletButton() {
   const { wallet, connectWallet, disconnectWallet } = useWallet();
   const [connecting, setConnecting] = useState(false);
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [displayMode, setDisplayMode] = useState<WalletDisplayMode>("short");
   const [balance, setBalance] = useState<string | null>(null);
   const [fetchingBalance, setFetchingBalance] = useState(false);
@@ -248,11 +251,28 @@ export function WalletButton() {
         </button>
         <button
           type="button"
-          onClick={disconnectWallet}
+          onClick={() => setConfirmDisconnect(true)}
           className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
         >
           Disconnect
         </button>
+        {confirmDisconnect && (
+          <ConfirmDialog
+            open={true}
+            title="Disconnect wallet?"
+            description="Disconnecting removes this wallet from the app. Job actions will be hidden until you reconnect."
+            consequences={["Bookmarks and preferences saved in this browser are kept.", "You can reconnect at any time with the Connect Wallet button."]}
+            confirmLabel="Yes, disconnect"
+            cancelLabel="Cancel"
+            variant="danger"
+            suppressKey={CONFIRM_KEYS.disconnectWallet}
+            onConfirm={() => {
+              setConfirmDisconnect(false);
+              disconnectWallet();
+            }}
+            onCancel={() => setConfirmDisconnect(false)}
+          />
+        )}
       </div>
     );
   }

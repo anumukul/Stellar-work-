@@ -52,7 +52,7 @@ export function validateConfig(): ConfigValidationResult {
 
   const adminAddress = process.env.NEXT_PUBLIC_ADMIN_ADDRESS ?? "";
   if (!adminAddress) {
-    warnings.push("NEXT_PUBLIC_ADMIN_ADDRESS is not set. Admin panel will be accessible to any connected wallet.");
+    warnings.push("NEXT_PUBLIC_ADMIN_ADDRESS is not set. Admin panel will be disabled for safety.");
   }
 
   const ipfsGatewayUrl = process.env.NEXT_PUBLIC_IPFS_GATEWAY_URL || DEFAULTS.ipfsGatewayUrl;

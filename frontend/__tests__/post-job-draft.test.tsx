@@ -28,6 +28,8 @@ vi.mock("@/lib/wallet-context", () => ({
 
 vi.mock("@/lib/stellar", () => ({
   getExplorerTxUrl: (hash: string) => `https://example.test/tx/${hash}`,
+  isValidStellarAddress: (address: string) =>
+    /^[GC][A-Z2-7]{55}$/.test(address.trim()),
 }));
 
 describe("Post-job form: draft saving (FE-71)", () => {

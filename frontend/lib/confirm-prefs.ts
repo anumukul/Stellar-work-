@@ -65,6 +65,8 @@ export const CONFIRM_KEYS = {
   withdrawFees: "withdraw-fees",
   freelancerCancelJob: "freelancer-cancel-job",
   topUpEscrow: "top-up-escrow",
+  enforceDeadline: "enforce-deadline",
+  disconnectWallet: "disconnect-wallet",
 } as const;
 
 export type ConfirmKey = (typeof CONFIRM_KEYS)[keyof typeof CONFIRM_KEYS];
