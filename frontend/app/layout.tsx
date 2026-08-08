@@ -149,6 +149,7 @@ export default async function RootLayout({
           <DeferredClientFeatures />
           <ClientProviders>
           <OfflineIndicator />
+          <WalletNetworkWarning />
           <Navigation />
           <ScrollRestorer />
           <main id="main-content" tabIndex={-1} className="mx-auto w-full max-w-5xl flex-1 px-3 py-6 sm:px-4 sm:py-8 lg:ml-[220px]">

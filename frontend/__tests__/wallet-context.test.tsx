@@ -5,17 +5,23 @@ import { WalletProvider, useWallet } from "@/lib/wallet-context";
 
 const mockConnectWallet = vi.fn();
 const mockGetPublicKey = vi.fn();
+const mockGetWalletNetwork = vi.fn();
+const mockWatchWalletNetworkChanges = vi.fn();
 
 vi.mock("@/lib/stellar", () => ({
   connectWallet: (...args: unknown[]) => mockConnectWallet(...args),
   getPublicKey: (...args: unknown[]) => mockGetPublicKey(...args),
+  getWalletNetwork: (...args: unknown[]) => mockGetWalletNetwork(...args),
+  watchWalletNetworkChanges: (...args: unknown[]) =>
+    mockWatchWalletNetworkChanges(...args),
 }));
 
 function WalletProbe() {
-  const { wallet, connectWallet, disconnectWallet } = useWallet();
+  const { wallet, walletNetwork, connectWallet, disconnectWallet } = useWallet();
   return (
     <div>
       <p data-testid="wallet">{wallet ?? "none"}</p>
+      <p data-testid="wallet-network">{walletNetwork ?? "none"}</p>
       <button type="button" onClick={() => void connectWallet()}>
         connect
       </button>
@@ -52,6 +58,8 @@ function WalletErrorProbe() {
 describe("WalletProvider", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetWalletNetwork.mockResolvedValue("testnet");
+    mockWatchWalletNetworkChanges.mockReturnValue(() => undefined);
   });
 
   it("propagates provider state to consumers", async () => {
@@ -65,6 +73,9 @@ describe("WalletProvider", () => {
 
     await waitFor(() =>
       expect(screen.getByTestId("wallet")).toHaveTextContent("GINITIALWALLET"),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("wallet-network")).toHaveTextContent("testnet"),
     );
   });
 
@@ -84,9 +95,13 @@ describe("WalletProvider", () => {
     await waitFor(() =>
       expect(screen.getByTestId("wallet")).toHaveTextContent("GCONNECTEDWALLET"),
     );
+    await waitFor(() =>
+      expect(screen.getByTestId("wallet-network")).toHaveTextContent("testnet"),
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "disconnect" }));
     expect(screen.getByTestId("wallet")).toHaveTextContent("none");
+    expect(screen.getByTestId("wallet-network")).toHaveTextContent("none");
   });
 
   it("surfaces connect errors to consumer callers", async () => {

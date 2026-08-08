@@ -13,6 +13,8 @@ import {
   connectWallet as stellarConnectWallet,
   getPublicKey,
   getNativeBalance,
+  getWalletNetwork,
+  watchWalletNetworkChanges,
 } from "@/lib/stellar";
 import LegalConsentModal, { hasAcceptedLegal, acceptLegal } from "@/components/LegalConsentModal";
 import ConfirmDialog from "@/components/ConfirmDialog";
@@ -25,10 +27,12 @@ const JOB_CACHE_PREFIX = "job-desc:";
 
 interface WalletContextType {
   wallet: string | null;
+  walletNetwork: StellarNetwork | null;
   connectWallet: () => Promise<void>;
   disconnectWallet: () => void;
   switchAccount: (address?: string) => Promise<void>;
   clearCachedData: () => void;
+  refreshWalletNetwork: () => Promise<void>;
   isSwitching: boolean;
 }
 
@@ -36,6 +40,7 @@ type WalletDisplayMode = "short" | "full";
 
 const WalletContext = createContext<WalletContextType>({
   wallet: null,
+  walletNetwork: null,
   // eslint-disable-next-line @typescript-eslint/no-empty-function
   connectWallet: async () => {},
   // eslint-disable-next-line @typescript-eslint/no-empty-function
@@ -44,6 +49,8 @@ const WalletContext = createContext<WalletContextType>({
   switchAccount: async () => {},
   // eslint-disable-next-line @typescript-eslint/no-empty-function
   clearCachedData: () => {},
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
+  refreshWalletNetwork: async () => {},
   isSwitching: false,
 });
 
@@ -74,22 +81,46 @@ function persistLastAccount(address: string | null) {
 
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [wallet, setWallet] = useState<string | null>(null);
+  const [walletNetwork, setWalletNetwork] = useState<StellarNetwork | null>(null);
   const [showLegalModal, setShowLegalModal] = useState(false);
   const [isSwitching, setIsSwitching] = useState(false);
   const connectPromiseRef = useRef<Promise<string> | null>(null);
 
+  const refreshWalletNetwork = useCallback(async () => {
+    const nextNetwork = await getWalletNetwork();
+    setWalletNetwork(nextNetwork);
+  }, []);
+
   // On mount: restore last session via Freighter if still allowed.
   useEffect(() => {
-    getPublicKey().then((key) => {
+    getPublicKey().then(async (key) => {
       if (key) {
         setWallet(key);
         persistLastAccount(key);
+        await refreshWalletNetwork();
       }
     });
-  }, []);
+  }, [refreshWalletNetwork]);
+
+  useEffect(() => {
+    if (!wallet) {
+      return;
+    }
+
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void refreshWalletNetwork();
+    return watchWalletNetworkChanges(({ address, network }) => {
+      if (address) {
+        setWallet(address);
+        persistLastAccount(address);
+      }
+      setWalletNetwork(network);
+    });
+  }, [wallet, refreshWalletNetwork]);
 
   useEffect(() => {
     if (wallet && !hasAcceptedLegal()) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setShowLegalModal(true);
     }
   }, [wallet]);
@@ -109,10 +140,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const key = await connectPromiseRef.current;
     setWallet(key);
     persistLastAccount(key);
-  }, [wallet]);
+    await refreshWalletNetwork();
+  }, [wallet, refreshWalletNetwork]);
 
   const disconnectWallet = useCallback(() => {
     setWallet(null);
+    setWalletNetwork(null);
     persistLastAccount(null);
     // Clear session display preference
     if (typeof window !== "undefined") {
@@ -129,7 +162,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
    * Triggers Freighter's account selection, clears job cache, then updates state.
    * Caller is responsible for showing a confirmation dialog before calling this.
    */
-  const switchAccount = useCallback(async (_address?: string) => {
+  const switchAccount = useCallback(async () => {
     setIsSwitching(true);
     try {
       // Re-request access so Freighter shows the account picker.
@@ -139,14 +172,24 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         setWallet(newKey);
         persistLastAccount(newKey);
       }
+      await refreshWalletNetwork();
     } finally {
       setIsSwitching(false);
     }
-  }, [wallet]);
+  }, [wallet, refreshWalletNetwork]);
 
   return (
     <WalletContext.Provider
-      value={{ wallet, connectWallet, disconnectWallet, switchAccount, clearCachedData, isSwitching }}
+      value={{
+        wallet,
+        walletNetwork,
+        connectWallet,
+        disconnectWallet,
+        switchAccount,
+        clearCachedData,
+        refreshWalletNetwork,
+        isSwitching,
+      }}
     >
       {children}
       {showLegalModal && (
@@ -191,12 +234,14 @@ export function WalletButton() {
   useEffect(() => {
     const stored = sessionStorage.getItem("wallet-display-mode");
     if (stored === "short" || stored === "full") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setDisplayMode(stored);
     }
   }, []);
 
   useEffect(() => {
     if (!wallet) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setDisplayMode("short");
       setBalance(null);
     } else {
