@@ -600,6 +600,46 @@ impl EscrowContract {
             .publish((Symbol::new(&e, "job_cancelled"),), (job_id, client));
     }
 
+
+    /// SC-83: allow the original client to add funds to an existing job escrow.
+    /// Eligible statuses: Open, InProgress, SubmittedForReview.
+    pub fn top_up_escrow(e: Env, client: Address, job_id: u64, additional_amount: i128) {
+        if additional_amount <= 0 {
+            panic_with_error!(&e, Error::InvalidAmount);
+        }
+
+        let mut job = get_job_or_panic(&e, job_id);
+        client.require_auth();
+        require_active_access(&e, &client);
+
+        if job.client != client {
+            panic_with_error!(&e, Error::Unauthorized);
+        }
+
+        match job.status {
+            JobStatus::Open | JobStatus::InProgress | JobStatus::SubmittedForReview => {}
+            _ => panic_with_error!(&e, Error::InvalidStatus),
+        }
+
+        let old_amount = job.amount;
+        let new_amount = match old_amount.checked_add(additional_amount) {
+            Some(v) => v,
+            None => panic_with_error!(&e, Error::InsufficientFunds),
+        };
+
+        let token_client = token::Client::new(&e, &job.token);
+        token_client.transfer(&client, &e.current_contract_address(), &additional_amount);
+
+        job.amount = new_amount;
+        set_job(&e, job_id, &job);
+        bump_instance_ttl(&e);
+
+        e.events().publish(
+            (Symbol::new(&e, "EscrowToppedUp"),),
+            (job_id, old_amount, new_amount),
+        );
+    }
+
     pub fn freelancer_cancel_job(e: Env, freelancer: Address, job_id: u64) {
         let mut job = get_job_or_panic(&e, job_id);
         freelancer.require_auth();
@@ -9098,4 +9138,98 @@ mod test {
         let _ = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
         client.archive_old_jobs(&user, &0u64);
     }
+
+    // ── SC-83: top_up_escrow ────────────────────────────────────────────────
+
+    #[test]
+    fn top_up_escrow_increases_amount_and_emits_event() {
+        let (env, client, _, user, _, native_token) = setup();
+        let token_client = token::Client::new(&env, &native_token);
+        let job_id =
+            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+
+        let client_pre = token_client.balance(&user);
+        client.top_up_escrow(&user, &job_id, &250_000i128);
+
+        let job = client.get_job(&job_id);
+        assert_eq!(job.amount, 1_250_000);
+        assert_eq!(token_client.balance(&user), client_pre - 250_000);
+
+        let events = env.events().all();
+        assert!(events.len() > 0);
+    }
+
+    #[test]
+    fn top_up_escrow_works_in_progress_and_submitted() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id =
+            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.top_up_escrow(&user, &job_id, &100_000i128);
+        assert_eq!(client.get_job(&job_id).amount, 1_100_000);
+
+        client.submit_work(&freelancer, &job_id);
+        client.top_up_escrow(&user, &job_id, &50_000i128);
+        assert_eq!(client.get_job(&job_id).amount, 1_150_000);
+    }
+
+    #[test]
+    fn top_up_escrow_multiple_top_ups_accumulate() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id =
+            client.post_job(&user, &500_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.top_up_escrow(&user, &job_id, &100_000i128);
+        client.top_up_escrow(&user, &job_id, &200_000i128);
+        assert_eq!(client.get_job(&job_id).amount, 800_000);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #2)")]
+    fn top_up_escrow_rejects_non_owner() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id =
+            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.top_up_escrow(&freelancer, &job_id, &100_000i128);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn top_up_escrow_rejects_completed_status() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id =
+            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
+        client.top_up_escrow(&user, &job_id, &100_000i128);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn top_up_escrow_rejects_cancelled_status() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id =
+            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.cancel_job(&user, &job_id);
+        client.top_up_escrow(&user, &job_id, &100_000i128);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #11)")]
+    fn top_up_escrow_rejects_zero_amount() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id =
+            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.top_up_escrow(&user, &job_id, &0i128);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #11)")]
+    fn top_up_escrow_rejects_negative_amount() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id =
+            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.top_up_escrow(&user, &job_id, &-1i128);
+    }
+
 }
