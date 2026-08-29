@@ -178,31 +178,6 @@
         }
       ]
     ],
-<<<<<<< HEAD
-    [
-      [
-        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
-        {
-          "function": {
-            "contract_fn": {
-              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-              "function_name": "raise_dispute",
-              "args": [
-                {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
-                },
-                {
-                  "u64": 1
-                }
-              ]
-            }
-          },
-          "sub_invocations": []
-        }
-      ]
-    ],
-=======
->>>>>>> upstream/main
     []
   ],
   "ledger": {
@@ -598,102 +573,6 @@
             "key": {
               "vec": [
                 {
-<<<<<<< HEAD
-                  "symbol": "DisputeFeePaid"
-                },
-                {
-                  "u64": 1
-                }
-              ]
-            },
-            "durability": "persistent"
-          }
-        },
-        [
-          {
-            "last_modified_ledger_seq": 0,
-            "data": {
-              "contract_data": {
-                "ext": "v0",
-                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-                "key": {
-                  "vec": [
-                    {
-                      "symbol": "DisputeFeePaid"
-                    },
-                    {
-                      "u64": 1
-                    }
-                  ]
-                },
-                "durability": "persistent",
-                "val": {
-                  "i128": {
-                    "hi": 0,
-                    "lo": 0
-                  }
-                }
-              }
-            },
-            "ext": "v0"
-          },
-          518400
-        ]
-      ],
-      [
-        {
-          "contract_data": {
-            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-            "key": {
-              "vec": [
-                {
-                  "symbol": "DisputeRaiser"
-                },
-                {
-                  "u64": 1
-                }
-              ]
-            },
-            "durability": "persistent"
-          }
-        },
-        [
-          {
-            "last_modified_ledger_seq": 0,
-            "data": {
-              "contract_data": {
-                "ext": "v0",
-                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-                "key": {
-                  "vec": [
-                    {
-                      "symbol": "DisputeRaiser"
-                    },
-                    {
-                      "u64": 1
-                    }
-                  ]
-                },
-                "durability": "persistent",
-                "val": {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
-                }
-              }
-            },
-            "ext": "v0"
-          },
-          518400
-        ]
-      ],
-      [
-        {
-          "contract_data": {
-            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-            "key": {
-              "vec": [
-                {
-=======
->>>>>>> upstream/main
                   "symbol": "Job"
                 },
                 {
@@ -790,11 +669,7 @@
                       "val": {
                         "vec": [
                           {
-<<<<<<< HEAD
-                            "symbol": "Disputed"
-=======
                             "symbol": "InProgress"
->>>>>>> upstream/main
                           }
                         ]
                       }
@@ -806,17 +681,6 @@
                       "val": {
                         "address": "CCABDO7UZXYE4W6GVSEGSNNZTKSLFQGKXXQTH6OX7M7GKZ4Z6CUJNGZN"
                       }
-<<<<<<< HEAD
-                    },
-                    {
-                      "key": {
-                        "symbol": "version"
-                      },
-                      "val": {
-                        "u32": 1
-                      }
-=======
->>>>>>> upstream/main
                     }
                   ]
                 }
@@ -860,6 +724,18 @@
                         },
                         "val": {
                           "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "ArchiveCount"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u64": 0
                         }
                       },
                       {
@@ -1091,42 +967,6 @@
       [
         {
           "contract_data": {
-<<<<<<< HEAD
-            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
-            "key": {
-              "ledger_key_nonce": {
-                "nonce": 8370022561469687789
-              }
-            },
-            "durability": "temporary"
-          }
-        },
-        [
-          {
-            "last_modified_ledger_seq": 0,
-            "data": {
-              "contract_data": {
-                "ext": "v0",
-                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
-                "key": {
-                  "ledger_key_nonce": {
-                    "nonce": 8370022561469687789
-                  }
-                },
-                "durability": "temporary",
-                "val": "void"
-              }
-            },
-            "ext": "v0"
-          },
-          6311999
-        ]
-      ],
-      [
-        {
-          "contract_data": {
-=======
->>>>>>> upstream/main
             "contract": "CCABDO7UZXYE4W6GVSEGSNNZTKSLFQGKXXQTH6OX7M7GKZ4Z6CUJNGZN",
             "key": {
               "vec": [
@@ -2148,63 +1988,6 @@
       "event": {
         "ext": "v0",
         "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
-<<<<<<< HEAD
-        "type_": "contract",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "job_disputed"
-              }
-            ],
-            "data": {
-              "vec": [
-                {
-                  "u64": 1
-                },
-                {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
-                },
-                {
-                  "i128": {
-                    "hi": 0,
-                    "lo": 0
-                  }
-                }
-              ]
-            }
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
-        "type_": "diagnostic",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "fn_return"
-              },
-              {
-                "symbol": "raise_dispute"
-              }
-            ],
-            "data": "void"
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": null,
-=======
->>>>>>> upstream/main
         "type_": "diagnostic",
         "body": {
           "v0": {
@@ -2213,28 +1996,15 @@
                 "symbol": "fn_call"
               },
               {
-<<<<<<< HEAD
-                "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
-              },
-              {
-                "symbol": "raise_dispute"
-=======
                 "bytes": "8011bbf4cdf04e5bc6ac886935b99aa4b2c0cabde133f9d7fb3e656799f0a896"
               },
               {
                 "symbol": "transfer"
->>>>>>> upstream/main
               }
             ],
             "data": {
               "vec": [
                 {
-<<<<<<< HEAD
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
-                },
-                {
-                  "u64": 1
-=======
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
                 },
                 {
@@ -2245,27 +2015,18 @@
                     "hi": 0,
                     "lo": 50000000
                   }
->>>>>>> upstream/main
                 }
               ]
             }
           }
         }
       },
-<<<<<<< HEAD
-      "failed_call": false
-=======
       "failed_call": true
->>>>>>> upstream/main
     },
     {
       "event": {
         "ext": "v0",
-<<<<<<< HEAD
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
-=======
         "contract_id": "8011bbf4cdf04e5bc6ac886935b99aa4b2c0cabde133f9d7fb3e656799f0a896",
->>>>>>> upstream/main
         "type_": "diagnostic",
         "body": {
           "v0": {
@@ -2275,23 +2036,13 @@
               },
               {
                 "error": {
-<<<<<<< HEAD
-                  "contract": 3
-=======
                   "contract": 10
->>>>>>> upstream/main
                 }
               }
             ],
             "data": {
               "vec": [
                 {
-<<<<<<< HEAD
-                  "string": "failing with contract error"
-                },
-                {
-                  "u32": 3
-=======
                   "string": "zero balance is not sufficient to spend"
                 },
                 {
@@ -2299,7 +2050,6 @@
                     "hi": 0,
                     "lo": 50000000
                   }
->>>>>>> upstream/main
                 }
               ]
             }
@@ -2321,9 +2071,6 @@
               },
               {
                 "error": {
-<<<<<<< HEAD
-                  "contract": 3
-=======
                   "contract": 10
                 }
               }
@@ -2373,7 +2120,6 @@
               {
                 "error": {
                   "contract": 10
->>>>>>> upstream/main
                 }
               }
             ],
@@ -2398,11 +2144,7 @@
               },
               {
                 "error": {
-<<<<<<< HEAD
-                  "contract": 3
-=======
                   "contract": 10
->>>>>>> upstream/main
                 }
               }
             ],
@@ -2427,11 +2169,7 @@
               },
               {
                 "error": {
-<<<<<<< HEAD
-                  "contract": 3
-=======
                   "contract": 10
->>>>>>> upstream/main
                 }
               }
             ],
@@ -2446,11 +2184,7 @@
                 {
                   "vec": [
                     {
-<<<<<<< HEAD
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
-=======
                       "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
->>>>>>> upstream/main
                     },
                     {
                       "u64": 1
@@ -2477,11 +2211,7 @@
               },
               {
                 "error": {
-<<<<<<< HEAD
-                  "contract": 3
-=======
                   "contract": 10
->>>>>>> upstream/main
                 }
               }
             ],

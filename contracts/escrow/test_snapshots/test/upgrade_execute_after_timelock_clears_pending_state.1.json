@@ -333,6 +333,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "ArchiveCount"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u64": 0
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "DescriptionPayloadMaxBytes"
                             }
                           ]

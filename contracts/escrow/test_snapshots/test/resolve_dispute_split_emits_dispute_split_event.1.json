@@ -196,9 +196,6 @@
               ]
             }
           },
-<<<<<<< HEAD
-          "sub_invocations": []
-=======
           "sub_invocations": [
             {
               "function": {
@@ -224,7 +221,6 @@
               "sub_invocations": []
             }
           ]
->>>>>>> upstream/main
         }
       ]
     ],
@@ -644,6 +640,51 @@
             "key": {
               "vec": [
                 {
+                  "symbol": "CompletedAt"
+                },
+                {
+                  "u64": 1
+                }
+              ]
+            },
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+                "key": {
+                  "vec": [
+                    {
+                      "symbol": "CompletedAt"
+                    },
+                    {
+                      "u64": 1
+                    }
+                  ]
+                },
+                "durability": "persistent",
+                "val": {
+                  "u64": 1710000000
+                }
+              }
+            },
+            "ext": "v0"
+          },
+          120960
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+            "key": {
+              "vec": [
+                {
                   "symbol": "DisputeFeePaid"
                 },
                 {
@@ -675,11 +716,7 @@
                 "val": {
                   "i128": {
                     "hi": 0,
-<<<<<<< HEAD
-                    "lo": 0
-=======
                     "lo": 50000000
->>>>>>> upstream/main
                   }
                 }
               }
@@ -849,17 +886,6 @@
                       "val": {
                         "address": "CCABDO7UZXYE4W6GVSEGSNNZTKSLFQGKXXQTH6OX7M7GKZ4Z6CUJNGZN"
                       }
-<<<<<<< HEAD
-                    },
-                    {
-                      "key": {
-                        "symbol": "version"
-                      },
-                      "val": {
-                        "u32": 1
-                      }
-=======
->>>>>>> upstream/main
                     }
                   ]
                 }
@@ -951,6 +977,18 @@
                         },
                         "val": {
                           "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "ArchiveCount"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u64": 0
                         }
                       },
                       {
@@ -1289,11 +1327,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-<<<<<<< HEAD
-                          "lo": 12500
-=======
                           "lo": 50012500
->>>>>>> upstream/main
                         }
                       }
                     },
@@ -1439,11 +1473,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-<<<<<<< HEAD
-                          "lo": 9999500000
-=======
                           "lo": 9949500000
->>>>>>> upstream/main
                         }
                       }
                     },
@@ -2350,8 +2380,6 @@
       "event": {
         "ext": "v0",
         "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
-<<<<<<< HEAD
-=======
         "type_": "diagnostic",
         "body": {
           "v0": {
@@ -2444,7 +2472,6 @@
       "event": {
         "ext": "v0",
         "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
->>>>>>> upstream/main
         "type_": "contract",
         "body": {
           "v0": {
@@ -2464,11 +2491,7 @@
                 {
                   "i128": {
                     "hi": 0,
-<<<<<<< HEAD
-                    "lo": 0
-=======
                     "lo": 50000000
->>>>>>> upstream/main
                   }
                 }
               ]
