@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Spinner from "@/components/Spinner";
 import { useModalFocusTrap } from "@/lib/modal";
 import { suppressConfirm, type ConfirmKey } from "@/lib/confirm-prefs";
@@ -106,6 +106,35 @@ export default function ConfirmDialog({
   }, [dontShowAgain, loading, onConfirm, suppressKey]);
 
   useModalFocusTrap(open, dialogRef, handleCancel);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const isEditableField =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        target instanceof HTMLButtonElement ||
+        (target?.isContentEditable ?? false);
+
+      if (
+        event.key === "Enter" &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.shiftKey &&
+        !isEditableField
+      ) {
+        event.preventDefault();
+        handleConfirm();
+      }
+    };
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [handleConfirm, open]);
 
   if (!open) return null;
 

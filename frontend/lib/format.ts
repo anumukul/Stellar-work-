@@ -169,6 +169,17 @@ export interface DeadlineDisplay {
   isPast: boolean;
 }
 
+export interface DeadlineCountdown {
+  exact: string;
+  days: number;
+  hours: number;
+  minutes: number;
+  isPast: boolean;
+  isExpired: boolean;
+  label: string;
+  urgency: "low" | "medium" | "high" | "expired";
+}
+
 export function formatDeadline(deadline: string): DeadlineDisplay | null {
   if (deadline === "0") return null;
 
@@ -180,5 +191,55 @@ export function formatDeadline(deadline: string): DeadlineDisplay | null {
     exact: deadlineDate.toLocaleString(),
     relative: formatRelativeInterval(deltaMs),
     isPast: deltaMs < 0,
+  };
+}
+
+export function getDeadlineCountdown(deadline: string, now = Date.now()): DeadlineCountdown | null {
+  if (deadline === "0") return null;
+
+  const deadlineDate = new Date(Number(deadline) * 1000);
+  if (Number.isNaN(deadlineDate.getTime())) return null;
+
+  const diffMs = deadlineDate.getTime() - now;
+  const totalMinutes = Math.max(0, Math.floor(Math.abs(diffMs) / 60000));
+  const days = Math.floor(totalMinutes / (24 * 60));
+  const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+  const minutes = totalMinutes % 60;
+
+  if (diffMs <= 0) {
+    return {
+      exact: deadlineDate.toLocaleString(),
+      days: 0,
+      hours: 0,
+      minutes: 0,
+      isPast: true,
+      isExpired: true,
+      label: "Expired",
+      urgency: "expired",
+    };
+  }
+
+  const parts = [
+    days > 0 ? `${days}d` : null,
+    hours > 0 ? `${hours}h` : null,
+    minutes > 0 || (days === 0 && hours === 0) ? `${minutes}m` : null,
+  ].filter(Boolean) as string[];
+
+  const label = `${parts.slice(0, 3).join(" ")} remaining`;
+  const urgency = diffMs <= 12 * 60 * 60 * 1000
+    ? "high"
+    : diffMs <= 72 * 60 * 60 * 1000
+      ? "medium"
+      : "low";
+
+  return {
+    exact: deadlineDate.toLocaleString(),
+    days,
+    hours,
+    minutes,
+    isPast: false,
+    isExpired: false,
+    label,
+    urgency,
   };
 }

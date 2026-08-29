@@ -143,6 +143,7 @@ export default function HomePage() {
     if (typeof window === "undefined") return "";
     return new URLSearchParams(window.location.search).get("q") ?? "";
   });
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState(searchTerm);
   const [recentSearches, setRecentSearches] = useState<string[] | null>(null);
   const [recentSearchesOpen, setRecentSearchesOpen] = useState(false);
   const [resultsAnnouncement, setResultsAnnouncement] = useState("");
@@ -247,6 +248,14 @@ export default function HomePage() {
     if (recentSearches === null) return;
     saveRecentSearches(recentSearches);
   }, [recentSearches]);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedSearchTerm(searchTerm.trim());
+    }, 350);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [searchTerm]);
 
   // Sync advanced filters and comparison selection to URL query params.
   useEffect(() => {
@@ -430,7 +439,7 @@ export default function HomePage() {
     void refresh();
   }, [refresh]);
 
-  const normalizedSearchTerm = searchTerm.trim().toLowerCase();
+  const normalizedSearchTerm = debouncedSearchTerm.trim().toLowerCase();
 
   const getDescription = useCallback((hash: string): string => {
     if (descriptions[hash]) return descriptions[hash];
@@ -452,20 +461,12 @@ export default function HomePage() {
     };
 
     const afterSearch = normalizedSearchTerm
-      ? bookmarkedJobs.filter(({ id, job }) => {
+      ? bookmarkedJobs.filter(({ job }) => {
           const description = getDescription(job.description_hash).toLowerCase();
-          const amount = toXlm(job.amount).toLowerCase();
-          const freelancer = job.freelancer?.toLowerCase() ?? "";
-          return [
-            String(id),
-            job.description_hash.toLowerCase(),
-            description,
-            amount,
-            job.client.toLowerCase(),
-            freelancer,
-            (job.title || "").toLowerCase(),
-            (job.category || "").toLowerCase(),
-          ].some((value) => value.includes(normalizedSearchTerm));
+          const title = (job.title || "").toLowerCase();
+          const category = (job.category || "").toLowerCase();
+
+          return [description, title, category].some((value) => value.includes(normalizedSearchTerm));
         })
       : bookmarkedJobs;
 
@@ -714,7 +715,14 @@ export default function HomePage() {
       )}
 
       {!loading && visibleJobs.length === 0 && !error && (
-        showBookmarkedOnly && jobs.length > 0 && !normalizedSearchTerm ? (
+        normalizedSearchTerm ? (
+          <NoResultsState
+            title="No jobs match your search"
+            description="Try a different job description keyword or clear the search to see all open jobs."
+            actionLabel="Clear search"
+            onAction={handleClearSearch}
+          />
+        ) : showBookmarkedOnly && jobs.length > 0 ? (
           <NoResultsState
             title="No favorites found"
             description="No bookmarked jobs match the current feed. Turn off favorites only to see everything again."
@@ -723,19 +731,11 @@ export default function HomePage() {
           />
         ) : (
           <EmptyState
-            title={
-              normalizedSearchTerm
-                ? "No jobs match your search"
-                : showBookmarkedOnly
-                  ? "No favorites found"
-                  : "No open jobs found"
-            }
+            title={showBookmarkedOnly ? "No favorites found" : "No open jobs found"}
             description={
-              normalizedSearchTerm
-                ? "Try a different keyword or clear your search history."
-                : showBookmarkedOnly
-                  ? "Bookmark jobs to quickly find them here."
-                  : "New jobs will appear here as clients post them."
+              showBookmarkedOnly
+                ? "Bookmark jobs to quickly find them here."
+                : "New jobs will appear here as clients post them."
             }
           />
         )
@@ -791,7 +791,7 @@ export default function HomePage() {
                   setPage(1);
                 }}
                 onFocus={() => setRecentSearchesOpen((recentSearches?.length ?? 0) > 0)}
-                placeholder="Search by ID, description, wallet, or amount"
+                placeholder="Search by description keyword"
                 className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2"
                 aria-controls="recent-searches-listbox"
                 aria-expanded={recentSearchesOpen}

@@ -26,6 +26,7 @@ import TruncatedAddress from "@/components/TruncatedAddress";
 import { useToast } from "@/components/ToastProvider";
 import RecentContractInteractionsWidget from "@/app/dashboard/RecentContractInteractionsWidget";
 import DashboardWidgets from "@/components/DashboardWidgets";
+import DeadlineCountdown from "@/components/DeadlineCountdown";
 import { useNotifications, getEventLabel } from "@/lib/notifications-context";
 import { formatDeadline, toXlm } from "@/lib/format";
 import { isConfirmSuppressed, CONFIRM_KEYS } from "@/lib/confirm-prefs";
@@ -657,12 +658,13 @@ export default function DashboardPage() {
                               "N/A"
                             )}
                           </p>
-                          <p>
-                            {(() => {
-                              const deadline = formatDeadline(job.deadline);
-                              if (!deadline) return "Deadline: No deadline";
-                              return `Deadline: ${deadline.isPast ? "Past due" : deadline.relative} • ${deadline.exact}`;
-                            })()}
+                          <p className="flex items-center gap-2">
+                            <span className="text-slate-500">Deadline:</span>
+                            {job.deadline && job.deadline !== "0" ? (
+                              <DeadlineCountdown deadline={job.deadline} />
+                            ) : (
+                              <span className="text-slate-500">No deadline</span>
+                            )}
                           </p>
                         </div>
                         {isOwnJob && (
