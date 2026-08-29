@@ -563,17 +563,6 @@
                       "val": {
                         "address": "CCABDO7UZXYE4W6GVSEGSNNZTKSLFQGKXXQTH6OX7M7GKZ4Z6CUJNGZN"
                       }
-<<<<<<< HEAD
-                    },
-                    {
-                      "key": {
-                        "symbol": "version"
-                      },
-                      "val": {
-                        "u32": 1
-                      }
-=======
->>>>>>> upstream/main
                     }
                   ]
                 }
@@ -617,6 +606,18 @@
                         },
                         "val": {
                           "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "ArchiveCount"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u64": 0
                         }
                       },
                       {
@@ -1837,17 +1838,6 @@
                   "val": {
                     "address": "CCABDO7UZXYE4W6GVSEGSNNZTKSLFQGKXXQTH6OX7M7GKZ4Z6CUJNGZN"
                   }
-<<<<<<< HEAD
-                },
-                {
-                  "key": {
-                    "symbol": "version"
-                  },
-                  "val": {
-                    "u32": 1
-                  }
-=======
->>>>>>> upstream/main
                 }
               ]
             }

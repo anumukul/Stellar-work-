@@ -24,6 +24,10 @@ const DEFAULT_DISPUTE_FEE: i128 = 50_000_000;
 const MAX_MILESTONES: u32 = 20;
 /// Maximum number of disputes that can be resolved in a single batch call.
 const MAX_BATCH_DISPUTES: u32 = 20;
+/// Default burn percentage in basis points (0% = disabled by default).
+const DEFAULT_BURN_BPS: i128 = 0;
+/// Default oracle fee in stroops (2 XLM).
+const DEFAULT_ORACLE_FEE: i128 = 20_000_000;
 
 const INSTANCE_LIFETIME_THRESHOLD: u32 = 17_280;
 const INSTANCE_BUMP_AMOUNT: u32 = 518_400;
@@ -148,6 +152,15 @@ pub struct Attestation {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Oracle {
+    pub address: Address,
+    pub name: String,
+    pub url: String,
+    pub is_active: bool,
+}
+
+#[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
     JobsCount,
@@ -203,6 +216,14 @@ pub enum DataKey {
     ArchivedJob(u64),
     /// SC-82: number of jobs moved to archive storage.
     ArchiveCount,
+    Oracle(Address),
+    OracleEnabled,
+    OracleAssignment(u64),
+    OracleFee,
+    OracleList,
+    BurnPool,
+    BurnPercentage,
+    TotalBurned,
 }
 
 #[contracterror]
@@ -249,6 +270,13 @@ pub enum Error {
     AttestationNotFound = 34,
     JobNotVisible = 35,
     FreelancerNotInvited = 36,
+    OracleNotFound = 37,
+    OracleNotActive = 38,
+    OracleNotAssigned = 39,
+    OracleAlreadySubmitted = 40,
+    InsufficientBurnPool = 41,
+    InvalidBurnPercentage = 42,
+    NoActiveOracles = 43,
 }
 
 #[contract]
@@ -461,8 +489,22 @@ impl EscrowContract {
             (calculated_fee, calculated_payout)
         };
 
+        let burn_bps = Self::get_burn_percentage(e.clone());
+        let burn_amount = if burn_bps > 0 {
+            checked_mul_div(&e, fee, burn_bps, BPS_DENOMINATOR)
+        } else {
+            0i128
+        };
+        let fees_after_burn = checked_sub(&e, fee, burn_amount);
+
         let current_fees = get_token_fees(&e, &job.token);
-        let updated_fees = checked_add(&e, current_fees, fee);
+        let updated_fees = checked_add(&e, current_fees, fees_after_burn);
+
+        if burn_amount > 0 {
+            let current_pool: i128 = e.storage().persistent().get(&DataKey::BurnPool).unwrap_or(0);
+            let new_pool = checked_add(&e, current_pool, burn_amount);
+            e.storage().persistent().set(&DataKey::BurnPool, &new_pool);
+        }
 
         job.status = JobStatus::Completed;
         set_job(&e, job_id, &job);
@@ -845,6 +887,19 @@ impl EscrowContract {
         job.status = JobStatus::Disputed;
         set_job(&e, job_id, &job);
         bump_instance_ttl(&e);
+
+        let oracle_enabled: bool = e.storage().instance().get(&DataKey::OracleEnabled).unwrap_or(false);
+        if oracle_enabled {
+            let assigned = assign_oracle_from_pool(&e, job_id);
+            if assigned {
+                let oracle_fee = Self::get_oracle_fee(e.clone());
+                if oracle_fee > 0 {
+                    let native_token = load_native_token(&e);
+                    let token_client = token::Client::new(&e, &native_token);
+                    token_client.transfer(&caller, &e.current_contract_address(), &oracle_fee);
+                }
+            }
+        }
 
         e.events()
             .publish((Symbol::new(&e, "job_disputed"),), (job_id, caller, dispute_fee));
@@ -2038,6 +2093,293 @@ impl EscrowContract {
             .get(&DataKey::ArchiveCount)
             .unwrap_or(0)
     }
+
+    pub fn register_oracle(e: Env, admin: Address, oracle_address: Address, name: String, url: String) {
+        admin.require_auth();
+        let current_admin = load_admin(&e);
+        if admin != current_admin {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+        let oracle = Oracle {
+            address: oracle_address.clone(),
+            name,
+            url,
+            is_active: true,
+        };
+        e.storage().persistent().set(&DataKey::Oracle(oracle_address.clone()), &oracle);
+        e.storage().persistent().extend_ttl(
+            &DataKey::Oracle(oracle_address.clone()),
+            INSTANCE_LIFETIME_THRESHOLD,
+            INSTANCE_BUMP_AMOUNT,
+        );
+
+        let mut list: Vec<Address> = e.storage().persistent().get(&DataKey::OracleList).unwrap_or(Vec::new(&e));
+        let mut exists = false;
+        for i in 0..list.len() {
+            if let Some(a) = list.get(i) {
+                if a == oracle_address {
+                    exists = true;
+                    break;
+                }
+            }
+        }
+        if !exists {
+            list.push_back(oracle_address.clone());
+            e.storage().persistent().set(&DataKey::OracleList, &list);
+        }
+
+        bump_instance_ttl(&e);
+        e.events().publish(
+            (Symbol::new(&e, "oracle_registered"),),
+            (oracle_address,),
+        );
+    }
+
+    pub fn remove_oracle(e: Env, admin: Address, oracle_address: Address) {
+        admin.require_auth();
+        let current_admin = load_admin(&e);
+        if admin != current_admin {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+        e.storage().persistent().remove(&DataKey::Oracle(oracle_address.clone()));
+
+        let list: Vec<Address> = e.storage().persistent().get(&DataKey::OracleList).unwrap_or(Vec::new(&e));
+        let mut new_list = Vec::new(&e);
+        for i in 0..list.len() {
+            if let Some(a) = list.get(i) {
+                if a != oracle_address {
+                    new_list.push_back(a);
+                }
+            }
+        }
+        e.storage().persistent().set(&DataKey::OracleList, &new_list);
+
+        bump_instance_ttl(&e);
+        e.events().publish(
+            (Symbol::new(&e, "oracle_removed"),),
+            (oracle_address,),
+        );
+    }
+
+    pub fn get_oracle(e: Env, oracle_address: Address) -> Option<Oracle> {
+        e.storage()
+            .persistent()
+            .get::<DataKey, Oracle>(&DataKey::Oracle(oracle_address))
+    }
+
+    pub fn set_oracle_enabled(e: Env, admin: Address, enabled: bool) {
+        admin.require_auth();
+        let current_admin = load_admin(&e);
+        if admin != current_admin {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+        e.storage().instance().set(&DataKey::OracleEnabled, &enabled);
+        bump_instance_ttl(&e);
+        e.events().publish(
+            (Symbol::new(&e, "oracle_enabled_toggled"),),
+            (enabled,),
+        );
+    }
+
+    pub fn is_oracle_enabled(e: Env) -> bool {
+        e.storage().instance().get(&DataKey::OracleEnabled).unwrap_or(false)
+    }
+
+    pub fn get_assigned_oracle(e: Env, dispute_id: u64) -> Option<Oracle> {
+        let oracle_addr: Option<Address> = e
+            .storage()
+            .persistent()
+            .get(&DataKey::OracleAssignment(dispute_id));
+        match oracle_addr {
+            Some(addr) => e.storage().persistent().get::<DataKey, Oracle>(&DataKey::Oracle(addr)),
+            None => None,
+        }
+    }
+
+    pub fn update_oracle_fee(e: Env, admin: Address, new_fee: i128) {
+        admin.require_auth();
+        let current_admin = load_admin(&e);
+        if admin != current_admin {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+        if new_fee < 0 {
+            panic_with_error!(&e, Error::InvalidAmount);
+        }
+        e.storage().instance().set(&DataKey::OracleFee, &new_fee);
+        bump_instance_ttl(&e);
+        e.events().publish(
+            (Symbol::new(&e, "oracle_fee_updated"),),
+            (new_fee,),
+        );
+    }
+
+    pub fn get_oracle_fee(e: Env) -> i128 {
+        e.storage()
+            .instance()
+            .get::<DataKey, i128>(&DataKey::OracleFee)
+            .unwrap_or(DEFAULT_ORACLE_FEE)
+    }
+
+    pub fn submit_verdict(
+        e: Env,
+        oracle: Address,
+        dispute_id: u64,
+        winner: Address,
+        evidence_hash: BytesN<32>,
+    ) {
+        oracle.require_auth();
+
+        let stored_oracle: Oracle = e
+            .storage()
+            .persistent()
+            .get(&DataKey::Oracle(oracle.clone()))
+            .unwrap_or_else(|| panic_with_error!(&e, Error::OracleNotFound));
+
+        if !stored_oracle.is_active {
+            panic_with_error!(&e, Error::OracleNotActive);
+        }
+
+        let assigned_addr: Address = e
+            .storage()
+            .persistent()
+            .get(&DataKey::OracleAssignment(dispute_id))
+            .unwrap_or_else(|| panic_with_error!(&e, Error::OracleNotAssigned));
+
+        if assigned_addr != oracle {
+            panic_with_error!(&e, Error::OracleNotAssigned);
+        }
+
+        let mut job = get_job_or_panic(&e, dispute_id);
+        if job.status != JobStatus::Disputed {
+            panic_with_error!(&e, Error::InvalidStatus);
+        }
+
+        let freelancer = match job.freelancer.clone() {
+            Option::Some(addr) => addr,
+            Option::None => panic_with_error!(&e, Error::InvalidStatus),
+        };
+
+        let client_wins = winner == job.client;
+
+        let oracle_fee = Self::get_oracle_fee(e.clone());
+        let native_token = load_native_token(&e);
+        let native_token_client = token::Client::new(&e, &native_token);
+        if oracle_fee > 0 {
+            native_token_client.transfer(&e.current_contract_address(), &oracle, &oracle_fee);
+        }
+
+        e.storage().persistent().remove(&DataKey::OracleAssignment(dispute_id));
+
+        let token_client = token::Client::new(&e, &job.token);
+
+        if client_wins {
+            job.status = JobStatus::Cancelled;
+            set_job(&e, dispute_id, &job);
+            mark_job_cancelled_at(&e, dispute_id);
+            token_client.transfer(&e.current_contract_address(), &job.client, &job.amount);
+        } else {
+            let fee_bps = calculate_fee_for_amount(&e, job.amount);
+            let fee = checked_mul_div(&e, job.amount, fee_bps, BPS_DENOMINATOR);
+            let payout = checked_sub(&e, job.amount, fee);
+
+            let current_fees = get_token_fees(&e, &job.token);
+            let updated_fees = checked_add(&e, current_fees, fee);
+
+            job.status = JobStatus::Completed;
+            set_job(&e, dispute_id, &job);
+            mark_job_completed_at(&e, dispute_id);
+            e.storage()
+                .persistent()
+                .set(&DataKey::TokenFees(job.token.clone()), &updated_fees);
+            bump_token_fees_ttl(&e, &job.token);
+
+            token_client.transfer(&e.current_contract_address(), &freelancer, &payout);
+        }
+
+        bump_instance_ttl(&e);
+
+        e.events().publish(
+            (Symbol::new(&e, "oracle_verdict_submitted"),),
+            (dispute_id, oracle, winner, evidence_hash),
+        );
+    }
+
+    pub fn update_burn_percentage(e: Env, admin: Address, new_bps: i128) {
+        admin.require_auth();
+        let current_admin = load_admin(&e);
+        if admin != current_admin {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+        if new_bps < 0 || new_bps > BPS_DENOMINATOR {
+            panic_with_error!(&e, Error::InvalidBurnPercentage);
+        }
+        e.storage().instance().set(&DataKey::BurnPercentage, &new_bps);
+        bump_instance_ttl(&e);
+        e.events().publish(
+            (Symbol::new(&e, "burn_percentage_updated"),),
+            (new_bps,),
+        );
+    }
+
+    pub fn get_burn_percentage(e: Env) -> i128 {
+        e.storage()
+            .instance()
+            .get::<DataKey, i128>(&DataKey::BurnPercentage)
+            .unwrap_or(DEFAULT_BURN_BPS)
+    }
+
+    pub fn get_burn_pool_balance(e: Env) -> i128 {
+        e.storage()
+            .persistent()
+            .get::<DataKey, i128>(&DataKey::BurnPool)
+            .unwrap_or(0)
+    }
+
+    pub fn get_total_burned(e: Env) -> i128 {
+        e.storage()
+            .persistent()
+            .get::<DataKey, i128>(&DataKey::TotalBurned)
+            .unwrap_or(0)
+    }
+
+    pub fn execute_burn(e: Env, admin: Address, amount: i128) {
+        admin.require_auth();
+        let current_admin = load_admin(&e);
+        if admin != current_admin {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+        if amount <= 0 {
+            panic_with_error!(&e, Error::InvalidAmount);
+        }
+
+        let pool_balance: i128 = e
+            .storage()
+            .persistent()
+            .get(&DataKey::BurnPool)
+            .unwrap_or(0);
+
+        if amount > pool_balance {
+            panic_with_error!(&e, Error::InsufficientBurnPool);
+        }
+
+        let new_pool = checked_sub(&e, pool_balance, amount);
+        e.storage().persistent().set(&DataKey::BurnPool, &new_pool);
+
+        let total_burned: i128 = e
+            .storage()
+            .persistent()
+            .get(&DataKey::TotalBurned)
+            .unwrap_or(0);
+        let new_total = checked_add(&e, total_burned, amount);
+        e.storage().persistent().set(&DataKey::TotalBurned, &new_total);
+
+        bump_instance_ttl(&e);
+
+        e.events().publish(
+            (Symbol::new(&e, "tokens_burned"),),
+            (amount, new_total),
+        );
+    }
 }
 
 /// Core dispute resolution logic shared by `resolve_dispute` and `batch_resolve_disputes`.
@@ -2152,6 +2494,31 @@ fn resolve_single_dispute(e: &Env, admin: &Address, job_id: u64, resolution: Dis
         (Symbol::new(e, "dispute_resolved"),),
         (job_id, resolution.client_bps),
     );
+}
+
+fn assign_oracle_from_pool(e: &Env, dispute_id: u64) -> bool {
+    let oracle_list: Vec<Address> = e
+        .storage()
+        .persistent()
+        .get(&DataKey::OracleList)
+        .unwrap_or(Vec::new(e));
+
+    for i in 0..oracle_list.len() {
+        if let Some(addr) = oracle_list.get(i) {
+            if let Some(oracle) = e.storage().persistent().get::<DataKey, Oracle>(&DataKey::Oracle(addr.clone())) {
+                if oracle.is_active {
+                    e.storage().persistent().set(&DataKey::OracleAssignment(dispute_id), &addr);
+                    e.storage().persistent().extend_ttl(
+                        &DataKey::OracleAssignment(dispute_id),
+                        ACTIVE_JOB_LIFETIME_THRESHOLD,
+                        ACTIVE_JOB_BUMP_AMOUNT,
+                    );
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 fn require_active_access(e: &Env, address: &Address) {
@@ -2454,6 +2821,7 @@ fn set_fee_tier_count(e: &Env, count: u32) {
 #[cfg(test)]
 mod test {
     extern crate std;
+    use std::format;
 
     use super::*;
     use soroban_sdk::testutils::{Address as _, Events, Ledger};
@@ -9230,6 +9598,237 @@ mod test {
         let job_id =
             client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
         client.top_up_escrow(&user, &job_id, &-1i128);
+    }
+
+    #[test]
+    fn oracle_register_and_get() {
+        let (env, client, admin, _, _, _) = setup();
+        let oracle_addr = Address::generate(&env);
+        let name = String::from_str(&env, "TestOracle");
+        let url = String::from_str(&env, "https://oracle.example.com");
+
+        client.register_oracle(&admin, &oracle_addr, &name, &url);
+        let oracle = client.get_oracle(&oracle_addr);
+        assert!(oracle.is_some());
+        let o = oracle.unwrap();
+        assert_eq!(o.name, name);
+        assert_eq!(o.url, url);
+        assert!(o.is_active);
+    }
+
+    #[test]
+    fn oracle_remove() {
+        let (env, client, admin, _, _, _) = setup();
+        let oracle_addr = Address::generate(&env);
+        let name = String::from_str(&env, "TestOracle");
+        let url = String::from_str(&env, "https://oracle.example.com");
+
+        client.register_oracle(&admin, &oracle_addr, &name, &url);
+        assert!(client.get_oracle(&oracle_addr).is_some());
+
+        client.remove_oracle(&admin, &oracle_addr);
+        assert!(client.get_oracle(&oracle_addr).is_none());
+    }
+
+    #[test]
+    fn oracle_enable_toggle() {
+        let (_, client, admin, _, _, _) = setup();
+        assert!(!client.is_oracle_enabled());
+        client.set_oracle_enabled(&admin, &true);
+        assert!(client.is_oracle_enabled());
+        client.set_oracle_enabled(&admin, &false);
+        assert!(!client.is_oracle_enabled());
+    }
+
+    #[test]
+    fn oracle_assignment_on_dispute() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+        let oracle_addr = Address::generate(&env);
+        let name = String::from_str(&env, "TestOracle");
+        let url = String::from_str(&env, "https://oracle.example.com");
+
+        client.register_oracle(&admin, &oracle_addr, &name, &url);
+        client.set_oracle_enabled(&admin, &true);
+        client.update_oracle_fee(&admin, &0i128);
+
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+        client.raise_dispute(&user, &job_id);
+
+        let assigned = client.get_assigned_oracle(&job_id);
+        assert!(assigned.is_some());
+        assert_eq!(assigned.unwrap().address, oracle_addr);
+    }
+
+    #[test]
+    fn oracle_submit_verdict_client_wins() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+        let oracle_addr = Address::generate(&env);
+        let name = String::from_str(&env, "TestOracle");
+        let url = String::from_str(&env, "https://oracle.example.com");
+
+        client.register_oracle(&admin, &oracle_addr, &name, &url);
+        client.set_oracle_enabled(&admin, &true);
+        client.update_oracle_fee(&admin, &0i128);
+
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+        client.raise_dispute(&user, &job_id);
+
+        let token_client = token::Client::new(&env, &native_token);
+        let user_pre = token_client.balance(&user);
+
+        let evidence = BytesN::from_array(&env, &[9u8; 32]);
+        client.submit_verdict(&oracle_addr, &job_id, &user, &evidence);
+
+        let user_post = token_client.balance(&user);
+        assert_eq!(user_post - user_pre, 1_000_000);
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Cancelled);
+    }
+
+    #[test]
+    fn oracle_submit_verdict_freelancer_wins() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+        let oracle_addr = Address::generate(&env);
+        let name = String::from_str(&env, "TestOracle");
+        let url = String::from_str(&env, "https://oracle.example.com");
+
+        client.register_oracle(&admin, &oracle_addr, &name, &url);
+        client.set_oracle_enabled(&admin, &true);
+        client.update_oracle_fee(&admin, &0i128);
+
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+        client.raise_dispute(&user, &job_id);
+
+        let token_client = token::Client::new(&env, &native_token);
+        let fl_pre = token_client.balance(&freelancer);
+
+        let evidence = BytesN::from_array(&env, &[9u8; 32]);
+        client.submit_verdict(&oracle_addr, &job_id, &freelancer, &evidence);
+
+        let fl_post = token_client.balance(&freelancer);
+        assert_eq!(fl_post - fl_pre, 975_000);
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Completed);
+    }
+
+    #[test]
+    fn burn_percentage_default() {
+        let (_, client, _, _, _, _) = setup();
+        assert_eq!(client.get_burn_percentage(), 0);
+    }
+
+    #[test]
+    fn burn_percentage_update() {
+        let (_, client, admin, _, _, _) = setup();
+        client.update_burn_percentage(&admin, &1_000i128);
+        assert_eq!(client.get_burn_percentage(), 1_000);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #42)")]
+    fn burn_percentage_invalid_rejected() {
+        let (_, client, admin, _, _, _) = setup();
+        client.update_burn_percentage(&admin, &10_001i128);
+    }
+
+    #[test]
+    fn burn_pool_accumulates_on_approve() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+        client.update_burn_percentage(&admin, &2_000i128);
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
+
+        let pool = client.get_burn_pool_balance();
+        assert!(pool > 0);
+    }
+
+    #[test]
+    fn burn_pool_zero_when_burn_disabled() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+        client.update_burn_percentage(&admin, &0i128);
+
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
+
+        assert_eq!(client.get_burn_pool_balance(), 0);
+        assert_eq!(client.get_fees(&native_token), 25_000);
+    }
+
+    #[test]
+    fn execute_burn_reduces_pool() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+        client.update_burn_percentage(&admin, &2_000i128);
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
+
+        let pool = client.get_burn_pool_balance();
+        assert!(pool > 0);
+
+        client.execute_burn(&admin, &pool);
+        assert_eq!(client.get_burn_pool_balance(), 0);
+        assert_eq!(client.get_total_burned(), pool);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #41)")]
+    fn execute_burn_insufficient_pool() {
+        let (_, client, admin, _, _, _) = setup();
+        client.execute_burn(&admin, &1_000_000i128);
+    }
+
+    #[test]
+    fn total_burned_zero_initially() {
+        let (_, client, _, _, _, _) = setup();
+        assert_eq!(client.get_total_burned(), 0);
     }
 
 }
