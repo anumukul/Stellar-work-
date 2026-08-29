@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import HomePage from "@/app/page";
 
@@ -166,6 +166,77 @@ describe("Home page job listing after getJobCount", () => {
     expect(screen.queryByRole("heading", { name: "Job #2" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Job #1" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("heading", { name: /^Job #/ })).toHaveLength(1);
+  });
+
+  it("debounces keyword filtering by description and clears the search", async () => {
+    mockGetJobCount.mockResolvedValue(3);
+    mockGetJob
+      .mockResolvedValueOnce({
+        client: "GCLIENT",
+        freelancer: null,
+        amount: "10000000",
+        description_hash: "hash-one",
+        status: "Open",
+        created_at: "1710000002",
+        deadline: "0",
+        token: "GTOKEN",
+        revision_count: 0,
+        submitted_at: "0",
+      })
+      .mockResolvedValueOnce({
+        client: "GCLIENT",
+        freelancer: null,
+        amount: "20000000",
+        description_hash: "hash-two",
+        status: "Open",
+        created_at: "1710000001",
+        deadline: "0",
+        token: "GTOKEN",
+        revision_count: 0,
+        submitted_at: "0",
+      })
+      .mockResolvedValueOnce({
+        client: "GCLIENT",
+        freelancer: null,
+        amount: "30000000",
+        description_hash: "hash-three",
+        status: "Open",
+        created_at: "1710000000",
+        deadline: "0",
+        token: "GTOKEN",
+        revision_count: 0,
+        submitted_at: "0",
+      });
+
+    localStorage.setItem("job-desc:hash-one", "backend api onboarding");
+    localStorage.setItem("job-desc:hash-two", "frontend dashboard optimization");
+    localStorage.setItem("job-desc:hash-three", "content writing and editing");
+
+    render(<HomePage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Job #3" })).toBeInTheDocument();
+    });
+
+    const searchInput = screen.getByLabelText(/search jobs/i);
+    fireEvent.change(searchInput, { target: { value: "backend" } });
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Job #1" })).toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Job #2" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Job #3" })).not.toBeInTheDocument();
+    }, { timeout: 1500 });
+
+    fireEvent.change(searchInput, { target: { value: "missing-keyword" } });
+
+    await waitFor(() => {
+      expect(screen.getByText("No jobs match your search")).toBeInTheDocument();
+    }, { timeout: 1500 });
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Job #3" })).toBeInTheDocument();
+    });
   });
 
   it("shows empty state when getJobCount returns zero", async () => {

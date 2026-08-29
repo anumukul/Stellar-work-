@@ -2,6 +2,7 @@
 
 import CancelJobConfirmModal from "@/components/CancelJobConfirmModal";
 import ConfirmDialog from "@/components/ConfirmDialog";
+import DeadlineCountdown from "@/components/DeadlineCountdown";
 import InfoTooltip from "@/components/InfoTooltip";
 import { useToast } from "@/components/ToastProvider";
 import StatusPill from "@/components/StatusPill";
@@ -837,13 +838,13 @@ function JobDetailPageContent() {
             {copied ? "Copied!" : "Copy"}
           </button>
         </div>
-        <p>
-          <strong>Deadline:</strong>{" "}
-          {(() => {
-            const deadline = formatDeadline(job.deadline);
-            if (!deadline) return "No deadline";
-            return `${deadline.isPast ? "Past due" : deadline.relative} • ${deadline.exact}`;
-          })()}
+        <p className="flex flex-wrap items-center gap-2">
+          <strong>Deadline:</strong>
+          {job.deadline && job.deadline !== "0" ? (
+            <DeadlineCountdown deadline={job.deadline} className="ml-0" />
+          ) : (
+            <span className="text-slate-500">No deadline</span>
+          )}
         </p>
 
         {/* Message button — visible when the other party is known */}
