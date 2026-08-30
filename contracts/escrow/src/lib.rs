@@ -226,6 +226,16 @@ pub enum DataKey {
     TotalBurned,
 }
 
+/// Contract error variants.
+///
+/// Each discriminant is part of the public API: the frontend maps these numbers
+/// onto user-facing messages, so a number must never be reused for a different
+/// meaning. Add new variants with new numbers; never renumber existing ones.
+///
+/// The message and suggested action for every variant are catalogued in
+/// `docs/contract-error-messages.md` (DOC-43, #761), generated from
+/// `frontend/lib/contract-errors.ts`. Adding a variant here without adding it
+/// there fails `frontend/__tests__/contract-errors.test.ts`.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]

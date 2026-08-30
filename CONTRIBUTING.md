@@ -191,6 +191,17 @@ When making significant architectural changes, please submit an ADR in the `docs
 - [ ] Consequences list what becomes easier or harder.
 - [ ] Linked from relevant code comments if applicable.
 
+## Accessibility
+
+The interface targets WCAG 2.1 Level AA. Current conformance, the features
+already implemented, and the known gaps are recorded in the
+[Accessibility Conformance Report](docs/accessibility-conformance.md).
+
+Before opening a PR that touches the interface, run the reviewer checklist in
+that report — it is a short keyboard, semantics and responsive pass that catches
+the regressions cheapest to catch. If you close one of the listed gaps, move it
+out of the gaps table in the same PR.
+
 ## Pull Request Process
 
 1. **Open an issue** (if one doesn't exist) describing the bug or feature.

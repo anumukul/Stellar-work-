@@ -15,7 +15,9 @@
     "test:e2e": "playwright test",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
-    "chromatic": "chromatic --storybook-build-dir storybook-static"
+    "chromatic": "chromatic --storybook-build-dir storybook-static",
+    "test:visual": "playwright test e2e/visual-regression.spec.ts --project=chromium",
+    "test:visual:update": "playwright test e2e/visual-regression.spec.ts --project=chromium --update-snapshots"
   },
   "dependencies": {
     "@ledgerhq/hw-app-str": "^6.28.0",
