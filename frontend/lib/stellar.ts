@@ -25,6 +25,7 @@ import {
 } from "@/lib/network-config";
 import { recordRecentContractInteraction } from "@/lib/recent-contract-interactions";
 import { classifyError, reportContractTx, reportRpcError } from "@/lib/metrics-client";
+import { describeContractError } from "./contract-errors";
 
 function getActiveNetwork(): StellarNetwork {
   if (typeof window !== "undefined") {
@@ -443,28 +444,14 @@ export function parseContractError(error: unknown, currentBalance?: string): str
   }
 
   // ── Contract error codes ──────────────────────────────────────────────────
-  // Map known escrow contract error numbers (defined in contracts/escrow/src/lib.rs)
-  const contractErrorMatch = raw.match(/error\(contract,\s*#(\d+)\)/i);
-  if (contractErrorMatch) {
-    const code = Number(contractErrorMatch[1]);
-    const CONTRACT_ERRORS: Record<number, string> = {
-      1:  "Not authorized to perform this action.",
-      2:  "Job not found.",
-      3:  "Invalid job status for this action.",
-      4:  "Job amount must be greater than zero.",
-      5:  "Token is not allowed for this operation.",
-      6:  "The job description is too large.",
-      7:  "Platform is currently paused. Please try again later.",
-      8:  "Deadline must be in the future.",
-      9:  "You have reached the maximum number of active jobs.",
-      10: "Insufficient token balance. Please add funds and try again.",
-      11: "The deadline has not passed yet.",
-      12: "Only the assigned freelancer can perform this action.",
-      13: "Only the job client can perform this action.",
-      14: "Job revision limit reached.",
-      15: "Dispute already raised for this job.",
-    };
-    return CONTRACT_ERRORS[code] ?? `Contract error #${code}. Please try again or contact support.`;
+  // Delegated to the catalogue in lib/contract-errors.ts, which is the single
+  // source of truth and is checked against contracts/escrow/src/lib.rs by
+  // __tests__/contract-errors.test.ts. The map that used to live here had
+  // drifted: it reported code 1 as "Not authorized" and code 2 as "Job not
+  // found" when the contract defines exactly the reverse (#761).
+  const described = describeContractError(error);
+  if (described) {
+    return `${described.message} ${described.action}`;
   }
 
   // ── Wallet / signing errors ───────────────────────────────────────────────

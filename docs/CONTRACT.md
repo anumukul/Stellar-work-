@@ -381,6 +381,13 @@ The contract supports a two-step upgrade process with a 24-hour timelock:
 3. **Execute**: Admin calls `execute_upgrade(admin)` after the deadline.
 4. **Cancel**: Admin may call `cancel_upgrade(admin)` at any point before execution.
 
+For the full operational process — storage-compatibility rules, migration
+backfill, testnet staging, mainnet cutover checklist, and rollback criteria —
+see the [Smart Contract Upgrade and Migration Runbook](contract-upgrade-runbook.md).
+
+Contract error variants and the messages the interface should show for them are
+catalogued in [Contract Errors -> User-Facing Messages](contract-error-messages.md).
+
 ## Token Whitelist
 
 The contract maintains a whitelist of allowed token addresses. Only whitelisted tokens can be used for job payments.

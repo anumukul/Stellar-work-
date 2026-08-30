@@ -272,28 +272,6 @@ pub enum DataKey {
     TotalBurned,
 }
 
-/// Storage keys for SC-120 / SC-121 / SC-122 / SC-123.
-///
-/// A separate enum from [`DataKey`] because Soroban caps a `#[contracttype]`
-/// union at 50 cases and `DataKey` already holds 47 — adding these five to it
-/// fails to compile with `LengthExceedsMax`. Splitting also keeps each
-/// feature's keys legible as a group; storage keys need not come from a single
-/// enum, only be distinct types.
-#[contracttype]
-#[derive(Clone)]
-pub enum ExtKey {
-    /// SC-120: admin-controlled verification flag for a freelancer address.
-    VerifiedFreelancer(Address),
-    /// SC-122: maps a client's idempotency nonce to the job it created, so a
-    /// replayed submission returns the original job instead of a duplicate.
-    ClientNonce(Address, u64),
-    /// SC-122: highest nonce a client has consumed, so a UI can pick the next.
-    ClientNonceCounter(Address),
-    /// SC-123: one indexable lifecycle event, keyed by its sequence number.
-    EventLog(u64),
-    /// SC-123: the latest assigned event sequence number (0 = none yet).
-    EventSeq,
-}
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
