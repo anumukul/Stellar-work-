@@ -5,11 +5,25 @@ import { useEffect, useId, useState } from "react";
 
 export default function GlobalError({
   error,
+  retry,
   reset,
 }: {
   error: Error & { digest?: string };
-  reset: () => void;
+  /**
+   * Next 16.3 (stable): re-fetches and re-renders the boundary's children.
+   * This is what a user pressing "Try again" expects — most errors here come
+   * from a failed data fetch, and re-rendering without re-fetching reproduces
+   * the same failure, so the button appears to do nothing.
+   */
+  retry?: () => void;
+  /**
+   * Pre-16.3 name, kept so the component still recovers on an older runtime.
+   * `reset` clears the error state without re-fetching.
+   */
+  reset?: () => void;
 }) {
+  // Prefer retry; fall back to reset so neither runtime leaves a dead button.
+  const recover = retry ?? reset ?? (() => undefined);
   const uid = useId();
   const [errorId] = useState(() => {
     const ts = Date.now().toString(36).toUpperCase();
@@ -57,7 +71,7 @@ export default function GlobalError({
       <div className="flex flex-wrap justify-center gap-3">
         <button
           type="button"
-          onClick={reset}
+          onClick={recover}
           className="rounded-lg bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-slate-700 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-300"
         >
           Try again

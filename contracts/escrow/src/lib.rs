@@ -3327,6 +3327,11 @@ mod test {
         let asset = token::StellarAssetClient::new(&env, &native_token);
         asset.mint(&admin, &10_000_000_000);
         asset.mint(&user, &10_000_000_000);
+        // TEST-15 (#766): either party may raise a dispute, and raising one
+        // costs a native-token deposit (DEFAULT_DISPUTE_FEE). The freelancer
+        // was never funded here, so every test where the freelancer disputes
+        // failed inside the SAC transfer rather than in the logic under test.
+        asset.mint(&freelancer, &10_000_000_000);
 
         (env, client, admin, user, freelancer, native_token)
     }
@@ -4174,7 +4179,13 @@ mod test {
         client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 0 });
 
         let post_balance = token_client.balance(&freelancer);
-        assert_eq!(post_balance - pre_balance, 975_000);
+        // The freelancer receives two separate amounts, and this test asserts
+        // both (#766): the escrow payout, and half the dispute deposit. The
+        // client raised the dispute and lost it, so their deposit is split
+        // between the counterparty and the admin rather than refunded.
+        let escrow_payout = 975_000i128;
+        let counterparty_share = DEFAULT_DISPUTE_FEE / 2;
+        assert_eq!(post_balance - pre_balance, escrow_payout + counterparty_share);
         assert_eq!(client.get_fees(&native_token), 25_000);
         assert_eq!(client.get_job(&job_id).status, JobStatus::Completed);
     }
@@ -4415,10 +4426,15 @@ mod test {
         // 50 / 50 split: client_bps = 5_000
         client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 5_000 });
 
-        // client gets 500_000 (no fee on client portion)
+        // client gets 500_000 (no fee on client portion), and forfeits the
+        // deposit: an exact 50/50 is not a win for the raiser, since the rule
+        // is `client_bps > 5_000` for a client-raised dispute (#766).
         assert_eq!(token_client.balance(&user) - client_pre, 500_000);
-        // freelancer gets 500_000 minus 2.5% fee = 487_500
-        assert_eq!(token_client.balance(&freelancer) - freelancer_pre, 487_500);
+        // freelancer gets 500_000 minus 2.5% fee, plus half the forfeited deposit
+        assert_eq!(
+            token_client.balance(&freelancer) - freelancer_pre,
+            487_500 + DEFAULT_DISPUTE_FEE / 2
+        );
         // fee accrued = 2.5% of 500_000 = 12_500
         assert_eq!(client.get_fees(&native_token), 12_500);
         assert_eq!(client.get_job(&job_id).status, JobStatus::Completed);
@@ -4448,8 +4464,13 @@ mod test {
 
         // client share = 300_000
         assert_eq!(token_client.balance(&user) - client_pre, 300_000);
-        // freelancer gross = 700_000, fee = 17_500, net = 682_500
-        assert_eq!(token_client.balance(&freelancer) - freelancer_pre, 682_500);
+        // freelancer gross = 700_000, fee = 17_500, net = 682_500 — plus the
+        // full deposit back, because the freelancer raised the dispute and won
+        // it (`client_bps < 5_000` for a freelancer-raised dispute) (#766).
+        assert_eq!(
+            token_client.balance(&freelancer) - freelancer_pre,
+            682_500 + DEFAULT_DISPUTE_FEE
+        );
         assert_eq!(client.get_fees(&native_token), 17_500);
         assert_eq!(client.get_job(&job_id).status, JobStatus::Completed);
     }
@@ -5666,7 +5687,10 @@ mod test {
         client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 0 });
         let post_freelancer = token_client.balance(&freelancer);
 
-        let payout = post_freelancer - pre_freelancer;
+        // The deposit refund is not part of the escrow, so it is excluded
+        // before checking conservation. The client raised and lost, so half
+        // their deposit reached the freelancer (#766).
+        let payout = post_freelancer - pre_freelancer - DEFAULT_DISPUTE_FEE / 2;
         let fee = client.get_fees(&native_token);
 
         assert_eq!(
@@ -9595,19 +9619,38 @@ mod test {
         client.resolve_dispute_split(&job_id, &5_000u32);
     }
 
+    /// `resolve_dispute_split` must be reachable only with the admin's
+    /// authorization.
+    ///
+    /// The function takes no caller argument — it loads the stored admin and
+    /// calls `require_auth()` on it — so "a non-admin calls it" is not
+    /// expressible as an argument. The check that matters is therefore that
+    /// the call fails when the admin's authorization is absent, which
+    /// `set_auths(&[])` produces.
+    ///
+    /// This previously built a second `Env` with no contract registered and
+    /// asserted `Error(Contract, #2)`. That panicked for the wrong reason —
+    /// there was no contract to call — so it would have passed even if the
+    /// admin gate were deleted entirely (#766).
     #[test]
-    #[should_panic(expected = "Error(Contract, #2)")]
-    fn resolve_dispute_split_rejects_non_admin() {
+    #[should_panic]
+    fn resolve_dispute_split_rejects_unauthorized_caller() {
         let (env, client, _, user, freelancer, native_token) = setup();
         let job_id = disputed_job(&env, &client, &user, &freelancer, &native_token);
-        // mock_all_auths makes caller whoever we want; here we remove the admin auth
-        // by calling via a fresh non-admin env — simplest: revoke auths and let the
-        // admin require_auth panic with Unauthorized.
-        let env2 = Env::default();
-        env2.mock_all_auths();
-        let client2 = EscrowContractClient::new(&env2, &client.address);
-        // This will panic because env2 has no contract state.
-        client2.resolve_dispute_split(&job_id, &5_000u32);
+
+        env.set_auths(&[]);
+        client.resolve_dispute_split(&job_id, &5_000u32);
+    }
+
+    /// The same guard on `resolve_dispute`.
+    #[test]
+    #[should_panic]
+    fn resolve_dispute_rejects_unauthorized_caller() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = disputed_job(&env, &client, &user, &freelancer, &native_token);
+
+        env.set_auths(&[]);
+        client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 5_000 });
     }
 
     #[test]
@@ -11068,5 +11111,507 @@ mod test {
         client.post_job(&user, &1_000_000, &hash(&env), &32u32, &0u64, &native_token);
 
         assert_eq!(client.get_event(&1u64).unwrap().timestamp, 1_710_000_000);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // TEST-15 (#766): dispute lifecycle
+    //
+    // The dispute path has two independent money flows and they are easy to
+    // conflate: the escrowed job amount, split by `client_bps`, and the
+    // native-token deposit the raiser posts, which is refunded or forfeited
+    // depending on who won. Every test below asserts them separately.
+    //
+    // The deposit rule, stated once:
+    //   - client raised   → wins when client_bps  > 5_000
+    //   - freelancer raised → wins when client_bps < 5_000
+    //   - winner  → full deposit refunded
+    //   - loser   → half to the counterparty, half to the admin
+    // An exact 50/50 is a loss for the raiser under both readings.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// Drive a job to Disputed, raised by the named party.
+    fn dispute_raised_by(
+        env: &Env,
+        client: &EscrowContractClient,
+        user: &Address,
+        freelancer: &Address,
+        native_token: &Address,
+        raiser: &Address,
+    ) -> u64 {
+        let job_id = client.post_job(user, &1_000_000i128, &hash(env), &32u32, &0u64, native_token);
+        client.accept_job(freelancer, &job_id);
+        client.submit_work(freelancer, &job_id);
+        client.raise_dispute(raiser, &job_id);
+        job_id
+    }
+
+    // ── Raising ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn the_client_can_raise_a_dispute() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = dispute_raised_by(&env, &client, &user, &freelancer, &native_token, &user);
+
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Disputed);
+    }
+
+    #[test]
+    fn the_freelancer_can_raise_a_dispute() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id =
+            dispute_raised_by(&env, &client, &user, &freelancer, &native_token, &freelancer);
+
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Disputed);
+    }
+
+    #[test]
+    fn raising_collects_the_deposit_from_the_raiser() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let token_client = token::Client::new(&env, &native_token);
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+
+        let before = token_client.balance(&freelancer);
+        client.raise_dispute(&freelancer, &job_id);
+
+        assert_eq!(before - token_client.balance(&freelancer), DEFAULT_DISPUTE_FEE);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #2)")]
+    fn a_stranger_cannot_raise_a_dispute() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let outsider = Address::generate(&env);
+        let asset = token::StellarAssetClient::new(&env, &native_token);
+        asset.mint(&outsider, &10_000_000_000);
+
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+
+        client.raise_dispute(&outsider, &job_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn an_open_job_cannot_be_disputed() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+
+        // Nobody has accepted, so there is no counterparty to dispute with.
+        client.raise_dispute(&user, &job_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn a_completed_job_cannot_be_disputed() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
+
+        client.raise_dispute(&user, &job_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #1)")]
+    fn an_unknown_job_cannot_be_disputed() {
+        let (_, client, _, user, _, _) = setup();
+        client.raise_dispute(&user, &9_999u64);
+    }
+
+    // ── Resolving in favour of one side ──────────────────────────────────
+
+    #[test]
+    fn resolving_fully_for_the_freelancer_pays_the_escrow_less_fee() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = dispute_raised_by(&env, &client, &user, &freelancer, &native_token, &user);
+        let token_client = token::Client::new(&env, &native_token);
+        let before = token_client.balance(&freelancer);
+
+        client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 0 });
+
+        // 1_000_000 less the 2.5% fee, plus half the client's forfeited deposit.
+        assert_eq!(
+            token_client.balance(&freelancer) - before,
+            975_000 + DEFAULT_DISPUTE_FEE / 2
+        );
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Completed);
+    }
+
+    #[test]
+    fn resolving_fully_for_the_client_refunds_without_a_fee() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = dispute_raised_by(&env, &client, &user, &freelancer, &native_token, &user);
+        let token_client = token::Client::new(&env, &native_token);
+        let before = token_client.balance(&user);
+
+        client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 10_000 });
+
+        // A full refund takes no platform fee, and the client won their own
+        // dispute so the whole deposit comes back.
+        assert_eq!(
+            token_client.balance(&user) - before,
+            1_000_000 + DEFAULT_DISPUTE_FEE
+        );
+        assert_eq!(client.get_fees(&native_token), 0);
+    }
+
+    #[test]
+    fn a_resolution_completes_the_job() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = dispute_raised_by(&env, &client, &user, &freelancer, &native_token, &user);
+
+        client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 5_000 });
+
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Completed);
+    }
+
+    #[test]
+    fn escrow_is_conserved_across_every_split() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let token_client = token::Client::new(&env, &native_token);
+
+        for bps in [0u32, 2_500, 5_000, 7_500, 10_000] {
+            let job_id = dispute_raised_by(&env, &client, &user, &freelancer, &native_token, &user);
+            let fees_before = client.get_fees(&native_token);
+            let client_before = token_client.balance(&user);
+            let freelancer_before = token_client.balance(&freelancer);
+
+            client.resolve_dispute(&job_id, &DisputeResolution { client_bps: bps });
+
+            // Deposit movements are excluded: the client raised every one of
+            // these and only wins above 5_000, so the refund differs per case.
+            let refund = if bps > 5_000 {
+                DEFAULT_DISPUTE_FEE
+            } else {
+                0
+            };
+            let counterparty = if bps > 5_000 { 0 } else { DEFAULT_DISPUTE_FEE / 2 };
+
+            let to_client = token_client.balance(&user) - client_before - refund;
+            let to_freelancer =
+                token_client.balance(&freelancer) - freelancer_before - counterparty;
+            let fee = client.get_fees(&native_token) - fees_before;
+
+            // Nothing is created or destroyed: every stroop of escrow lands
+            // with the client, the freelancer, or the fee pool.
+            assert_eq!(
+                to_client + to_freelancer + fee,
+                1_000_000,
+                "escrow not conserved at client_bps={}",
+                bps
+            );
+        }
+    }
+
+    // ── The deposit rule ─────────────────────────────────────────────────
+
+    #[test]
+    fn a_winning_client_raiser_is_refunded_in_full() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = dispute_raised_by(&env, &client, &user, &freelancer, &native_token, &user);
+        let token_client = token::Client::new(&env, &native_token);
+        let before = token_client.balance(&user);
+
+        // Above 5_000 is a win for a client raiser.
+        client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 7_500 });
+
+        let escrow_share = 750_000i128;
+        assert_eq!(
+            token_client.balance(&user) - before,
+            escrow_share + DEFAULT_DISPUTE_FEE
+        );
+    }
+
+    #[test]
+    fn a_winning_freelancer_raiser_is_refunded_in_full() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id =
+            dispute_raised_by(&env, &client, &user, &freelancer, &native_token, &freelancer);
+        let token_client = token::Client::new(&env, &native_token);
+        let before = token_client.balance(&freelancer);
+
+        // Below 5_000 is a win for a freelancer raiser.
+        client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 2_500 });
+
+        let escrow_net = 750_000 - 18_750; // 75% of the escrow, less the 2.5% fee
+        assert_eq!(
+            token_client.balance(&freelancer) - before,
+            escrow_net + DEFAULT_DISPUTE_FEE
+        );
+    }
+
+    #[test]
+    fn an_exact_half_split_is_a_loss_for_the_raiser() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = dispute_raised_by(&env, &client, &user, &freelancer, &native_token, &user);
+        let token_client = token::Client::new(&env, &native_token);
+        let before = token_client.balance(&user);
+
+        client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 5_000 });
+
+        // The rule is strict inequality, so 5_000 forfeits the deposit. Worth
+        // pinning: an off-by-one here silently changes who pays for arbitration.
+        assert_eq!(token_client.balance(&user) - before, 500_000);
+    }
+
+    #[test]
+    fn a_forfeited_deposit_is_split_between_counterparty_and_admin() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+        let job_id = dispute_raised_by(&env, &client, &user, &freelancer, &native_token, &user);
+        let token_client = token::Client::new(&env, &native_token);
+        let admin_before = token_client.balance(&admin);
+        let freelancer_before = token_client.balance(&freelancer);
+
+        client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 0 });
+
+        let to_admin = token_client.balance(&admin) - admin_before;
+        let to_freelancer = token_client.balance(&freelancer) - freelancer_before - 975_000;
+
+        assert_eq!(to_admin + to_freelancer, DEFAULT_DISPUTE_FEE);
+        assert_eq!(to_admin, DEFAULT_DISPUTE_FEE / 2);
+    }
+
+    #[test]
+    fn a_resolved_dispute_pays_the_deposit_out_exactly_once() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+        let token_client = token::Client::new(&env, &native_token);
+        let job_id = dispute_raised_by(&env, &client, &user, &freelancer, &native_token, &user);
+
+        let contract_before = token_client.balance(&client.address);
+        client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 0 });
+        let contract_after = token_client.balance(&client.address);
+
+        // Escrow plus the whole deposit leaves the contract, and no more: a
+        // deposit record left behind would let a later call pay it twice.
+        assert_eq!(contract_before - contract_after, 1_000_000 - 25_000 + DEFAULT_DISPUTE_FEE);
+        let _ = admin;
+    }
+
+    // ── Invalid resolutions ──────────────────────────────────────────────
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn a_job_that_is_not_disputed_cannot_be_resolved() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+
+        client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 5_000 });
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn a_dispute_cannot_be_resolved_twice() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = dispute_raised_by(&env, &client, &user, &freelancer, &native_token, &user);
+        client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 0 });
+
+        // The second call would pay out a second time from an empty escrow.
+        client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 0 });
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #11)")]
+    fn a_split_above_one_hundred_percent_is_rejected() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = dispute_raised_by(&env, &client, &user, &freelancer, &native_token, &user);
+
+        client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 10_001 });
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn a_disputed_job_cannot_be_disputed_again() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = dispute_raised_by(&env, &client, &user, &freelancer, &native_token, &user);
+
+        client.raise_dispute(&freelancer, &job_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn a_disputed_job_cannot_be_approved() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = dispute_raised_by(&env, &client, &user, &freelancer, &native_token, &user);
+
+        client.approve_work(&user, &job_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn a_disputed_job_cannot_be_cancelled() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = dispute_raised_by(&env, &client, &user, &freelancer, &native_token, &user);
+
+        client.cancel_job(&user, &job_id);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // TEST-12 (#763): arithmetic boundaries
+    //
+    // The contract stores amounts as i128, not u128 — the issue says u128, but
+    // Soroban's token interface is i128 throughout, so these exercise the real
+    // type. The helpers (`checked_add`, `checked_sub`, `checked_mul_div`) all
+    // panic with InsufficientFunds (#4) rather than wrapping, and these tests
+    // pin that: a silent wrap in fee arithmetic mints or destroys money.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #11)")]
+    fn a_zero_amount_job_is_rejected() {
+        let (env, client, _, user, _, native_token) = setup();
+        client.post_job(&user, &0i128, &hash(&env), &32u32, &0u64, &native_token);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #11)")]
+    fn a_negative_amount_job_is_rejected() {
+        let (env, client, _, user, _, native_token) = setup();
+        // i128 is signed, so a negative amount is representable and must be
+        // refused explicitly rather than flowing into a transfer.
+        client.post_job(&user, &-1i128, &hash(&env), &32u32, &0u64, &native_token);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #11)")]
+    fn the_most_negative_amount_is_rejected() {
+        let (env, client, _, user, _, native_token) = setup();
+        client.post_job(&user, &i128::MIN, &hash(&env), &32u32, &0u64, &native_token);
+    }
+
+    #[test]
+    #[should_panic]
+    fn a_max_i128_amount_cannot_be_funded() {
+        let (env, client, _, user, _, native_token) = setup();
+        // Passes the positivity check, then fails in the token transfer — no
+        // wallet holds i128::MAX. The point is that it fails loudly rather
+        // than wrapping into a small or negative escrow.
+        client.post_job(&user, &i128::MAX, &hash(&env), &32u32, &0u64, &native_token);
+    }
+
+    #[test]
+    fn a_one_stroop_job_completes_with_the_fee_rounding_to_zero() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let token_client = token::Client::new(&env, &native_token);
+        let job_id = client.post_job(&user, &1i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+
+        let before = token_client.balance(&freelancer);
+        client.approve_work(&user, &job_id);
+
+        // 2.5% of 1 truncates to 0, so the freelancer takes the whole stroop.
+        // Rounding must not produce a fee larger than the amount.
+        assert_eq!(token_client.balance(&freelancer) - before, 1);
+        assert_eq!(client.get_fees(&native_token), 0);
+    }
+
+    #[test]
+    fn fee_rounding_never_exceeds_the_amount() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let token_client = token::Client::new(&env, &native_token);
+
+        for amount in [1i128, 2, 3, 39, 40, 41, 99, 100, 101] {
+            let job_id = client.post_job(&user, &amount, &hash(&env), &32u32, &0u64, &native_token);
+            client.accept_job(&freelancer, &job_id);
+            client.submit_work(&freelancer, &job_id);
+
+            let fees_before = client.get_fees(&native_token);
+            let before = token_client.balance(&freelancer);
+            client.approve_work(&user, &job_id);
+
+            let payout = token_client.balance(&freelancer) - before;
+            let fee = client.get_fees(&native_token) - fees_before;
+
+            // Conservation at every small amount: truncation must lose nothing
+            // and create nothing.
+            assert_eq!(payout + fee, amount, "not conserved at amount={}", amount);
+            assert!(payout >= 0 && fee >= 0, "negative component at amount={}", amount);
+        }
+    }
+
+    #[test]
+    fn a_large_amount_still_conserves_value() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let token_client = token::Client::new(&env, &native_token);
+        // Large enough that a 32-bit intermediate would overflow, small enough
+        // for the minted balance to cover.
+        let amount = 9_000_000_000i128;
+        let asset = token::StellarAssetClient::new(&env, &native_token);
+        asset.mint(&user, &amount);
+
+        let job_id = client.post_job(&user, &amount, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+
+        let before = token_client.balance(&freelancer);
+        client.approve_work(&user, &job_id);
+
+        let payout = token_client.balance(&freelancer) - before;
+        assert_eq!(payout + client.get_fees(&native_token), amount);
+        assert!(payout > 0, "payout wrapped negative");
+    }
+
+    #[test]
+    fn a_far_future_deadline_is_accepted() {
+        let (env, client, _, user, _, native_token) = setup();
+        // u64::MAX seconds: deadline arithmetic must not overflow when the
+        // contract compares it against the ledger timestamp.
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &u64::MAX, &native_token);
+
+        assert_eq!(client.get_job(&job_id).deadline, u64::MAX);
+    }
+
+    #[test]
+    fn a_deadline_of_zero_means_no_deadline() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+
+        // Zero is a sentinel, not a timestamp in 1970 — accepting must work.
+        client.accept_job(&freelancer, &job_id);
+        assert_eq!(client.get_job(&job_id).status, JobStatus::InProgress);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #14)")]
+    fn a_deadline_in_the_past_is_rejected() {
+        let (env, client, _, user, _, native_token) = setup();
+        // setup() pins the ledger at 1_710_000_000.
+        client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &1u64, &native_token);
+    }
+
+    #[test]
+    fn the_job_counter_increments_without_gaps() {
+        let (env, client, _, user, _, native_token) = setup();
+
+        let mut previous = 0u64;
+        for _ in 0..5 {
+            let id = client.post_job(&user, &1_000i128, &hash(&env), &32u32, &0u64, &native_token);
+            assert_eq!(id, previous + 1, "job ids must be dense and monotonic");
+            previous = id;
+        }
+        assert_eq!(client.get_job_count(), 5);
+    }
+
+    #[test]
+    fn a_hundred_percent_fee_leaves_the_freelancer_nothing_but_conserves_value() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+        let token_client = token::Client::new(&env, &native_token);
+        client.update_fee_bps(&admin, &MAX_FEE_BPS);
+
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+
+        let before = token_client.balance(&freelancer);
+        client.approve_work(&user, &job_id);
+
+        let payout = token_client.balance(&freelancer) - before;
+        // At the maximum permitted fee the payout must still be non-negative
+        // and the total still conserved.
+        assert!(payout >= 0);
+        assert_eq!(payout + client.get_fees(&native_token), 1_000_000);
     }
 }
