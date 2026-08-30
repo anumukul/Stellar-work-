@@ -1,3 +1,8 @@
+/* eslint-disable jsx-a11y/aria-role -- A11Y-30 (#768): `role` here is a
+   JobSection prop selecting the viewer perspective ("client" | "freelancer"),
+   not an ARIA role on a DOM element. jsx-a11y cannot distinguish a custom
+   component prop from a DOM attribute. Documented in
+   docs/accessibility-audit.md. */
 "use client";
 
 import {
