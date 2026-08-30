@@ -140,10 +140,19 @@ export async function getSwapQuote(
 }
 
 export async function cancelJob(client: string, jobId: string) {
-  return callContract(getActiveContractId(), "cancel_job", [
+  const result = await callContract(getActiveContractId(), "cancel_job", [
     nativeToScVal(client, { type: "address" }),
     nativeToScVal(jobId, { type: "u64" }),
   ]);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("stellarwork:job-cancelled", { detail: { jobId, status: "Cancelled" } }),
+    );
+    window.dispatchEvent(
+      new CustomEvent("stellarwork:job-status-changed", { detail: { jobId, status: "Cancelled" } }),
+    );
+  }
+  return result;
 }
 
 export async function topUpEscrow(client: string, jobId: string, additionalAmount: string) {
@@ -276,10 +285,19 @@ export async function getJobCount(): Promise<number> {
 }
 
 export async function freelancerCancelJob(freelancer: string, jobId: string) {
-  return callContract(getActiveContractId(), "freelancer_cancel_job", [
+  const result = await callContract(getActiveContractId(), "freelancer_cancel_job", [
     nativeToScVal(freelancer, { type: "address" }),
     nativeToScVal(jobId, { type: "u64" }),
   ]);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("stellarwork:job-cancelled", { detail: { jobId, status: "Cancelled" } }),
+    );
+    window.dispatchEvent(
+      new CustomEvent("stellarwork:job-status-changed", { detail: { jobId, status: "Cancelled" } }),
+    );
+  }
+  return result;
 }
 
 export async function storeDescriptionCid(caller: string, descHashHex: string, cid: string) {

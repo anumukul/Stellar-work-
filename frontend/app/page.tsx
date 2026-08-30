@@ -128,11 +128,11 @@ export default function HomePage() {
           ? "deadline_asc"
           : "newest";
   });
-  const [statusFilter, setStatusFilter] = useState<JobStatus | "all">(() => {
+  const [statusFilter, setStatusFilter] = useState<JobStatus | "Active" | "all">(() => {
     if (typeof window === "undefined") return "Open";
     const s = new URLSearchParams(window.location.search).get("status");
-    const validStatuses: string[] = ["Open", "InProgress", "SubmittedForReview", "Completed", "Cancelled", "Disputed", "all"];
-    return validStatuses.includes(s ?? "") ? (s as JobStatus | "all") : "Open";
+    const validStatuses: string[] = ["Open", "InProgress", "SubmittedForReview", "Completed", "Cancelled", "Disputed", "Active", "all"];
+    return validStatuses.includes(s ?? "") ? (s as JobStatus | "Active" | "all") : "Open";
   });
   const [showBookmarkedOnly, setShowBookmarkedOnly] = useState(false);
   const [bookmarkedIds, setBookmarkedIds] = useState<number[]>([]);
@@ -439,6 +439,22 @@ export default function HomePage() {
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    const handleRefresh = () => {
+      void refresh();
+    };
+
+    window.addEventListener("stellarwork:job-cancelled", handleRefresh);
+    window.addEventListener("stellarwork:job-status-changed", handleRefresh);
+    window.addEventListener("stellarwork:account-changed", handleRefresh);
+
+    return () => {
+      window.removeEventListener("stellarwork:job-cancelled", handleRefresh);
+      window.removeEventListener("stellarwork:job-status-changed", handleRefresh);
+      window.removeEventListener("stellarwork:account-changed", handleRefresh);
+    };
+  }, [refresh]);
+
   const normalizedSearchTerm = debouncedSearchTerm.trim().toLowerCase();
 
   const getDescription = useCallback((hash: string): string => {
@@ -474,7 +490,11 @@ export default function HomePage() {
       const { minAmount, maxAmount, dateRange, freelancerStatus } = advancedFilters;
       const amountXlm = parseFloat(toXlm(job.amount));
 
-      if (statusFilter !== "all" && job.status !== statusFilter) return false;
+      if (statusFilter === "Active") {
+        if (job.status === "Cancelled" || job.status === "Completed") return false;
+      } else if (statusFilter !== "all" && job.status !== statusFilter) {
+        return false;
+      }
 
       if (minAmount !== "" && !Number.isNaN(parseFloat(minAmount))) {
         if (amountXlm < parseFloat(minAmount)) return false;
