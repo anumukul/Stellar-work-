@@ -3,7 +3,7 @@
 import { getDescPayloadMax, postJob, storeDescriptionCid } from "@/lib/contract";
 import { uploadToIpfs } from "@/lib/ipfs-service";
 import ErrorBanner from "@/components/ErrorBanner";
-import RichTextEditor, { htmlToPlainText } from "@/components/RichTextEditor";
+import dynamic from "next/dynamic";
 import { getExplorerTxUrl, isValidStellarAddress, parseContractError, getNativeBalance } from "@/lib/stellar";
 import { useWallet } from "@/lib/wallet-context";
 import { useEffect, useId, useRef, useState } from "react";
@@ -18,6 +18,11 @@ import { StrKey } from "@stellar/stellar-sdk";
 
 const MIN_JOB_AMOUNT_XLM = 0.5;
 const DRAFT_STORAGE_KEY_PREFIX = "stellarwork:post-job-draft:";
+
+const RichTextEditor = dynamic(
+  () => import("@/components/RichTextEditor"),
+  { ssr: false, loading: () => <p className="text-sm text-slate-500">Loading editor…</p> },
+);
 
 const JOB_CATEGORIES = [
   "development",
@@ -69,7 +74,7 @@ function clearDraft(walletAddress: string | null): void {
   }
 }
 
-import { sha256Hex } from "@/lib/crypto";
+import { sha256Hex, htmlToPlainText } from "@/lib/crypto";
 
 export default function PostJobPage() {
   const { wallet, connectWallet } = useWallet();

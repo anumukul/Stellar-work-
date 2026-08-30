@@ -38,6 +38,8 @@ Index of project documentation. Start with the [root README](../README.md) for s
 | Document | Description |
 |----------|-------------|
 | [OPS_RUNBOOK.md](./OPS_RUNBOOK.md) | Operations runbook: monitoring, backups, incident response, contract upgrades, and maintenance |
+| [incident-runbook-template.md](./incident-runbook-template.md) | Incident logging and postmortem template for production incidents |
+| [responsive-breakpoint-checklist.md](./responsive-breakpoint-checklist.md) | Per-route responsive QA checklist tied to the automated overflow/screenshot CI checks |
 | [MONITORING.md](./MONITORING.md) | Prometheus/Grafana dashboards, metrics reference, and alert rules |
 | [PRODUCTION_CHECKLIST.md](./PRODUCTION_CHECKLIST.md) | Pre-launch checklist covering code, infrastructure, contract deploy, E2E verification, and sign-off |
 | [testing-matrix.md](./testing-matrix.md) | Unit, integration, and E2E test coverage and commands |

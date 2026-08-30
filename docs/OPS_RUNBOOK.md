@@ -230,7 +230,7 @@ echo "Snapshot date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 ## 3. Incident Response
 
-Follow the severity matrix in [production-escalation.md](./production-escalation.md) to determine priority. Use the procedures below for common scenarios.
+Follow the severity matrix in [production-escalation.md](./production-escalation.md) to determine priority. Use the procedures below for common scenarios. Every incident should be recorded using the [incident-runbook-template.md](./incident-runbook-template.md); completed runbooks go in `docs/incidents/` and drive the postmortem checklist.
 
 ### 3.1 Frontend Outage (HTTP errors / blank page)
 
