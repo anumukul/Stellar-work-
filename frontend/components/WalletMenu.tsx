@@ -184,6 +184,10 @@ export default function WalletMenu() {
           ref={menuRef}
           role="menu"
           aria-label="Wallet options"
+          // A11Y-31 (#769): a menu that handles arrow keys must be able to
+          // receive focus, or the handler never fires. -1 keeps it out of the
+          // tab order while allowing focus() when the menu opens.
+          tabIndex={-1}
           onKeyDown={handleMenuKeyDown}
           className="absolute right-0 z-50 mt-2 w-72 rounded-xl border border-slate-200 bg-white shadow-lg ring-1 ring-black/5 focus:outline-none"
         >
