@@ -88,6 +88,43 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  // Listen for account change events or Freighter extension wallet switches
+  useEffect(() => {
+    let intervalId: NodeJS.Timeout | null = null;
+
+    const checkAccountChange = async () => {
+      try {
+        const currentKey = await getPublicKey();
+        if (currentKey && wallet && currentKey !== wallet) {
+          clearJobCache();
+          setWallet(currentKey);
+          persistLastAccount(currentKey);
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(
+              new CustomEvent("stellarwork:account-changed", {
+                detail: { address: currentKey },
+              }),
+            );
+          }
+        }
+      } catch {
+        // Ignore extension communication errors
+      }
+    };
+
+    const onFocus = () => {
+      void checkAccountChange();
+    };
+    window.addEventListener("focus", onFocus);
+
+    intervalId = setInterval(checkAccountChange, 2000);
+
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [wallet]);
+
   useEffect(() => {
     if (wallet && !hasAcceptedLegal()) {
       setShowLegalModal(true);

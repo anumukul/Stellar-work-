@@ -112,6 +112,20 @@ chore(deps): bump @stellar/stellar-sdk to 15.0.1
 - Use dynamic imports for large or rarely-used components
 - All new features must include unit tests in `frontend/__tests__/`
 
+## Security Guidelines
+
+### Content Security Policy (CSP)
+
+- The frontend application enforces strict Content Security Policy headers defined in `frontend/next.config.ts`.
+- `default-src 'self'`, restricting script/style sources and limiting network connections to verified Stellar RPC endpoints and IPFS gateways.
+- To enable report-only mode during testing or staging, set `CSP_REPORT_ONLY=true` in your environment.
+
+### Secret Scanning & Credential Protection
+
+- Secret scanning with **Gitleaks** is enforced in CI (`.github/workflows/ci.yml`).
+- Never commit private keys, API tokens, secret keys (`S...`), or credentials to git.
+- Run `gitleaks detect` locally before pushing code changes to ensure no sensitive credentials or keys are committed.
+
 ## Development Rules
 
 - Contract changes must include or update unit tests and test snapshots.
