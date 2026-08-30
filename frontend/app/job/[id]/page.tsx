@@ -7,10 +7,8 @@ import InfoTooltip from "@/components/InfoTooltip";
 import { useToast } from "@/components/ToastProvider";
 import StatusPill from "@/components/StatusPill";
 import ShareButton from "@/components/ShareButton";
-import RichTextRenderer, {
-  isRichText,
-  PlainTextRenderer,
-} from "@/components/RichTextRenderer";
+import dynamic from "next/dynamic";
+import { isRichText, PlainTextRenderer } from "@/lib/rich-text";
 import TruncatedAddress from "@/components/TruncatedAddress";
 import { verifyHtmlMatchesHash } from "@/lib/crypto";
 import { useNotifications } from "@/lib/notifications-context";
@@ -53,6 +51,12 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
 import JobDetailPageSkeleton from "@/components/JobDetailPageSkeleton";
+
+const RichTextRenderer = dynamic(
+  () => import("@/components/RichTextRenderer"),
+  { ssr: false, loading: () => <p className="text-sm text-slate-500">Loading description…</p> },
+);
+
 type PendingAction =
   | "cancelJob"
   | "approveWork"

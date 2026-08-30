@@ -88,7 +88,6 @@ describe("TransactionPreview", () => {
       ...baseSimulation,
       rawXdr: "AAAAAgAAAAB...",
     };
-    const { user } = await import("@testing-library/user-event").catch(() => ({ user: null }));
     render(
       <TransactionPreview
         operation="Post job"
