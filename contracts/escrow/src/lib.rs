@@ -1,8 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, BytesN,
-    Env, String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, Bytes,
+    BytesN, Env, String, Symbol, Vec,
 };
 
 const DEFAULT_FEE_BPS: i128 = 250;
@@ -28,6 +28,13 @@ const MAX_BATCH_DISPUTES: u32 = 20;
 const DEFAULT_BURN_BPS: i128 = 0;
 /// Default oracle fee in stroops (2 XLM).
 const DEFAULT_ORACLE_FEE: i128 = 20_000_000;
+/// SC-123: largest page an indexer may request in one `get_events` call.
+/// Bounded so a single call cannot exceed the contract's read budget.
+const MAX_EVENT_PAGE_LIMIT: u32 = 100;
+/// SC-121: largest number of attachment hashes committable in one call.
+/// A Merkle build is O(n) reads and writes, so the ceiling keeps the call
+/// inside a single transaction's budget.
+const MAX_ATTACHMENT_LEAVES: u32 = 256;
 
 const INSTANCE_LIFETIME_THRESHOLD: u32 = 17_280;
 const INSTANCE_BUMP_AMOUNT: u32 = 518_400;
@@ -69,6 +76,45 @@ pub struct Job {
     pub deadline: u64,
     pub token: Address,
     pub revision_count: u32,
+    /// SC-121: Merkle root over the SHA-256 hashes of the job's off-chain
+    /// attachments, making deliverables tamper-evident without storing them
+    /// on-chain. All-zero bytes means no attachments have been committed.
+    pub attachments_root: BytesN<32>,
+}
+
+/// SC-123: one lifecycle event, recorded in a sequence an indexer can page.
+///
+/// Contract events published with `e.events()` are only readable from the
+/// ledger's event stream, which an indexer must replay from genesis to
+/// reconstruct. This mirror lives in contract storage under a monotonically
+/// increasing sequence, so an indexer can resume from the last sequence it saw.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EventRecord {
+    /// Monotonically increasing, starting at 1. Never reused.
+    pub seq: u64,
+    /// Event topic, matching the symbol published to the ledger event stream
+    /// (`job_created`, `job_accepted`, …), so both channels agree.
+    pub topic: Symbol,
+    /// The job this event concerns; 0 for events not tied to a job.
+    pub job_id: u64,
+    /// The address that caused the event.
+    pub actor: Address,
+    /// Ledger timestamp when the event was recorded.
+    pub timestamp: u64,
+}
+
+/// SC-123: one page of events plus the cursor needed to fetch the next.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EventPage {
+    /// Events in ascending sequence order.
+    pub events: Vec<EventRecord>,
+    /// Sequence to pass as `from_seq` next time. When `has_more` is false this
+    /// is where new events will appear, so an indexer can poll with it.
+    pub next_seq: u64,
+    /// Whether more events already exist beyond this page.
+    pub has_more: bool,
 }
 
 /// A single milestone within a milestone-based job.
@@ -226,16 +272,7 @@ pub enum DataKey {
     TotalBurned,
 }
 
-/// Contract error variants.
-///
-/// Each discriminant is part of the public API: the frontend maps these numbers
-/// onto user-facing messages, so a number must never be reused for a different
-/// meaning. Add new variants with new numbers; never renumber existing ones.
-///
-/// The message and suggested action for every variant are catalogued in
-/// `docs/contract-error-messages.md` (DOC-43, #761), generated from
-/// `frontend/lib/contract-errors.ts`. Adding a variant here without adding it
-/// there fails `frontend/__tests__/contract-errors.test.ts`.
+
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -287,6 +324,12 @@ pub enum Error {
     InsufficientBurnPool = 41,
     InvalidBurnPercentage = 42,
     NoActiveOracles = 43,
+    /// SC-122: this client already submitted a job with this nonce.
+    DuplicateNonce = 44,
+    /// SC-121: attachment list is empty or exceeds [`MAX_ATTACHMENT_LEAVES`].
+    InvalidAttachmentCount = 45,
+    /// SC-123: requested page size is zero or above [`MAX_EVENT_PAGE_LIMIT`].
+    InvalidPageLimit = 46,
 }
 
 #[contract]
@@ -311,6 +354,381 @@ impl EscrowContract {
         };
         e.storage().persistent().set(&DataKey::AuditLog(count), &entry);
         e.storage().persistent().set(&DataKey::AuditCount, &count);
+    }
+
+    // ── SC-123: paginated event log for indexers ─────────────────────────────
+
+    /// Record a lifecycle event in the indexable sequence.
+    ///
+    /// Called alongside `e.events().publish` rather than replacing it: the
+    /// ledger event stream stays the source of truth for live subscribers,
+    /// while this mirror lets an indexer resume from a cursor after downtime
+    /// without replaying every ledger.
+    fn record_event(e: &Env, topic: &str, job_id: u64, actor: &Address) {
+        let seq: u64 = e.storage().persistent().get(&ExtKey::EventSeq).unwrap_or(0) + 1;
+        let record = EventRecord {
+            seq,
+            topic: Symbol::new(e, topic),
+            job_id,
+            actor: actor.clone(),
+            timestamp: e.ledger().timestamp(),
+        };
+        e.storage()
+            .persistent()
+            .set(&ExtKey::EventLog(seq), &record);
+        e.storage().persistent().set(&ExtKey::EventSeq, &seq);
+        e.storage().persistent().extend_ttl(
+            &ExtKey::EventSeq,
+            INSTANCE_LIFETIME_THRESHOLD,
+            INSTANCE_BUMP_AMOUNT,
+        );
+    }
+
+    /// The highest event sequence assigned so far. 0 means no events yet.
+    ///
+    /// An indexer starting fresh can call this to size its backfill, and one
+    /// that is caught up can poll it cheaply instead of requesting a page.
+    pub fn get_latest_event_seq(e: Env) -> u64 {
+        e.storage().persistent().get(&ExtKey::EventSeq).unwrap_or(0)
+    }
+
+    /// Return up to `limit` events with sequence >= `from_seq`.
+    ///
+    /// Sequences start at 1, so `from_seq` of 0 and 1 both mean "from the
+    /// beginning". Events are returned in ascending sequence order, which is
+    /// also the order they occurred — an indexer applying them in order
+    /// reconstructs state without needing timestamps to break ties.
+    ///
+    /// `next_seq` is always the sequence to ask for next. When `has_more` is
+    /// false it points one past the newest event, so the same cursor works for
+    /// both catching up and polling.
+    ///
+    /// Gaps are tolerated: a missing sequence is skipped rather than ending the
+    /// page, so pruning old records later cannot strand an indexer mid-scan.
+    pub fn get_events(e: Env, from_seq: u64, limit: u32) -> EventPage {
+        if limit == 0 || limit > MAX_EVENT_PAGE_LIMIT {
+            panic_with_error!(&e, Error::InvalidPageLimit);
+        }
+
+        let latest: u64 = e.storage().persistent().get(&ExtKey::EventSeq).unwrap_or(0);
+        let start = if from_seq < 1 { 1 } else { from_seq };
+
+        let mut events: Vec<EventRecord> = Vec::new(&e);
+        let mut seq = start;
+        while seq <= latest && events.len() < limit {
+            if let Some(record) = e
+                .storage()
+                .persistent()
+                .get::<ExtKey, EventRecord>(&ExtKey::EventLog(seq))
+            {
+                events.push_back(record);
+            }
+            seq += 1;
+        }
+
+        // `seq` stopped either past the newest event or at the first sequence
+        // this page did not return; either way it is the correct next cursor.
+        EventPage {
+            events,
+            next_seq: seq,
+            has_more: seq <= latest,
+        }
+    }
+
+    /// A single event by sequence, for an indexer reconciling one record.
+    pub fn get_event(e: Env, seq: u64) -> Option<EventRecord> {
+        e.storage().persistent().get(&ExtKey::EventLog(seq))
+    }
+
+    // ── SC-120: freelancer verification ──────────────────────────────────────
+
+    /// Mark a freelancer as verified. Admin only.
+    ///
+    /// Idempotent: verifying an already-verified address succeeds and emits
+    /// nothing, so a retried admin transaction cannot produce a second event
+    /// that an indexer would count twice.
+    pub fn verify_freelancer(e: Env, caller: Address, freelancer: Address) {
+        caller.require_auth();
+        let admin = load_admin(&e);
+        if caller != admin {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+
+        if Self::is_freelancer_verified(e.clone(), freelancer.clone()) {
+            return;
+        }
+
+        e.storage()
+            .persistent()
+            .set(&ExtKey::VerifiedFreelancer(freelancer.clone()), &true);
+        e.storage().persistent().extend_ttl(
+            &ExtKey::VerifiedFreelancer(freelancer.clone()),
+            ACTIVE_JOB_LIFETIME_THRESHOLD,
+            INSTANCE_BUMP_AMOUNT,
+        );
+        bump_instance_ttl(&e);
+
+        e.events().publish(
+            (Symbol::new(&e, "freelancer_verified"),),
+            (freelancer.clone(),),
+        );
+        Self::record_event(&e, "freelancer_verified", 0, &freelancer);
+        Self::write_audit(&e, caller, "verify_freelancer", None, "Verified freelancer");
+    }
+
+    /// Remove a freelancer's verified status. Admin only. Idempotent.
+    pub fn unverify_freelancer(e: Env, caller: Address, freelancer: Address) {
+        caller.require_auth();
+        let admin = load_admin(&e);
+        if caller != admin {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+
+        if !Self::is_freelancer_verified(e.clone(), freelancer.clone()) {
+            return;
+        }
+
+        // Removed rather than set to false: absence already means unverified,
+        // and leaving a `false` entry behind would keep paying rent for a fact
+        // the default already encodes.
+        e.storage()
+            .persistent()
+            .remove(&ExtKey::VerifiedFreelancer(freelancer.clone()));
+        bump_instance_ttl(&e);
+
+        e.events().publish(
+            (Symbol::new(&e, "freelancer_unverified"),),
+            (freelancer.clone(),),
+        );
+        Self::record_event(&e, "freelancer_unverified", 0, &freelancer);
+        Self::write_audit(
+            &e,
+            caller,
+            "unverify_freelancer",
+            None,
+            "Unverified freelancer",
+        );
+    }
+
+    /// Whether an address is a verified freelancer. Unknown addresses are
+    /// unverified, so a UI can call this for anyone without a prior check.
+    pub fn is_freelancer_verified(e: Env, freelancer: Address) -> bool {
+        e.storage()
+            .persistent()
+            .get(&ExtKey::VerifiedFreelancer(freelancer))
+            .unwrap_or(false)
+    }
+
+    /// Whether the freelancer assigned to a job is verified.
+    ///
+    /// `None` when the job has no freelancer yet, which a caller must
+    /// distinguish from `Some(false)` — "nobody assigned" and "assigned but
+    /// unverified" are different trust signals.
+    pub fn is_job_freelancer_verified(e: Env, job_id: u64) -> Option<bool> {
+        let job = get_job_or_panic(&e, job_id);
+        job.freelancer
+            .map(|f| Self::is_freelancer_verified(e.clone(), f))
+    }
+
+    // ── SC-122: idempotency nonces ───────────────────────────────────────────
+
+    /// The highest nonce this client has used. 0 means none yet, so the next
+    /// submission should use 1.
+    pub fn get_client_nonce(e: Env, client: Address) -> u64 {
+        e.storage()
+            .persistent()
+            .get(&ExtKey::ClientNonceCounter(client))
+            .unwrap_or(0)
+    }
+
+    /// The job a client's nonce created, or `None` if that nonce is unused.
+    ///
+    /// This is what makes a retry recoverable: a client that lost the response
+    /// to its first attempt can look up what that attempt produced instead of
+    /// guessing whether to resubmit.
+    pub fn get_job_id_for_nonce(e: Env, client: Address, nonce: u64) -> Option<u64> {
+        e.storage()
+            .persistent()
+            .get(&ExtKey::ClientNonce(client, nonce))
+    }
+
+    /// Post a job with a client-supplied idempotency nonce.
+    ///
+    /// A double-submitted transaction — a wallet retry, a double-clicked
+    /// button — otherwise creates a second job and locks a second escrow. With
+    /// a nonce, the replay is rejected with [`Error::DuplicateNonce`] and the
+    /// client can recover the original job id via [`Self::get_job_id_for_nonce`].
+    ///
+    /// A separate entry point rather than an added parameter on `post_job`:
+    /// changing that signature would break every existing caller and stored
+    /// client, and the issue asks for the nonce to be optional. Callers that do
+    /// not supply one keep the existing behaviour unchanged.
+    pub fn post_job_with_nonce(
+        e: Env,
+        client: Address,
+        amount: i128,
+        desc_hash: BytesN<32>,
+        description_payload_len: u32,
+        deadline: u64,
+        token: Address,
+        nonce: u64,
+    ) -> u64 {
+        // Checked before any validation or transfer so a replay is rejected
+        // without moving funds, and cheaply.
+        if e.storage()
+            .persistent()
+            .has(&ExtKey::ClientNonce(client.clone(), nonce))
+        {
+            panic_with_error!(&e, Error::DuplicateNonce);
+        }
+
+        let job_id = Self::post_job(
+            e.clone(),
+            client.clone(),
+            amount,
+            desc_hash,
+            description_payload_len,
+            deadline,
+            token,
+        );
+
+        e.storage()
+            .persistent()
+            .set(&ExtKey::ClientNonce(client.clone(), nonce), &job_id);
+        e.storage().persistent().extend_ttl(
+            &ExtKey::ClientNonce(client.clone(), nonce),
+            ACTIVE_JOB_LIFETIME_THRESHOLD,
+            INSTANCE_BUMP_AMOUNT,
+        );
+
+        // The counter tracks the highest nonce seen, not a count, so
+        // out-of-order submissions do not rewind it.
+        let highest = Self::get_client_nonce(e.clone(), client.clone());
+        if nonce > highest {
+            e.storage()
+                .persistent()
+                .set(&ExtKey::ClientNonceCounter(client.clone()), &nonce);
+            e.storage().persistent().extend_ttl(
+                &ExtKey::ClientNonceCounter(client),
+                ACTIVE_JOB_LIFETIME_THRESHOLD,
+                INSTANCE_BUMP_AMOUNT,
+            );
+        }
+
+        job_id
+    }
+
+    // ── SC-121: Merkle commitment for off-chain attachments ──────────────────
+
+    /// Commit to a Merkle root over the job's off-chain attachment hashes.
+    ///
+    /// Callable by the job's client or the admin. Storing only the root keeps
+    /// the attachments off-chain while making them tamper-evident: anyone
+    /// holding an attachment can prove it was part of the committed set with
+    /// [`Self::verify_attachment`].
+    pub fn commit_attachments_root(
+        e: Env,
+        caller: Address,
+        job_id: u64,
+        hashes: Vec<BytesN<32>>,
+    ) -> BytesN<32> {
+        caller.require_auth();
+
+        let mut job = get_job_or_panic(&e, job_id);
+        let admin = load_admin(&e);
+        if caller != job.client && caller != admin {
+            panic_with_error!(&e, Error::Unauthorized);
+        }
+
+        let root = Self::compute_merkle_root(e.clone(), hashes);
+        job.attachments_root = root.clone();
+        set_job(&e, job_id, &job);
+        bump_instance_ttl(&e);
+
+        e.events().publish(
+            (Symbol::new(&e, "attachments_committed"),),
+            (job_id, root.clone()),
+        );
+        Self::record_event(&e, "attachments_committed", job_id, &caller);
+
+        root
+    }
+
+    /// The committed attachments root for a job. All-zero bytes means nothing
+    /// has been committed yet.
+    pub fn get_attachments_root(e: Env, job_id: u64) -> BytesN<32> {
+        get_job_or_panic(&e, job_id).attachments_root
+    }
+
+    /// Compute a Merkle root over a list of leaf hashes.
+    ///
+    /// Pairs are hashed left-then-right at every level. An odd node at any
+    /// level is promoted unchanged rather than duplicated: duplicating it makes
+    /// a tree with an odd leaf count produce the same root as one where that
+    /// leaf genuinely appears twice, which is the classic second-preimage
+    /// weakness in Bitcoin-style Merkle trees.
+    ///
+    /// An empty list returns the all-zero root, matching "no commitment".
+    pub fn compute_merkle_root(e: Env, hashes: Vec<BytesN<32>>) -> BytesN<32> {
+        let zero = BytesN::from_array(&e, &[0u8; 32]);
+        if hashes.is_empty() {
+            return zero;
+        }
+        if hashes.len() > MAX_ATTACHMENT_LEAVES {
+            panic_with_error!(&e, Error::InvalidAttachmentCount);
+        }
+
+        let mut level = hashes;
+        while level.len() > 1 {
+            let mut next: Vec<BytesN<32>> = Vec::new(&e);
+            let mut i = 0u32;
+            while i + 1 < level.len() {
+                next.push_back(hash_pair(
+                    &e,
+                    &level.get_unchecked(i),
+                    &level.get_unchecked(i + 1),
+                ));
+                i += 2;
+            }
+            if i < level.len() {
+                next.push_back(level.get_unchecked(i));
+            }
+            level = next;
+        }
+        level.get_unchecked(0)
+    }
+
+    /// Verify that `leaf` is committed under `root` via `proof`.
+    ///
+    /// `index` is the leaf's position in the original list; its bits select
+    /// whether each proof element sits on the left or the right, which is what
+    /// stops a proof for one position being replayed at another.
+    pub fn verify_attachment(
+        e: Env,
+        root: BytesN<32>,
+        leaf: BytesN<32>,
+        proof: Vec<BytesN<32>>,
+        index: u32,
+    ) -> bool {
+        let mut computed = leaf;
+        let mut idx = index;
+        for sibling in proof.iter() {
+            computed = if idx % 2 == 0 {
+                hash_pair(&e, &computed, &sibling)
+            } else {
+                hash_pair(&e, &sibling, &computed)
+            };
+            idx /= 2;
+        }
+        computed == root
+    }
+
+    /// Whether a job's committed attachments root matches `expected`.
+    ///
+    /// The tamper check a verifier runs: recompute the root from the
+    /// attachments it holds and compare against what the contract stored.
+    pub fn verify_attachments_root(e: Env, job_id: u64, expected: BytesN<32>) -> bool {
+        get_job_or_panic(&e, job_id).attachments_root == expected
     }
     pub fn initialize(e: Env, admin: Address, native_token: Address) {
         if e.storage().instance().has(&DataKey::Admin) {
@@ -392,6 +810,8 @@ impl EscrowContract {
             deadline,
             token: job_token,
             revision_count: 0,
+            // SC-121: no attachments committed at creation.
+            attachments_root: BytesN::from_array(&e, &[0u8; 32]),
         };
 
         set_job(&e, job_id, &job);
@@ -408,6 +828,7 @@ impl EscrowContract {
             (Symbol::new(&e, "job_created"),),
             (job_id, client.clone(), amount, token.clone()),
         );
+        Self::record_event(&e, "job_created", job_id, &client);
 
         Self::write_audit(&e, client, "post_job", Some(job_id), "Posted a job");
 
@@ -439,6 +860,7 @@ impl EscrowContract {
 
         e.events()
             .publish((Symbol::new(&e, "job_accepted"),), (job_id, freelancer.clone()));
+        Self::record_event(&e, "job_accepted", job_id, &freelancer);
 
         Self::write_audit(&e, freelancer, "accept_job", Some(job_id), "Accepted job");
     }
@@ -464,6 +886,7 @@ impl EscrowContract {
 
         e.events()
             .publish((Symbol::new(&e, "job_submitted"),), (job_id, freelancer.clone()));
+        Self::record_event(&e, "job_submitted", job_id, &freelancer);
 
         Self::write_audit(&e, freelancer, "submit_work", Some(job_id), "Submitted work for review");
     }
@@ -577,6 +1000,7 @@ impl EscrowContract {
             (Symbol::new(&e, "job_approved"),),
             (job_id, client.clone(), freelancer.clone(), payout),
         );
+        Self::record_event(&e, "job_approved", job_id, &client);
 
         let attestation = Attestation {
             job_id,
@@ -624,8 +1048,9 @@ impl EscrowContract {
 
         e.events().publish(
             (Symbol::new(&e, "job_rejected"),),
-            (job_id, client, job.revision_count),
+            (job_id, client.clone(), job.revision_count),
         );
+        Self::record_event(&e, "job_rejected", job_id, &client);
     }
 
     pub fn cancel_job(e: Env, client: Address, job_id: u64) {
@@ -649,7 +1074,8 @@ impl EscrowContract {
         token_client.transfer(&e.current_contract_address(), &client, &job.amount);
 
         e.events()
-            .publish((Symbol::new(&e, "job_cancelled"),), (job_id, client));
+            .publish((Symbol::new(&e, "job_cancelled"),), (job_id, client.clone()));
+        Self::record_event(&e, "job_cancelled", job_id, &client);
     }
 
 
@@ -912,7 +1338,8 @@ impl EscrowContract {
         }
 
         e.events()
-            .publish((Symbol::new(&e, "job_disputed"),), (job_id, caller, dispute_fee));
+            .publish((Symbol::new(&e, "job_disputed"),), (job_id, caller.clone(), dispute_fee));
+        Self::record_event(&e, "job_disputed", job_id, &caller);
     }
 
     /// Resolve a disputed job.
@@ -2711,6 +3138,17 @@ fn load_native_token(e: &Env) -> Address {
         .instance()
         .get::<DataKey, Address>(&DataKey::NativeToken)
         .unwrap_or_else(|| panic!("native token not configured"))
+}
+
+/// SC-121: hash two 32-byte nodes into their parent, left then right.
+///
+/// Order matters and is fixed by the caller — swapping the arguments produces a
+/// different parent, which is what makes a Merkle proof position-bound.
+fn hash_pair(e: &Env, left: &BytesN<32>, right: &BytesN<32>) -> BytesN<32> {
+    let mut buf = Bytes::new(e);
+    buf.append(&Bytes::from_array(e, &left.to_array()));
+    buf.append(&Bytes::from_array(e, &right.to_array()));
+    e.crypto().sha256(&buf).into()
 }
 
 fn load_admin(e: &Env) -> Address {
@@ -7079,6 +7517,8 @@ mod test {
             deadline,
             token: native_token.clone(),
             revision_count: 0,
+            // SC-121: a freshly posted job has no attachment commitment.
+            attachments_root: BytesN::from_array(&env, &[0u8; 32]),
         };
 
         assert_eq!(client.get_job(&job_id), expected);
@@ -7114,6 +7554,7 @@ mod test {
             deadline,
             token: native_token.clone(),
             revision_count: 0,
+            attachments_root: BytesN::from_array(&env, &[0u8; 32]),
         };
         assert_eq!(after_accept, expected_accept);
 
@@ -9841,4 +10282,769 @@ mod test {
         assert_eq!(client.get_total_burned(), 0);
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // SC-120 (#749): freelancer verification
+    // ═══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn unknown_address_is_not_verified() {
+        let (env, client, _, _, _, _) = setup();
+        // A UI must be able to ask about anyone without a prior existence check.
+        assert!(!client.is_freelancer_verified(&Address::generate(&env)));
+    }
+
+    #[test]
+    fn admin_can_verify_and_unverify_a_freelancer() {
+        let (_, client, admin, _, freelancer, _) = setup();
+
+        client.verify_freelancer(&admin, &freelancer);
+        assert!(client.is_freelancer_verified(&freelancer));
+
+        client.unverify_freelancer(&admin, &freelancer);
+        assert!(!client.is_freelancer_verified(&freelancer));
+    }
+
+    #[test]
+    fn verifying_twice_is_idempotent() {
+        let (_, client, admin, _, freelancer, _) = setup();
+
+        client.verify_freelancer(&admin, &freelancer);
+        client.verify_freelancer(&admin, &freelancer);
+
+        // A retried admin transaction must not change the outcome.
+        assert!(client.is_freelancer_verified(&freelancer));
+    }
+
+    #[test]
+    fn unverifying_an_unverified_freelancer_is_a_no_op() {
+        let (_, client, admin, _, freelancer, _) = setup();
+
+        client.unverify_freelancer(&admin, &freelancer);
+
+        assert!(!client.is_freelancer_verified(&freelancer));
+    }
+
+    #[test]
+    fn repeat_verification_emits_only_one_event() {
+        let (_, client, admin, _, freelancer, _) = setup();
+
+        client.verify_freelancer(&admin, &freelancer);
+        let after_first = client.get_latest_event_seq();
+        client.verify_freelancer(&admin, &freelancer);
+
+        // A second event for an unchanged state would be double-counted by an
+        // indexer building a verification history.
+        assert_eq!(client.get_latest_event_seq(), after_first);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #13)")]
+    fn non_admin_cannot_verify_freelancer() {
+        let (_, client, _, user, freelancer, _) = setup();
+        client.verify_freelancer(&user, &freelancer);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #13)")]
+    fn non_admin_cannot_unverify_freelancer() {
+        let (_, client, admin, user, freelancer, _) = setup();
+        client.verify_freelancer(&admin, &freelancer);
+        client.unverify_freelancer(&user, &freelancer);
+    }
+
+    #[test]
+    fn verification_is_per_address() {
+        let (env, client, admin, _, freelancer, _) = setup();
+        let other = Address::generate(&env);
+
+        client.verify_freelancer(&admin, &freelancer);
+
+        assert!(client.is_freelancer_verified(&freelancer));
+        assert!(!client.is_freelancer_verified(&other));
+    }
+
+    #[test]
+    fn job_freelancer_verification_is_none_before_assignment() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000, &hash(&env), &32u32, &0u64, &native_token);
+
+        // "Nobody assigned" and "assigned but unverified" are different trust
+        // signals, so they must not collapse to the same value.
+        assert_eq!(client.is_job_freelancer_verified(&job_id), None);
+    }
+
+    #[test]
+    fn job_freelancer_verification_tracks_the_flag() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+
+        assert_eq!(client.is_job_freelancer_verified(&job_id), Some(false));
+
+        client.verify_freelancer(&admin, &freelancer);
+        assert_eq!(client.is_job_freelancer_verified(&job_id), Some(true));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // SC-122 (#751): idempotency nonces
+    // ═══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn client_nonce_starts_at_zero() {
+        let (env, client, _, _, _, _) = setup();
+        assert_eq!(client.get_client_nonce(&Address::generate(&env)), 0);
+    }
+
+    #[test]
+    fn posting_with_a_nonce_creates_a_job() {
+        let (env, client, _, user, _, native_token) = setup();
+
+        let job_id = client.post_job_with_nonce(
+            &user,
+            &1_000_000,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+            &1u64,
+        );
+
+        assert_eq!(client.get_job(&job_id).client, user);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #44)")]
+    fn reusing_a_nonce_is_rejected() {
+        let (env, client, _, user, _, native_token) = setup();
+        client.post_job_with_nonce(
+            &user,
+            &1_000_000,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+            &7u64,
+        );
+
+        // The double-submit this exists to stop: a wallet retry or a
+        // double-clicked button.
+        client.post_job_with_nonce(
+            &user,
+            &1_000_000,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+            &7u64,
+        );
+    }
+
+    #[test]
+    fn a_rejected_replay_creates_no_second_job() {
+        let (env, client, _, user, _, native_token) = setup();
+        client.post_job_with_nonce(
+            &user,
+            &1_000_000,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+            &1u64,
+        );
+        let before = client.get_job_count();
+
+        let replay = client.try_post_job_with_nonce(
+            &user,
+            &1_000_000,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+            &1u64,
+        );
+
+        assert!(replay.is_err());
+        // The duplicate escrow lock is the real damage; the error is incidental.
+        assert_eq!(client.get_job_count(), before);
+    }
+
+    #[test]
+    fn a_replay_can_recover_the_original_job_id() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id = client.post_job_with_nonce(
+            &user,
+            &1_000_000,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+            &3u64,
+        );
+
+        // What makes a retry recoverable rather than merely refused.
+        assert_eq!(client.get_job_id_for_nonce(&user, &3u64), Some(job_id));
+    }
+
+    #[test]
+    fn an_unused_nonce_maps_to_nothing() {
+        let (_, client, _, user, _, _) = setup();
+        assert_eq!(client.get_job_id_for_nonce(&user, &99u64), None);
+    }
+
+    #[test]
+    fn distinct_nonces_create_distinct_jobs() {
+        let (env, client, _, user, _, native_token) = setup();
+
+        let first = client.post_job_with_nonce(
+            &user,
+            &1_000_000,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+            &1u64,
+        );
+        let second = client.post_job_with_nonce(
+            &user,
+            &1_000_000,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+            &2u64,
+        );
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn nonces_are_scoped_per_client() {
+        let (env, client, _, user, _, native_token) = setup();
+        let other = Address::generate(&env);
+        let asset = token::StellarAssetClient::new(&env, &native_token);
+        asset.mint(&other, &10_000_000_000);
+
+        client.post_job_with_nonce(
+            &user,
+            &1_000_000,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+            &1u64,
+        );
+
+        // One client's nonce must not block another's.
+        let second = client.post_job_with_nonce(
+            &other,
+            &1_000_000,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+            &1u64,
+        );
+        assert_eq!(client.get_job(&second).client, other);
+    }
+
+    #[test]
+    fn the_nonce_counter_advances() {
+        let (env, client, _, user, _, native_token) = setup();
+
+        client.post_job_with_nonce(
+            &user,
+            &1_000_000,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+            &1u64,
+        );
+        assert_eq!(client.get_client_nonce(&user), 1);
+
+        client.post_job_with_nonce(
+            &user,
+            &1_000_000,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+            &2u64,
+        );
+        assert_eq!(client.get_client_nonce(&user), 2);
+    }
+
+    #[test]
+    fn the_nonce_counter_tracks_the_highest_not_the_latest() {
+        let (env, client, _, user, _, native_token) = setup();
+
+        client.post_job_with_nonce(
+            &user,
+            &1_000_000,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+            &10u64,
+        );
+        client.post_job_with_nonce(
+            &user,
+            &1_000_000,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+            &4u64,
+        );
+
+        // Out-of-order submissions must not rewind the counter, or the next
+        // suggested nonce would collide with one already used.
+        assert_eq!(client.get_client_nonce(&user), 10);
+    }
+
+    #[test]
+    fn plain_post_job_remains_nonce_free() {
+        let (env, client, _, user, _, native_token) = setup();
+
+        client.post_job(&user, &1_000_000, &hash(&env), &32u32, &0u64, &native_token);
+        client.post_job(&user, &1_000_000, &hash(&env), &32u32, &0u64, &native_token);
+
+        // Backward compatibility: callers that supply no nonce are unaffected.
+        assert_eq!(client.get_client_nonce(&user), 0);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // SC-121 (#750): Merkle commitment for attachments
+    // ═══════════════════════════════════════════════════════════════════════
+
+    fn leaf(env: &Env, byte: u8) -> BytesN<32> {
+        BytesN::from_array(env, &[byte; 32])
+    }
+
+    #[test]
+    fn a_new_job_has_an_empty_attachments_root() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000, &hash(&env), &32u32, &0u64, &native_token);
+
+        assert_eq!(client.get_attachments_root(&job_id), leaf(&env, 0));
+    }
+
+    #[test]
+    fn an_empty_list_commits_the_zero_root() {
+        let (env, client, _, _, _, _) = setup();
+
+        // "No attachments" and "no commitment" must agree, or a job with an
+        // empty list would look committed.
+        assert_eq!(client.compute_merkle_root(&Vec::new(&env)), leaf(&env, 0));
+    }
+
+    #[test]
+    fn a_single_leaf_is_its_own_root() {
+        let (env, client, _, _, _, _) = setup();
+        let leaves = Vec::from_array(&env, [leaf(&env, 1)]);
+
+        assert_eq!(client.compute_merkle_root(&leaves), leaf(&env, 1));
+    }
+
+    #[test]
+    fn the_root_depends_on_leaf_order() {
+        let (env, client, _, _, _, _) = setup();
+        let forwards = Vec::from_array(&env, [leaf(&env, 1), leaf(&env, 2)]);
+        let backwards = Vec::from_array(&env, [leaf(&env, 2), leaf(&env, 1)]);
+
+        // Order-independence would let an attacker permute attachments freely.
+        assert_ne!(
+            client.compute_merkle_root(&forwards),
+            client.compute_merkle_root(&backwards)
+        );
+    }
+
+    #[test]
+    fn the_root_is_deterministic() {
+        let (env, client, _, _, _, _) = setup();
+        let leaves = Vec::from_array(&env, [leaf(&env, 1), leaf(&env, 2), leaf(&env, 3)]);
+
+        assert_eq!(
+            client.compute_merkle_root(&leaves),
+            client.compute_merkle_root(&leaves)
+        );
+    }
+
+    #[test]
+    fn an_odd_leaf_count_is_not_the_same_as_a_duplicated_leaf() {
+        let (env, client, _, _, _, _) = setup();
+        let odd = Vec::from_array(&env, [leaf(&env, 1), leaf(&env, 2), leaf(&env, 3)]);
+        let duplicated = Vec::from_array(
+            &env,
+            [leaf(&env, 1), leaf(&env, 2), leaf(&env, 3), leaf(&env, 3)],
+        );
+
+        // The classic Bitcoin-style second-preimage weakness: promoting the odd
+        // node instead of duplicating it keeps these distinct.
+        assert_ne!(
+            client.compute_merkle_root(&odd),
+            client.compute_merkle_root(&duplicated)
+        );
+    }
+
+    #[test]
+    fn changing_any_leaf_changes_the_root() {
+        let (env, client, _, _, _, _) = setup();
+        let original = Vec::from_array(&env, [leaf(&env, 1), leaf(&env, 2), leaf(&env, 3)]);
+        let tampered = Vec::from_array(&env, [leaf(&env, 1), leaf(&env, 9), leaf(&env, 3)]);
+
+        // Tamper-evidence, which is the whole point of the commitment.
+        assert_ne!(
+            client.compute_merkle_root(&original),
+            client.compute_merkle_root(&tampered)
+        );
+    }
+
+    #[test]
+    fn the_client_can_commit_a_root() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000, &hash(&env), &32u32, &0u64, &native_token);
+        let leaves = Vec::from_array(&env, [leaf(&env, 1), leaf(&env, 2)]);
+
+        let root = client.commit_attachments_root(&user, &job_id, &leaves);
+
+        assert_eq!(client.get_attachments_root(&job_id), root);
+        assert_eq!(root, client.compute_merkle_root(&leaves));
+    }
+
+    #[test]
+    fn the_admin_can_commit_a_root() {
+        let (env, client, admin, user, _, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000, &hash(&env), &32u32, &0u64, &native_token);
+        let leaves = Vec::from_array(&env, [leaf(&env, 1)]);
+
+        client.commit_attachments_root(&admin, &job_id, &leaves);
+
+        assert_eq!(client.get_attachments_root(&job_id), leaf(&env, 1));
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #2)")]
+    fn a_stranger_cannot_commit_a_root() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000, &hash(&env), &32u32, &0u64, &native_token);
+        let leaves = Vec::from_array(&env, [leaf(&env, 1)]);
+
+        client.commit_attachments_root(&freelancer, &job_id, &leaves);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #1)")]
+    fn committing_against_an_unknown_job_panics() {
+        let (env, client, _, user, _, _) = setup();
+        let leaves = Vec::from_array(&env, [leaf(&env, 1)]);
+
+        client.commit_attachments_root(&user, &999u64, &leaves);
+    }
+
+    #[test]
+    fn a_committed_root_can_be_re_committed() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000, &hash(&env), &32u32, &0u64, &native_token);
+        client.commit_attachments_root(&user, &job_id, &Vec::from_array(&env, [leaf(&env, 1)]));
+
+        let second = Vec::from_array(&env, [leaf(&env, 5), leaf(&env, 6)]);
+        client.commit_attachments_root(&user, &job_id, &second);
+
+        assert_eq!(
+            client.get_attachments_root(&job_id),
+            client.compute_merkle_root(&second)
+        );
+    }
+
+    #[test]
+    fn verify_attachments_root_detects_tampering() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000, &hash(&env), &32u32, &0u64, &native_token);
+        let leaves = Vec::from_array(&env, [leaf(&env, 1), leaf(&env, 2)]);
+        client.commit_attachments_root(&user, &job_id, &leaves);
+
+        let tampered = Vec::from_array(&env, [leaf(&env, 1), leaf(&env, 9)]);
+
+        assert!(client.verify_attachments_root(&job_id, &client.compute_merkle_root(&leaves)));
+        assert!(!client.verify_attachments_root(&job_id, &client.compute_merkle_root(&tampered)));
+    }
+
+    #[test]
+    fn a_proof_verifies_a_committed_leaf() {
+        let (env, client, _, _, _, _) = setup();
+        let a = leaf(&env, 1);
+        let b = leaf(&env, 2);
+        let root = client.compute_merkle_root(&Vec::from_array(&env, [a.clone(), b.clone()]));
+
+        // a is at index 0, so its sibling b hashes on the right.
+        let proof = Vec::from_array(&env, [b.clone()]);
+        assert!(client.verify_attachment(&root, &a, &proof, &0u32));
+    }
+
+    #[test]
+    fn a_proof_is_position_bound() {
+        let (env, client, _, _, _, _) = setup();
+        let a = leaf(&env, 1);
+        let b = leaf(&env, 2);
+        let root = client.compute_merkle_root(&Vec::from_array(&env, [a.clone(), b.clone()]));
+        let proof = Vec::from_array(&env, [b.clone()]);
+
+        // Replaying the proof for a at index 1 hashes the pair the other way.
+        assert!(!client.verify_attachment(&root, &a, &proof, &1u32));
+    }
+
+    #[test]
+    fn a_proof_for_an_uncommitted_leaf_fails() {
+        let (env, client, _, _, _, _) = setup();
+        let a = leaf(&env, 1);
+        let b = leaf(&env, 2);
+        let root = client.compute_merkle_root(&Vec::from_array(&env, [a.clone(), b.clone()]));
+
+        let proof = Vec::from_array(&env, [b]);
+        assert!(!client.verify_attachment(&root, &leaf(&env, 9), &proof, &0u32));
+    }
+
+    #[test]
+    fn an_empty_proof_verifies_only_a_single_leaf_root() {
+        let (env, client, _, _, _, _) = setup();
+        let a = leaf(&env, 1);
+
+        assert!(client.verify_attachment(&a, &a, &Vec::new(&env), &0u32));
+        assert!(!client.verify_attachment(&a, &leaf(&env, 2), &Vec::new(&env), &0u32));
+    }
+
+    #[test]
+    fn a_four_leaf_proof_verifies_every_position() {
+        let (env, client, _, _, _, _) = setup();
+        let l0 = leaf(&env, 1);
+        let l1 = leaf(&env, 2);
+        let l2 = leaf(&env, 3);
+        let l3 = leaf(&env, 4);
+        let leaves = Vec::from_array(&env, [l0.clone(), l1.clone(), l2.clone(), l3.clone()]);
+        let root = client.compute_merkle_root(&leaves);
+
+        let left = client.compute_merkle_root(&Vec::from_array(&env, [l0.clone(), l1.clone()]));
+        let right = client.compute_merkle_root(&Vec::from_array(&env, [l2.clone(), l3.clone()]));
+
+        assert!(client.verify_attachment(
+            &root,
+            &l0,
+            &Vec::from_array(&env, [l1.clone(), right.clone()]),
+            &0u32
+        ));
+        assert!(client.verify_attachment(
+            &root,
+            &l3,
+            &Vec::from_array(&env, [l2.clone(), left.clone()]),
+            &3u32
+        ));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // SC-123 (#752): paginated event log
+    // ═══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn the_event_sequence_starts_empty() {
+        let (_, client, _, _, _, _) = setup();
+        assert_eq!(client.get_latest_event_seq(), 0);
+    }
+
+    #[test]
+    fn posting_a_job_records_an_event() {
+        let (env, client, _, user, _, native_token) = setup();
+
+        client.post_job(&user, &1_000_000, &hash(&env), &32u32, &0u64, &native_token);
+
+        assert_eq!(client.get_latest_event_seq(), 1);
+    }
+
+    #[test]
+    fn the_sequence_increases_monotonically() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+
+        assert_eq!(client.get_latest_event_seq(), 3);
+    }
+
+    #[test]
+    fn events_carry_their_topic_job_and_actor() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+
+        let page = client.get_events(&1u64, &10u32);
+
+        let created = page.events.get_unchecked(0);
+        assert_eq!(created.topic, Symbol::new(&env, "job_created"));
+        assert_eq!(created.job_id, job_id);
+        assert_eq!(created.actor, user);
+
+        let accepted = page.events.get_unchecked(1);
+        assert_eq!(accepted.topic, Symbol::new(&env, "job_accepted"));
+        assert_eq!(accepted.actor, freelancer);
+    }
+
+    #[test]
+    fn events_come_back_in_ascending_sequence() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+
+        let page = client.get_events(&1u64, &10u32);
+
+        // An indexer applying them in order must reconstruct state without
+        // needing timestamps to break ties.
+        let mut seqs: Vec<u64> = Vec::new(&env);
+        for ev in page.events.iter() {
+            seqs.push_back(ev.seq);
+        }
+        assert_eq!(seqs, Vec::from_array(&env, [1u64, 2u64, 3u64]));
+    }
+
+    #[test]
+    fn a_page_is_capped_at_the_requested_limit() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+
+        let page = client.get_events(&1u64, &2u32);
+
+        assert_eq!(page.events.len(), 2);
+        assert!(page.has_more);
+        assert_eq!(page.next_seq, 3);
+    }
+
+    #[test]
+    fn the_cursor_walks_the_whole_log_without_gaps_or_repeats() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
+
+        let mut seen: Vec<u64> = Vec::new(&env);
+        let mut cursor = 1u64;
+        loop {
+            let page = client.get_events(&cursor, &2u32);
+            for ev in page.events.iter() {
+                seen.push_back(ev.seq);
+            }
+            cursor = page.next_seq;
+            if !page.has_more {
+                break;
+            }
+        }
+
+        assert_eq!(seen, Vec::from_array(&env, [1u64, 2u64, 3u64, 4u64]));
+    }
+
+    #[test]
+    fn the_final_cursor_is_reusable_for_polling() {
+        let (env, client, _, user, _, native_token) = setup();
+        client.post_job(&user, &1_000_000, &hash(&env), &32u32, &0u64, &native_token);
+
+        let first = client.get_events(&1u64, &10u32);
+        assert!(!first.has_more);
+
+        // Nothing new yet: the same cursor must return an empty page, not
+        // replay what the indexer already has.
+        let idle = client.get_events(&first.next_seq, &10u32);
+        assert_eq!(idle.events.len(), 0);
+
+        client.post_job(&user, &1_000_000, &hash(&env), &32u32, &0u64, &native_token);
+        let resumed = client.get_events(&first.next_seq, &10u32);
+        assert_eq!(resumed.events.len(), 1);
+    }
+
+    #[test]
+    fn from_seq_zero_is_treated_as_the_beginning() {
+        let (env, client, _, user, _, native_token) = setup();
+        client.post_job(&user, &1_000_000, &hash(&env), &32u32, &0u64, &native_token);
+
+        // Sequences start at 1, so a caller that starts at 0 must not miss the
+        // first event.
+        assert_eq!(client.get_events(&0u64, &10u32).events.len(), 1);
+    }
+
+    #[test]
+    fn a_page_past_the_end_is_empty() {
+        let (env, client, _, user, _, native_token) = setup();
+        client.post_job(&user, &1_000_000, &hash(&env), &32u32, &0u64, &native_token);
+
+        let page = client.get_events(&50u64, &10u32);
+
+        assert_eq!(page.events.len(), 0);
+        assert!(!page.has_more);
+    }
+
+    #[test]
+    fn querying_an_empty_log_is_safe() {
+        let (_, client, _, _, _, _) = setup();
+
+        let page = client.get_events(&1u64, &10u32);
+
+        assert_eq!(page.events.len(), 0);
+        assert!(!page.has_more);
+        assert_eq!(page.next_seq, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #46)")]
+    fn a_zero_limit_is_rejected() {
+        let (_, client, _, _, _, _) = setup();
+        client.get_events(&1u64, &0u32);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #46)")]
+    fn an_oversized_limit_is_rejected() {
+        let (_, client, _, _, _, _) = setup();
+        // Unbounded pages would let one call blow the read budget.
+        client.get_events(&1u64, &101u32);
+    }
+
+    #[test]
+    fn a_single_event_is_fetchable_by_sequence() {
+        let (env, client, _, user, _, native_token) = setup();
+        client.post_job(&user, &1_000_000, &hash(&env), &32u32, &0u64, &native_token);
+
+        let event = client.get_event(&1u64).unwrap();
+
+        assert_eq!(event.seq, 1);
+        assert_eq!(event.topic, Symbol::new(&env, "job_created"));
+    }
+
+    #[test]
+    fn an_unknown_sequence_returns_nothing() {
+        let (_, client, _, _, _, _) = setup();
+        assert_eq!(client.get_event(&42u64), None);
+    }
+
+    #[test]
+    fn the_cancel_lifecycle_is_recorded() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000, &hash(&env), &32u32, &0u64, &native_token);
+        client.cancel_job(&user, &job_id);
+
+        let page = client.get_events(&1u64, &10u32);
+
+        assert_eq!(
+            page.events.get_unchecked(1).topic,
+            Symbol::new(&env, "job_cancelled")
+        );
+    }
+
+    #[test]
+    fn events_are_stamped_with_the_ledger_time() {
+        let (env, client, _, user, _, native_token) = setup();
+        client.post_job(&user, &1_000_000, &hash(&env), &32u32, &0u64, &native_token);
+
+        assert_eq!(client.get_event(&1u64).unwrap().timestamp, 1_710_000_000);
+    }
 }
