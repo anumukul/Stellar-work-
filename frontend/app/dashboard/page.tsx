@@ -1,3 +1,8 @@
+/* eslint-disable jsx-a11y/aria-role -- A11Y-30 (#768): `role` here is a
+   JobSection prop selecting the viewer perspective ("client" | "freelancer"),
+   not an ARIA role on a DOM element. jsx-a11y cannot distinguish a custom
+   component prop from a DOM attribute. Documented in
+   docs/accessibility-audit.md. */
 "use client";
 
 import {
@@ -41,7 +46,8 @@ type PendingDashAction = {
   amountXlm: string;
 };
 
-const STATUS_OPTIONS: JobStatus[] = [
+const STATUS_OPTIONS: Array<JobStatus | "Active"> = [
+  "Active",
   "Open",
   "InProgress",
   "SubmittedForReview",
@@ -59,7 +65,8 @@ const EVENT_DOT: Record<string, string> = {
   dispute_resolved: "bg-violet-500",
 };
 
-const STATUS_LABELS: Record<JobStatus, string> = {
+const STATUS_LABELS: Record<JobStatus | "Active", string> = {
+  Active: "Active",
   Open: "Open",
   InProgress: "In Progress",
   SubmittedForReview: "Submitted for Review",
@@ -90,7 +97,7 @@ export default function DashboardPage() {
   const { showSuccess, showError } = useToast();
   const { notifications, addNotification } = useNotifications();
   const [allJobs, setAllJobs] = useState<Array<{ id: number; job: Job }>>([]);
-  const [statusFilter, setStatusFilter] = useState<JobStatus | "All">("All");
+  const [statusFilter, setStatusFilter] = useState<JobStatus | "All" | "Active">("All");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<number | null>(null);
@@ -114,7 +121,7 @@ export default function DashboardPage() {
   const [showBulkConfirm, setShowBulkConfirm] = useState(false);
   const [bulkCancelProgress, setBulkCancelProgress] = useState<{ done: number; total: number; failed: number[] } | null>(null);
   const bookmarkedIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const filterOptions: Array<JobStatus | "All"> = ["All", ...STATUS_OPTIONS];
+  const filterOptions: Array<JobStatus | "All" | "Active"> = ["All", ...STATUS_OPTIONS];
   const filterButtonRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const fetchJobs = useCallback(async () => {
@@ -161,6 +168,24 @@ export default function DashboardPage() {
       setLoading(false);
       setError(null);
     }
+  }, [wallet, fetchJobs]);
+
+  useEffect(() => {
+    if (!wallet) return;
+
+    const handleRefresh = () => {
+      void fetchJobs();
+    };
+
+    window.addEventListener("stellarwork:job-cancelled", handleRefresh);
+    window.addEventListener("stellarwork:job-status-changed", handleRefresh);
+    window.addEventListener("stellarwork:account-changed", handleRefresh);
+
+    return () => {
+      window.removeEventListener("stellarwork:job-cancelled", handleRefresh);
+      window.removeEventListener("stellarwork:job-status-changed", handleRefresh);
+      window.removeEventListener("stellarwork:account-changed", handleRefresh);
+    };
   }, [wallet, fetchJobs]);
 
   useEffect(() => {
@@ -396,6 +421,11 @@ export default function DashboardPage() {
 
   const filterJobs = (jobs: Array<{ id: number; job: Job }>) => {
     if (statusFilter === "All") return jobs;
+    if (statusFilter === "Active") {
+      return jobs.filter(
+        (j) => j.job.status !== "Cancelled" && j.job.status !== "Completed",
+      );
+    }
     return jobs.filter((j) => j.job.status === statusFilter);
   };
 

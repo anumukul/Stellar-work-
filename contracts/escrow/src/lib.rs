@@ -1651,6 +1651,18 @@ impl EscrowContract {
         load_admin(&e)
     }
 
+    /// One-step admin transfer.
+    ///
+    /// **Prefer [`Self::transfer_ownership`] + [`Self::accept_ownership`].** This
+    /// hands control to `new_admin` immediately, with no confirmation from the
+    /// recipient, so a typo or an address whose key nobody holds loses admin
+    /// control of the contract permanently. The two-step flow exists precisely
+    /// because that mistake is unrecoverable. See
+    /// `docs/admin-key-rotation.md` (SEC-06, #770).
+    ///
+    /// Any pending nomination is cleared. Leaving one in place allowed a stale
+    /// nominee to call `accept_ownership` afterwards and seize control from the
+    /// admin this call had just installed.
     pub fn transfer_admin(e: Env, caller: Address, new_admin: Address) {
         caller.require_auth();
         let current_admin = load_admin(&e);
@@ -1658,6 +1670,8 @@ impl EscrowContract {
             panic_with_error!(&e, Error::Unauthorized);
         }
         e.storage().instance().set(&DataKey::Admin, &new_admin);
+        // SEC-06 (#770): a nomination made before this call must not survive it.
+        e.storage().instance().remove(&DataKey::PendingAdmin);
         bump_instance_ttl(&e);
         e.events()
             .publish((Symbol::new(&e, "admin_transferred"),), (caller, new_admin));
@@ -11613,5 +11627,319 @@ mod test {
         // and the total still conserved.
         assert!(payout >= 0);
         assert_eq!(payout + client.get_fees(&native_token), 1_000_000);
+    // SEC-06 (#770): admin key rotation
+    //
+    // Rotation is the one privileged operation with no undo. If control lands
+    // on an address nobody holds the key for, the contract is permanently
+    // un-administrable — no fee changes, no dispute resolution, no upgrades.
+    // Every test below is about making that outcome unreachable.
+    //
+    // The safe path is two-step: nominate, then the nominee accepts. Until
+    // they accept, the current admin keeps control and can cancel.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // ── The safe path ────────────────────────────────────────────────────
+
+    #[test]
+    fn nominating_does_not_transfer_control_yet() {
+        let (env, client, admin, _, _, _) = setup();
+        let nominee = Address::generate(&env);
+
+        client.transfer_ownership(&admin, &nominee);
+
+        // The whole point of two steps: nominating an address whose key is
+        // lost costs nothing, because control has not moved.
+        assert_eq!(client.get_admin(), admin);
+        assert_eq!(client.get_pending_admin(), Some(nominee));
+    }
+
+    #[test]
+    fn acceptance_completes_the_rotation() {
+        let (env, client, admin, _, _, _) = setup();
+        let nominee = Address::generate(&env);
+
+        client.transfer_ownership(&admin, &nominee);
+        client.accept_ownership(&nominee);
+
+        assert_eq!(client.get_admin(), nominee);
+        assert_eq!(client.get_pending_admin(), None);
+    }
+
+    #[test]
+    fn the_new_admin_can_exercise_admin_powers() {
+        let (env, client, admin, _, _, native_token) = setup();
+        let nominee = Address::generate(&env);
+        client.transfer_ownership(&admin, &nominee);
+        client.accept_ownership(&nominee);
+
+        // Rotation is only complete if the new key actually works.
+        client.add_allowed_token(&native_token);
+        client.update_fee_bps(&nominee, &300i128);
+
+        assert_eq!(client.get_fee_bps(), 300);
+    }
+
+    #[test]
+    fn the_old_admin_loses_its_powers() {
+        let (env, client, admin, _, _, _) = setup();
+        let nominee = Address::generate(&env);
+        client.transfer_ownership(&admin, &nominee);
+        client.accept_ownership(&nominee);
+
+        // "Revoke the old key" is not a separate step — acceptance does it.
+        let result = client.try_update_fee_bps(&admin, &300i128);
+        assert!(result.is_err(), "the previous admin retained control");
+    }
+
+    // ── Rollback before acceptance ───────────────────────────────────────
+
+    #[test]
+    fn a_nomination_can_be_cancelled() {
+        let (env, client, admin, _, _, _) = setup();
+        let nominee = Address::generate(&env);
+        client.transfer_ownership(&admin, &nominee);
+
+        client.cancel_ownership_transfer(&admin);
+
+        assert_eq!(client.get_pending_admin(), None);
+        assert_eq!(client.get_admin(), admin);
+    }
+
+    #[test]
+    fn a_cancelled_nominee_can_no_longer_accept() {
+        let (env, client, admin, _, _, _) = setup();
+        let nominee = Address::generate(&env);
+        client.transfer_ownership(&admin, &nominee);
+        client.cancel_ownership_transfer(&admin);
+
+        // The rollback path this issue asks for: a mistaken nomination must be
+        // fully revocable, not merely hidden.
+        let result = client.try_accept_ownership(&nominee);
+        assert!(result.is_err(), "a cancelled nominee still accepted");
+    }
+
+    #[test]
+    fn a_nomination_can_be_redirected_before_acceptance() {
+        let (env, client, admin, _, _, _) = setup();
+        let wrong = Address::generate(&env);
+        let right = Address::generate(&env);
+
+        client.transfer_ownership(&admin, &wrong);
+        client.transfer_ownership(&admin, &right);
+
+        // Correcting a typo must not require cancelling first.
+        assert_eq!(client.get_pending_admin(), Some(right.clone()));
+        let result = client.try_accept_ownership(&wrong);
+        assert!(result.is_err(), "the superseded nominee still accepted");
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #30)")]
+    fn cancelling_with_no_nomination_is_rejected() {
+        let (_, client, admin, _, _, _) = setup();
+        client.cancel_ownership_transfer(&admin);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #30)")]
+    fn accepting_with_no_nomination_is_rejected() {
+        let (env, client, _, _, _, _) = setup();
+        client.accept_ownership(&Address::generate(&env));
+    }
+
+    // ── Who may do what ──────────────────────────────────────────────────
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #13)")]
+    fn a_non_admin_cannot_nominate() {
+        let (env, client, _, user, _, _) = setup();
+        client.transfer_ownership(&user, &Address::generate(&env));
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #31)")]
+    fn only_the_nominee_may_accept() {
+        let (env, client, admin, user, _, _) = setup();
+        client.transfer_ownership(&admin, &Address::generate(&env));
+
+        // Otherwise anyone could complete a rotation aimed at someone else.
+        client.accept_ownership(&user);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #13)")]
+    fn a_non_admin_cannot_cancel_a_nomination() {
+        let (env, client, admin, user, _, _) = setup();
+        client.transfer_ownership(&admin, &Address::generate(&env));
+
+        client.cancel_ownership_transfer(&user);
+    }
+
+    #[test]
+    fn the_nominee_cannot_cancel_their_own_nomination() {
+        let (env, client, admin, _, _, _) = setup();
+        let nominee = Address::generate(&env);
+        client.transfer_ownership(&admin, &nominee);
+
+        // Cancelling is the current admin's prerogative; a nominee declining
+        // simply never accepts.
+        let result = client.try_cancel_ownership_transfer(&nominee);
+        assert!(result.is_err());
+    }
+
+    // ── The one-step path and its hazards ────────────────────────────────
+
+    #[test]
+    fn a_stale_nomination_cannot_seize_control_after_a_one_step_transfer() {
+        let (env, client, admin, _, _, _) = setup();
+        let nominee = Address::generate(&env);
+        let successor = Address::generate(&env);
+
+        // Regression (#770). Previously `transfer_admin` left `PendingAdmin`
+        // set, so this sequence let `nominee` take the contract from
+        // `successor` at any later time:
+        //   1. admin nominates nominee
+        //   2. admin one-step transfers to successor
+        //   3. nominee calls accept_ownership and becomes admin
+        client.transfer_ownership(&admin, &nominee);
+        client.transfer_admin(&admin, &successor);
+
+        assert_eq!(client.get_admin(), successor);
+        assert_eq!(
+            client.get_pending_admin(),
+            None,
+            "a nomination survived a one-step transfer"
+        );
+
+        let hijack = client.try_accept_ownership(&nominee);
+        assert!(hijack.is_err(), "stale nominee seized control");
+        assert_eq!(client.get_admin(), successor);
+    }
+
+    #[test]
+    fn a_one_step_transfer_moves_control_immediately() {
+        let (env, client, admin, _, _, _) = setup();
+        let successor = Address::generate(&env);
+
+        client.transfer_admin(&admin, &successor);
+
+        // No confirmation from the recipient — which is exactly why the
+        // two-step flow is the documented path.
+        assert_eq!(client.get_admin(), successor);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #2)")]
+    fn a_non_admin_cannot_one_step_transfer() {
+        let (env, client, _, user, _, _) = setup();
+        client.transfer_admin(&user, &Address::generate(&env));
+    }
+
+    // ── Rotating more than once ──────────────────────────────────────────
+
+    #[test]
+    fn a_key_can_be_rotated_repeatedly() {
+        let (env, client, admin, _, _, _) = setup();
+        let mut current = admin;
+
+        // Rotation is routine, not once-in-a-lifetime: a compromised key must
+        // be replaceable again immediately.
+        for _ in 0..3 {
+            let next = Address::generate(&env);
+            client.transfer_ownership(&current, &next);
+            client.accept_ownership(&next);
+            assert_eq!(client.get_admin(), next);
+            current = next;
+        }
+    }
+
+    #[test]
+    fn rotating_to_the_current_admin_is_harmless() {
+        let (_, client, admin, _, _, _) = setup();
+
+        client.transfer_ownership(&admin, &admin);
+        client.accept_ownership(&admin);
+
+        assert_eq!(client.get_admin(), admin);
+        assert_eq!(client.get_pending_admin(), None);
+    }
+
+    #[test]
+    fn a_rotation_leaves_contract_funds_untouched() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+        let token_client = token::Client::new(&env, &native_token);
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+
+        let escrow_before = token_client.balance(&client.address);
+        let nominee = Address::generate(&env);
+        client.transfer_ownership(&admin, &nominee);
+        client.accept_ownership(&nominee);
+
+        // Changing who administers the contract must not move escrow, and an
+        // in-flight job must survive the rotation.
+        assert_eq!(token_client.balance(&client.address), escrow_before);
+        assert_eq!(client.get_job(&job_id).status, JobStatus::InProgress);
+    }
+
+    #[test]
+    fn an_in_flight_job_can_still_be_completed_after_rotation() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+
+        let nominee = Address::generate(&env);
+        client.transfer_ownership(&admin, &nominee);
+        client.accept_ownership(&nominee);
+
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
+
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Completed);
+    }
+
+    #[test]
+    fn a_pending_nomination_does_not_block_ordinary_operation() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+        client.transfer_ownership(&admin, &Address::generate(&env));
+
+        // A rotation may sit pending for days while the new key holder
+        // prepares; the marketplace must keep working throughout.
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+
+        assert_eq!(client.get_job(&job_id).status, JobStatus::InProgress);
+    }
+
+    #[test]
+    fn the_outgoing_admin_keeps_full_powers_until_acceptance() {
+        let (env, client, admin, _, _, _) = setup();
+        client.transfer_ownership(&admin, &Address::generate(&env));
+
+        // Otherwise a nomination would create a window with no effective admin.
+        client.update_fee_bps(&admin, &400i128);
+
+        assert_eq!(client.get_fee_bps(), 400);
     }
 }

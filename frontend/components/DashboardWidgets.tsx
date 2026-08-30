@@ -198,6 +198,9 @@ export default function DashboardWidgets({ children }: DashboardWidgetsProps) {
             onDragEnd={handleDragEnd}
             role="gridcell"
             aria-label={widget.title}
+            // A11Y-31 (#769): a gridcell must be focusable, or a keyboard user
+            // cannot reach the widget at all — including to reorder it.
+            tabIndex={0}
           >
             {editMode && (
               <>
