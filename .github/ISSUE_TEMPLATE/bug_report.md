@@ -6,6 +6,8 @@ labels: ["bug"]
 assignees: []
 ---
 
+# Bug Report
+
 ## Problem
 
 Describe the issue clearly and concisely.

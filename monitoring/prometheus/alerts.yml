@@ -1,0 +1,148 @@
+groups:
+  - name: stellarwork-availability
+    rules:
+      - alert: FrontendTargetDown
+        expr: up{job="stellarwork-frontend"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: Frontend metrics target is down ({{ $labels.instance }})
+          description: >-
+            Prometheus has not been able to scrape {{ $labels.instance }} for 5
+            minutes. The app may be down or the /api/metrics route is failing.
+          runbook_url: https://github.com/anumukul/Stellar-work-/blob/main/docs/OPS_RUNBOOK.md
+
+      - alert: SyntheticProbeFailing
+        expr: probe_success{job="blackbox-http"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: Synthetic probe failing for {{ $labels.probe }}
+          description: The blackbox probe for {{ $labels.instance }} has failed for 5 minutes.
+
+  - name: stellarwork-contracts
+    rules:
+      - alert: ContractTxFailureRateHigh
+        expr: |
+          (
+            sum(rate(stellarwork_contract_tx_total{outcome="error"}[10m]))
+            /
+            clamp_min(sum(rate(stellarwork_contract_tx_total[10m])), 0.001)
+          ) > 0.1
+        for: 10m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: Contract transaction failure rate above 10%
+          description: >-
+            More than 10% of Soroban invocations have failed over the last 10
+            minutes. Check RPC health, escrow contract state, and wallet errors.
+          runbook_url: https://github.com/anumukul/Stellar-work-/blob/main/docs/OPS_RUNBOOK.md
+
+      - alert: ContractTxLatencyHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(stellarwork_contract_tx_duration_milliseconds_bucket[10m]))
+          ) > 20000
+        for: 15m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: p95 contract transaction latency above 20s
+          description: Soroban invocations are slow — likely RPC congestion or network issues.
+
+      - alert: RpcErrorSpike
+        expr: sum(rate(stellarwork_rpc_errors_total[5m])) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: Elevated Stellar RPC error rate
+          description: >-
+            {{ $value | printf "%.2f" }} RPC errors/sec over the last 5 minutes,
+            grouped by kind in the StellarWork Overview dashboard.
+
+  - name: stellarwork-frontend-performance
+    rules:
+      - alert: LcpRegression
+        expr: |
+          histogram_quantile(
+            0.75,
+            sum by (le) (rate(stellarwork_web_vital_milliseconds_bucket{metric="lcp"}[30m]))
+          ) > 2500
+        for: 30m
+        labels:
+          severity: warning
+          team: frontend
+        annotations:
+          summary: p75 LCP above the 2.5s Core Web Vitals threshold
+          description: Largest Contentful Paint has regressed for real users over the last 30 minutes.
+
+      - alert: InpRegression
+        expr: |
+          histogram_quantile(
+            0.75,
+            sum by (le) (rate(stellarwork_web_vital_milliseconds_bucket{metric="inp"}[30m]))
+          ) > 200
+        for: 30m
+        labels:
+          severity: warning
+          team: frontend
+        annotations:
+          summary: p75 INP above the 200ms Core Web Vitals threshold
+          description: Interaction latency has regressed for real users over the last 30 minutes.
+
+      - alert: ClientErrorSpike
+        expr: sum(rate(stellarwork_client_errors_total[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+          team: frontend
+        annotations:
+          summary: Elevated unhandled frontend error rate
+          description: >-
+            {{ $value | printf "%.2f" }} client errors/sec over the last 5
+            minutes. Check the error breakdown panel by kind and path.
+
+  - name: stellarwork-http-health
+    rules:
+      - alert: HttpErrorRateHigh
+        expr: |
+          (
+            sum(rate(stellarwork_http_errors_total[10m]))
+            /
+            clamp_min(sum(rate(stellarwork_http_requests_total[10m])), 0.001)
+          ) > 0.01
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: HTTP error rate above 1%
+          description: >-
+            More than 1% of HTTP responses returned 4xx/5xx status codes over
+            the last 10 minutes. Check the HTTP errors panel by route.
+
+      - alert: HttpLatencyHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(stellarwork_http_request_duration_milliseconds_bucket[10m]))
+          ) > 3000
+        for: 15m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: p95 HTTP request latency above 3s
+          description: >-
+            Server-side HTTP request processing at p95 exceeds 3 seconds.
+            Investigate slow API routes or upstream Stellar RPC latency.

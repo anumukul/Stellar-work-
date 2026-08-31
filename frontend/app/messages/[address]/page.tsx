@@ -14,6 +14,8 @@ import { useWallet } from "@/lib/wallet-context";
 import { useMessaging } from "@/lib/messaging-context";
 import CallButton from "@/components/CallButton";
 import CallHistory from "@/components/CallHistory";
+import Spinner from "@/components/Spinner";
+import TruncatedAddress from "@/components/TruncatedAddress";
 import {
   loadThread,
   sendMessage,
@@ -365,6 +367,7 @@ export default function ConversationPage() {
         <Link href="/messages" className="text-sm text-blue-600 hover:underline">
           ← Back to Messages
         </Link>
+        <h1 className="text-2xl font-semibold">Messages</h1>
         <p className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
           Invalid Stellar address in the URL.
         </p>
@@ -380,6 +383,7 @@ export default function ConversationPage() {
         <Link href="/messages" className="text-sm text-blue-600 hover:underline">
           ← Back to Messages
         </Link>
+        <h1 className="text-2xl font-semibold">Messages</h1>
         <div className="flex flex-col items-center justify-center rounded-xl border border-slate-200 bg-white py-16 text-center">
           <p className="text-sm text-slate-600">Connect your wallet to send and receive messages.</p>
           <button
@@ -419,12 +423,24 @@ export default function ConversationPage() {
         </div>
 
         <div className="min-w-0 flex-1">
+          <h1 className="truncate font-mono text-sm font-semibold text-slate-900">
+            <Link
+              href={`/profile/${peerAddress}`}
+              className="hover:underline"
+              title={peerAddress}
+            >
+              {shortAddr(peerAddress)}
+            </Link>
+          </h1>
           <Link
             href={`/profile/${peerAddress}`}
             className="block truncate font-mono text-sm font-semibold text-slate-900 hover:underline"
-            title={peerAddress}
           >
-            {shortAddr(peerAddress)}
+            <TruncatedAddress
+              address={peerAddress}
+              className="font-mono text-sm font-semibold text-slate-900"
+              focusable={false}
+            />
           </Link>
           <p className="truncate text-[10px] text-slate-400">{peerAddress}</p>
         </div>
@@ -527,7 +543,7 @@ export default function ConversationPage() {
               className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-900 text-white transition-colors hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
             >
               {sending ? (
-                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" aria-hidden="true" />
+                <Spinner size={14} color="currentColor" label="Sending message" />
               ) : (
                 <svg className="h-3.5 w-3.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
                   <path d="M2.293 13.707a1 1 0 010-1.414L10.586 4H6a1 1 0 110-2h7a1 1 0 011 1v7a1 1 0 11-2 0V5.414l-8.293 8.293a1 1 0 01-1.414 0z" />

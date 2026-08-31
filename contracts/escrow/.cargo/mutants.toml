@@ -1,0 +1,62 @@
+# cargo-mutants configuration — TEST-14 (#765).
+#
+# Statement coverage says a line ran. It does not say a test would have noticed
+# if that line behaved differently. Mutation testing answers the second
+# question: it changes the code in small ways and checks whether the suite
+# fails. A mutant that survives is a behavioural change no test detects.
+#
+# Scoped deliberately. A full pass over lib.rs generates thousands of mutants
+# and takes hours, which means it never gets run. This targets the escrow
+# lifecycle and money arithmetic — the functions where an undetected behaviour
+# change costs users funds.
+#
+# Run:  cargo mutants            (from contracts/escrow)
+# Docs: docs/mutation-testing.md
+
+# Only mutate the escrow contract source.
+examine_globs = ["src/lib.rs"]
+
+# Skip the test module itself: mutating an assertion proves nothing, and it
+# more than doubles the mutant count.
+exclude_re = [
+    "^test::",
+    "^benchmarks::",
+]
+
+# Functions worth the runtime, in rough order of what a surviving mutant costs.
+#
+# Money movement first: a mutant that survives in fee or payout arithmetic is a
+# path by which value is created or destroyed without a test noticing.
+examine_re = [
+    # Arithmetic helpers — every payout flows through these
+    "checked_add",
+    "checked_sub",
+    "checked_mul_div",
+    "calculate_fee_for_amount",
+    "get_fee_bps_storage",
+
+    # Lifecycle transitions
+    "post_job",
+    "accept_job",
+    "submit_work",
+    "approve_work",
+    "reject_work",
+    "cancel_job",
+
+    # Dispute resolution — two money flows, the least exercised path
+    "raise_dispute",
+    "resolve_single_dispute",
+    "resolve_dispute_split",
+
+    # Access control — a surviving mutant here is an authorisation bypass
+    "require_active_access",
+    "enforce_client_active_job_limit",
+]
+
+# A mutant that hangs is a mutant that never reports. The suite runs in ~15s,
+# so anything past a minute is stuck rather than slow.
+timeout_multiplier = 5.0
+minimum_test_timeout = 60
+
+# Keep the output stable enough to diff between runs.
+additional_cargo_test_args = ["--lib"]

@@ -18,8 +18,26 @@ vi.mock("next/link", () => ({
   ),
 }));
 
+vi.mock("next-intl", () => ({
+  useLocale: () => "en",
+  useTranslations: () => (key: string) => key,
+  NextIntlClientProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
 vi.mock("next/navigation", () => ({
   usePathname: () => mockUsePathname(),
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    refresh: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+  useSearchParams: () => ({
+    get: vi.fn().mockReturnValue(null),
+    toString: vi.fn().mockReturnValue(""),
+  }),
 }));
 
 vi.mock("@/lib/wallet-context", () => ({
@@ -33,6 +51,11 @@ vi.mock("@/components/NetworkBadge", () => ({
 
 vi.mock("@/components/NotificationInbox", () => ({
   default: () => <div data-testid="notification-inbox" />,
+}));
+
+vi.mock("@/lib/messaging-context", () => ({
+  useMessaging: () => ({ unreadCount: 0 }),
+  MessagingProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
 describe("Layout header navigation", () => {
@@ -122,7 +145,8 @@ describe("Layout header navigation", () => {
       wallet: "GWALLET000000000000000000000000000000000000000000000000000",
       connectWallet: vi.fn(),
     });
-    rerender(<Navigation />);
+    // Navigation is memoized; a remount makes the mocked wallet take effect.
+    rerender(<Navigation key="with-wallet" />);
 
     const nav = screen.getAllByRole("navigation", { name: "Main navigation" })[0];
     const profileLink = within(nav).getByRole("link", { name: "Profile" });

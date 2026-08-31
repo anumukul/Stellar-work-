@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import Spinner from "@/components/Spinner";
 import { useModalFocusTrap } from "@/lib/modal";
 import { suppressConfirm, type ConfirmKey } from "@/lib/confirm-prefs";
 
@@ -105,6 +106,35 @@ export default function ConfirmDialog({
   }, [dontShowAgain, loading, onConfirm, suppressKey]);
 
   useModalFocusTrap(open, dialogRef, handleCancel);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const isEditableField =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        target instanceof HTMLButtonElement ||
+        (target?.isContentEditable ?? false);
+
+      if (
+        event.key === "Enter" &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.shiftKey &&
+        !isEditableField
+      ) {
+        event.preventDefault();
+        handleConfirm();
+      }
+    };
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [handleConfirm, open]);
 
   if (!open) return null;
 
@@ -217,12 +247,7 @@ export default function ConfirmDialog({
             className={`flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 transition-colors ${styles.confirm}`}
             aria-busy={loading}
           >
-            {loading && (
-              <span
-                className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current/30 border-t-current"
-                aria-hidden="true"
-              />
-            )}
+            {loading && <Spinner size={14} color="currentColor" label="Processing" />}
             {loading ? "Processing…" : confirmLabel}
           </button>
         </div>

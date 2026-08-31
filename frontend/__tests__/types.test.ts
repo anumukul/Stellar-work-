@@ -61,6 +61,7 @@ describe("Job type guard", () => {
       deadline: "1710100000",
       token: "GTOKENADDRESS789",
       revision_count: 0,
+      submitted_at: "0",
     };
     expect(isValidJob(job)).toBe(true);
   });
@@ -76,6 +77,7 @@ describe("Job type guard", () => {
       deadline: "0",
       token: "GTOKENADDRESS789",
       revision_count: 0,
+      submitted_at: "0",
     };
     expect(isValidJob(job)).toBe(true);
   });
@@ -98,6 +100,7 @@ describe("Job type guard", () => {
       deadline: "0",
       token: "GTOKEN",
       revision_count: 0,
+      submitted_at: "0",
     };
     expect(isValidJob(job)).toBe(false);
   });
