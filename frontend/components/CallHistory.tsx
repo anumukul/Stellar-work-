@@ -16,7 +16,9 @@ function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-
+type CallHistoryProps = {
+  peerAddress: string;
+};
 
 export default function CallHistory({ peerAddress }: CallHistoryProps) {
   const [calls, setCalls] = useState<CallRecord[]>([]);

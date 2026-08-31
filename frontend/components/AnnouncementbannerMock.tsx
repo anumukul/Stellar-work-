@@ -54,14 +54,14 @@ export default function AnnouncementBanner() {
 
     loadAnnouncement();
     
-    // Listen for storage changes from other tabs
+   
     window.addEventListener("storage", (e) => {
       if (e.key === ANNOUNCEMENT_STORAGE_KEY || e.key === DISMISSED_STORAGE_KEY) {
         loadAnnouncement();
       }
     });
 
-    // Custom event for same-tab updates
+    
     const handleUpdate = () => loadAnnouncement();
     window.addEventListener("stellarwork:announcement-updated", handleUpdate);
     
