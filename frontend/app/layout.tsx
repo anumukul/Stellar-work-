@@ -3,8 +3,6 @@ import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages } from "next-intl/server";
-import dynamic from "next/dynamic";
-import Link from "next/link";
 import { WalletProvider } from "@/lib/wallet-context";
 import { ToastProvider } from "@/components/ToastProvider";
 import { NotificationProvider } from "@/lib/notifications-context";
@@ -143,6 +141,36 @@ export default async function RootLayout({
                     <MessagingProvider>
                       <MeetingsProvider>
                         <ToastProvider>
+                          <a
+                            href="#main-content"
+                            className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:rounded-md focus:bg-white focus:px-3 focus:py-2 focus:text-slate-900 focus:outline-none dark:focus:bg-slate-800 dark:focus:text-slate-100"
+                          >
+                            Skip to main content
+                          </a>
+                          <DeferredClientFeatures />
+                          <ClientProviders>
+                            <OfflineIndicator />
+                            <WalletNetworkWarning />
+                            <Navigation />
+                            <ScrollRestorer />
+                            <main
+                              id="main-content"
+                              tabIndex={-1}
+                              className="mx-auto w-full max-w-5xl flex-1 px-3 py-6 sm:px-4 sm:py-8 lg:ml-[220px]"
+                            >
+                              <ErrorBoundary>{children}</ErrorBoundary>
+                            </main>
+                            <footer className="mt-auto border-t border-slate-200 bg-white py-8 dark:border-slate-800 dark:bg-slate-900">
+                              <div className="mx-auto max-w-5xl px-4">
+                                <div className="flex flex-col items-center justify-between gap-6 md:flex-row">
+                                  <div className="flex flex-col items-center gap-2 md:items-start">
+                                    <span className="text-lg font-bold text-slate-900 dark:text-slate-100">
+                                      StellarWork
+                                    </span>
+                                    <p className="text-sm text-slate-500 dark:text-slate-400">
+                                      Decentralized Escrow Marketplace
+                                    </p>
+                                  </div>
 
         <ThemeProvider>
         <TypographyProvider>
@@ -183,18 +211,59 @@ export default async function RootLayout({
                   <Link href="/legal/terms" className="hover:text-blue-600 transition-colors">Terms</Link>
                   <Link href="/legal/privacy" className="hover:text-blue-600 transition-colors">Privacy</Link>
                 </nav>
+                                  <nav className="flex flex-wrap justify-center gap-8 text-sm font-medium text-slate-600 dark:text-slate-400">
+                                    <a
+                                      href="https://github.com/anumukul/Stellar-work-"
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="transition-colors hover:text-blue-600 dark:hover:text-blue-400"
+                                    >
+                                      GitHub
+                                    </a>
+                                    <Link
+                                      href="/docs"
+                                      className="transition-colors hover:text-blue-600 dark:hover:text-blue-400"
+                                    >
+                                      Documentation
+                                    </Link>
+                                    <a
+                                      href="/LICENSE"
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="transition-colors hover:text-blue-600 dark:hover:text-blue-400"
+                                    >
+                                      License
+                                    </a>
+                                    <Link
+                                      href="/legal/terms"
+                                      className="transition-colors hover:text-blue-600 dark:hover:text-blue-400"
+                                    >
+                                      Terms
+                                    </Link>
+                                    <Link
+                                      href="/legal/privacy"
+                                      className="transition-colors hover:text-blue-600 dark:hover:text-blue-400"
+                                    >
+                                      Privacy
+                                    </Link>
+                                  </nav>
 
-                <div className="flex items-center gap-2 rounded-full bg-slate-50 px-4 py-2 border border-slate-100">
-                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Built on</span>
-                  <span className="text-sm font-bold text-slate-800">Stellar</span>
-                </div>
-              </div>
-              <div className="mt-8 border-t border-slate-100 pt-8 text-center text-xs text-slate-400">
-                &copy; {new Date().getFullYear()} StellarWork. All rights reserved.
-              </div>
-            </div>
-          </footer>
-          <AppFooter />
+                                  <div className="flex items-center gap-2 rounded-full border border-slate-100 bg-slate-50 px-4 py-2 dark:border-slate-800 dark:bg-slate-800">
+                                    <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                                      Built on
+                                    </span>
+                                    <span className="text-sm font-bold text-slate-800 dark:text-slate-200">
+                                      Stellar
+                                    </span>
+                                  </div>
+                                </div>
+                                <div className="mt-8 border-t border-slate-100 pt-8 text-center text-xs text-slate-400 dark:border-slate-800">
+                                  &copy; {new Date().getFullYear()} StellarWork. All rights reserved.
+                                </div>
+                              </div>
+                            </footer>
+                            <AppFooter />
+                          </ClientProviders>
                         </ToastProvider>
                       </MeetingsProvider>
                     </MessagingProvider>
@@ -203,15 +272,6 @@ export default async function RootLayout({
               </NetworkProvider>
             </TypographyProvider>
           </ThemeProvider>
-          </ClientProviders>
-          </ToastProvider>
-          </MeetingsProvider>
-          </MessagingProvider>
-          </NotificationProvider>
-        </WalletProvider>
-        </NetworkProvider>
-        </TypographyProvider>
-        </ThemeProvider>
         </NextIntlClientProvider>
       </body>
     </html>

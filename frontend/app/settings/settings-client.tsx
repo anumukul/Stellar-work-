@@ -21,7 +21,16 @@ import {
   type LineSpacing,
 } from "@/lib/typography-context";
 import type { NotificationEvent } from "@/lib/types";
-import { getNetwork } from "@/lib/stellar";
+import { getNetwork, retryQueuedWrites } from "@/lib/stellar";
+import {
+  clearFailedWriteQueue,
+  getRetryConfig,
+  loadFailedWriteQueue,
+  resetCircuitBreaker,
+  resetRetryConfig,
+  saveRetryConfig,
+  type RetryConfig,
+} from "@/lib/contract-retry";
 import { useCallback, useEffect, useId, useState } from "react";
 
 const NOTIFICATION_EVENTS: NotificationEvent[] = [
@@ -157,12 +166,18 @@ export default function SettingsClient() {
   const [profileVisible, setProfileVisible] = useState(true);
   const [showEmail, setShowEmail] = useState(false);
   const [readReceipts, setReadReceipts] = useState(true);
+  const [retryConfig, setRetryConfig] = useState<RetryConfig>(() => getRetryConfig());
+  const [queuedWrites, setQueuedWrites] = useState(0);
+  const retryMaxId = useId();
+  const retryQueueId = useId();
 
   useEffect(() => {
     setCurrency(getPreferredFiatCurrency());
     setProfileVisible(readBool(PROFILE_VISIBILITY_KEY, true));
     setShowEmail(readBool(SHOW_EMAIL_KEY, false));
     setReadReceipts(readBool(READ_RECEIPTS_KEY, true));
+    setRetryConfig(getRetryConfig());
+    setQueuedWrites(loadFailedWriteQueue().length);
   }, []);
 
   const handleCurrencyChange = useCallback((c: FiatCurrency) => {
@@ -201,6 +216,21 @@ export default function SettingsClient() {
     handleShowEmail(false);
     handleReadReceipts(true);
   }, [handleProfileVisible, handleShowEmail, handleReadReceipts]);
+
+  const handleRetryConfigChange = useCallback((patch: Partial<RetryConfig>) => {
+    const next = saveRetryConfig(patch);
+    setRetryConfig(next);
+  }, []);
+
+  const resetRetrySettings = useCallback(() => {
+    const next = resetRetryConfig();
+    setRetryConfig(next);
+  }, []);
+
+  const handleRetryQueuedWrites = useCallback(async () => {
+    await retryQueuedWrites();
+    setQueuedWrites(loadFailedWriteQueue().length);
+  }, []);
 
   return (
     <div className="mx-auto max-w-2xl space-y-6 py-2">
@@ -379,6 +409,98 @@ export default function SettingsClient() {
         >
           Reset to defaults
         </button>
+      </Section>
+
+      {/* Contract reliability (FE-186) */}
+      <Section title="Contract reliability">
+        <p className="text-xs text-slate-500 dark:text-slate-400">
+          Retry transient RPC failures with exponential backoff. Writes can be
+          queued locally when all retries are exhausted.
+        </p>
+
+        <div className="flex flex-col gap-1.5">
+          <label
+            htmlFor={retryMaxId}
+            className="text-sm font-medium text-slate-800 dark:text-slate-200"
+          >
+            Max retries
+          </label>
+          <select
+            id={retryMaxId}
+            value={retryConfig.maxRetries}
+            onChange={(e) =>
+              handleRetryConfigChange({ maxRetries: Number(e.target.value) })
+            }
+            className="w-48 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+          >
+            {[1, 2, 3, 4, 5].map((n) => (
+              <option key={n} value={n}>{n}</option>
+            ))}
+          </select>
+        </div>
+
+        <Toggle
+          id="retry-circuit-breaker"
+          checked={retryConfig.circuitBreakerEnabled}
+          onChange={(v) => handleRetryConfigChange({ circuitBreakerEnabled: v })}
+          label="Circuit breaker"
+          description="Pause contract calls after repeated RPC failures."
+        />
+
+        <Toggle
+          id="retry-queue-writes"
+          checked={retryConfig.queueFailedWrites}
+          onChange={(v) => handleRetryConfigChange({ queueFailedWrites: v })}
+          label="Queue failed writes"
+          description="Save failed transactions locally for later retry."
+        />
+
+        {queuedWrites > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-slate-50 p-3 text-sm dark:bg-slate-800">
+            <span>
+              {queuedWrites} failed write{queuedWrites === 1 ? "" : "s"} in queue
+            </span>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                id={retryQueueId}
+                onClick={() => void handleRetryQueuedWrites()}
+                className="rounded px-2 py-1 text-xs font-semibold text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-slate-700"
+              >
+                Retry queued
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  clearFailedWriteQueue();
+                  setQueuedWrites(0);
+                }}
+                className="rounded px-2 py-1 text-xs font-semibold text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700"
+              >
+                Clear queue
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="flex flex-wrap gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              resetCircuitBreaker();
+            }}
+            className="text-xs text-slate-400 underline hover:text-slate-600 dark:hover:text-slate-300"
+          >
+            Reset circuit breaker
+          </button>
+          <button
+            type="button"
+            onClick={resetRetrySettings}
+            className="text-xs text-slate-400 underline hover:text-slate-600 dark:hover:text-slate-300"
+          >
+            Reset retry defaults
+          </button>
+        </div>
       </Section>
 
       {/* Account */}

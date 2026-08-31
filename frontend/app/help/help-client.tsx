@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { JOB_CATEGORIES } from "@/lib/job-categories";
 
 interface AccordionItem {
   title: string;
@@ -261,6 +262,40 @@ export default function HelpClient() {
                   } overflow-hidden`}
                 >
                   {item.content}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Job Category Icon Legend */}
+      <div className="space-y-4">
+        <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100">
+          Job Category Icons
+        </h2>
+        <p className="text-sm text-slate-600 dark:text-slate-400">
+          Each job on StellarWork is tagged with a category. The colored icon badge on each job card helps you quickly identify the type of work at a glance.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+          {JOB_CATEGORIES.map((cat) => {
+            const Icon = cat.icon;
+            return (
+              <div
+                key={cat.id}
+                className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950"
+              >
+                <div className={`flex items-center justify-center rounded-md p-2 ${cat.colorClass}`}>
+                  <Icon className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{cat.label}</p>
+                  {cat.tags.length > 0 && (
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      {cat.tags.slice(0, 3).join(", ")}
+                      {cat.tags.length > 3 && "…"}
+                    </p>
+                  )}
                 </div>
               </div>
             );
