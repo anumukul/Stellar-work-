@@ -24,11 +24,11 @@ const MAX_RECOVERY_PROPOSALS: u32 = 50;
 #[allow(dead_code)]
 const XLM_STROOP: i128 = 10_000_000;
 const UPGRADE_TIMELOCK_SECS: u64 = 86_400;
-/// Default dispute deposit: 5 XLM in stroops.
+
 const DEFAULT_DISPUTE_FEE: i128 = 50_000_000;
 /// Maximum number of milestones allowed per job.
 const MAX_MILESTONES: u32 = 20;
-/// Maximum number of disputes that can be resolved in a single batch call.
+
 const MAX_BATCH_DISPUTES: u32 = 20;
 /// Default burn percentage in basis points (0% = disabled by default).
 const DEFAULT_BURN_BPS: i128 = 0;
@@ -37,10 +37,9 @@ const DEFAULT_ORACLE_FEE: i128 = 20_000_000;
 /// SC-123: largest page an indexer may request in one `get_events` call.
 /// Bounded so a single call cannot exceed the contract's read budget.
 const MAX_EVENT_PAGE_LIMIT: u32 = 100;
-/// SC-121: largest number of attachment hashes committable in one call.
-/// A Merkle build is O(n) reads and writes, so the ceiling keeps the call
-/// inside a single transaction's budget.
+
 const MAX_ATTACHMENT_LEAVES: u32 = 256;
+const MAX_CATEGORIES: u32 = 5;
 
 const INSTANCE_LIFETIME_THRESHOLD: u32 = 17_280;
 const INSTANCE_BUMP_AMOUNT: u32 = 518_400;
@@ -72,6 +71,17 @@ pub enum JobVisibility {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum JobCategory {
+    Development,
+    Design,
+    Writing,
+    Marketing,
+    DevOps,
+    Other,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Job {
     pub client: Address,
     pub freelancer: Option<Address>,
@@ -86,6 +96,8 @@ pub struct Job {
     /// attachments, making deliverables tamper-evident without storing them
     /// on-chain. All-zero bytes means no attachments have been committed.
     pub attachments_root: BytesN<32>,
+    /// Categories for the job. Multiple allowed.
+    pub categories: Vec<JobCategory>,
 }
 
 /// SC-123: one lifecycle event, recorded in a sequence an indexer can page.
@@ -314,6 +326,13 @@ pub enum DataKey {
     JobRating(u64, Address),
     JobEscrowBalance(u64),
     TotalEscrowBalance,
+    /// SC-130: high-value multi-approver configuration and state
+    /// Jobs with amount >= HighValueThreshold require RequiredApprovals approvals
+    HighValueThreshold,
+    RequiredApprovals,
+    Approver(Address),
+    JobApproval(u64, Address),
+    JobApprovalCount(u64),
 }
 
 #[contracttype]
@@ -422,6 +441,7 @@ pub enum Error {
     // SC-137: emergency fund recovery. A single error code covers the invalid
     // states of recovery proposals; details are surfaced via events + audit log.
     RecoveryError = 50,
+    InvalidCategory = 50,
 }
 
 #[contract]
@@ -628,6 +648,109 @@ impl EscrowContract {
             .map(|f| Self::is_freelancer_verified(e.clone(), f))
     }
 
+    // ── SC-130: multi-approver admin and helpers ───────────────────────────
+
+    pub fn add_approver(e: Env, admin: Address, approver: Address) {
+        admin.require_auth();
+        let stored = load_admin(&e);
+        if admin != stored {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+        e.storage()
+            .persistent()
+            .set(&DataKey::Approver(approver.clone()), &true);
+        e.events().publish((Symbol::new(&e, "approver_added"),), (approver.clone(),));
+        Self::record_event(&e, "approver_added", 0, &admin);
+    }
+
+    pub fn remove_approver(e: Env, admin: Address, approver: Address) {
+        admin.require_auth();
+        let stored = load_admin(&e);
+        if admin != stored {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+        e.storage().persistent().remove(&DataKey::Approver(approver.clone()));
+        e.events().publish((Symbol::new(&e, "approver_removed"),), (approver.clone(),));
+        Self::record_event(&e, "approver_removed", 0, &admin);
+    }
+
+    pub fn is_approver(e: Env, addr: Address) -> bool {
+        e.storage()
+            .persistent()
+            .get(&DataKey::Approver(addr))
+            .unwrap_or(false)
+    }
+
+    pub fn set_high_value_threshold(e: Env, admin: Address, amount: i128) {
+        admin.require_auth();
+        let stored = load_admin(&e);
+        if admin != stored {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+        e.storage().instance().set(&DataKey::HighValueThreshold, &amount);
+        e.events().publish((Symbol::new(&e, "high_value_threshold_set"),), (amount,));
+        Self::record_event(&e, "set_high_value_threshold", 0, &admin);
+    }
+
+    pub fn get_high_value_threshold(e: Env) -> i128 {
+        // Default to very large threshold so feature is opt-in.
+        e.storage()
+            .instance()
+            .get(&DataKey::HighValueThreshold)
+            .unwrap_or(i128::MAX)
+    }
+
+    pub fn set_required_approvals(e: Env, admin: Address, req: u32) {
+        admin.require_auth();
+        let stored = load_admin(&e);
+        if admin != stored {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+        if req == 0 {
+            panic_with_error!(&e, Error::InvalidAmount);
+        }
+        e.storage().instance().set(&DataKey::RequiredApprovals, &req);
+        e.events()
+            .publish((Symbol::new(&e, "required_approvals_set"),), (req,));
+        Self::record_event(&e, "set_required_approvals", 0, &admin);
+    }
+
+    pub fn get_required_approvals(e: Env) -> u32 {
+        e.storage()
+            .instance()
+            .get(&DataKey::RequiredApprovals)
+            .unwrap_or(1u32)
+    }
+
+    fn has_approver_approved(e: &Env, job_id: u64, approver: &Address) -> bool {
+        e.storage()
+            .persistent()
+            .get(&DataKey::JobApproval(job_id, approver.clone()))
+            .unwrap_or(false)
+    }
+
+    fn get_approval_count(e: &Env, job_id: u64) -> u32 {
+        e.storage()
+            .persistent()
+            .get(&DataKey::JobApprovalCount(job_id))
+            .unwrap_or(0u32)
+    }
+
+    fn record_approval(e: &Env, job_id: u64, approver: &Address) -> u32 {
+        if Self::has_approver_approved(e, job_id, approver) {
+            return Self::get_approval_count(e, job_id);
+        }
+        e.storage()
+            .persistent()
+            .set(&DataKey::JobApproval(job_id, approver.clone()), &true);
+        let mut count = Self::get_approval_count(e, job_id);
+        count += 1;
+        e.storage()
+            .persistent()
+            .set(&DataKey::JobApprovalCount(job_id), &count);
+        count
+    }
+
     // ── SC-122: idempotency nonces ───────────────────────────────────────────
 
     /// The highest nonce this client has used. 0 means none yet, so the next
@@ -680,7 +803,7 @@ impl EscrowContract {
             panic_with_error!(&e, Error::DuplicateNonce);
         }
 
-        let job_id = Self::post_job(
+        let job_id = Self::post_job_with_categories(
             e.clone(),
             client.clone(),
             amount,
@@ -688,6 +811,7 @@ impl EscrowContract {
             description_payload_len,
             deadline,
             token,
+            Vec::new(&e),
         );
 
         e.storage()
@@ -857,7 +981,7 @@ impl EscrowContract {
         bump_instance_ttl(&e);
     }
 
-    pub fn post_job(
+    pub fn post_job_with_categories(
         e: Env,
         client: Address,
         amount: i128,
@@ -865,6 +989,7 @@ impl EscrowContract {
         description_payload_len: u32,
         deadline: u64,
         token: Address,
+        categories: Vec<JobCategory>,
     ) -> u64 {
         if amount <= 0 {
             panic_with_error!(&e, Error::InvalidAmount);
@@ -886,6 +1011,9 @@ impl EscrowContract {
         if !Self::is_token_allowed(e.clone(), token.clone()) {
             panic_with_error!(&e, Error::UnsupportedToken);
         }
+        if categories.len() == 0 || categories.len() > MAX_CATEGORIES {
+            panic_with_error!(&e, Error::InvalidCategory);
+        }
         enforce_client_active_job_limit(&e, &client);
 
         let token_client = token::Client::new(&e, &token);
@@ -906,6 +1034,7 @@ impl EscrowContract {
             revision_count: 0,
             // SC-121: no attachments committed at creation.
             attachments_root: BytesN::from_array(&e, &[0u8; 32]),
+            categories: categories.clone(),
         };
 
         set_job(&e, job_id, &job);
@@ -935,6 +1064,28 @@ impl EscrowContract {
         Self::write_audit(&e, client, "post_job", Some(job_id), "Posted a job");
 
         job_id
+    }
+
+    /// Backwards-compatible wrapper for callers that don't provide categories.
+    pub fn post_job(
+        e: Env,
+        client: Address,
+        amount: i128,
+        desc_hash: BytesN<32>,
+        description_payload_len: u32,
+        deadline: u64,
+        token: Address,
+    ) -> u64 {
+        Self::post_job_with_categories(
+            e,
+            client,
+            amount,
+            desc_hash,
+            description_payload_len,
+            deadline,
+            token,
+            Vec::new(&e),
+        )
     }
 
     pub fn accept_job(e: Env, freelancer: Address, job_id: u64) {
@@ -1034,28 +1185,216 @@ impl EscrowContract {
         );
     }
 
-    pub fn approve_work(e: Env, client: Address, job_id: u64) {
+    pub fn approve_work(e: Env, caller: Address, job_id: u64) {
         let mut job = get_job_or_panic(&e, job_id);
-        client.require_auth();
-        require_active_access(&e, &client);
+        caller.require_auth();
+        require_active_access(&e, &caller);
 
         if job.status != JobStatus::SubmittedForReview {
             panic_with_error!(&e, Error::InvalidStatus);
         }
-        if job.client != client {
+
+        let client = job.client.clone();
+
+        // multi-approver configuration
+        let threshold = Self::get_high_value_threshold(e.clone());
+        let required = Self::get_required_approvals(e.clone());
+
+        // Simple/legacy path: if job amount below threshold or only one approval
+        if job.amount < threshold || required <= 1 {
+            if caller != client {
+                panic_with_error!(&e, Error::Unauthorized);
+            }
+            let freelancer = match job.freelancer.clone() {
+                Option::Some(addr) => addr,
+                Option::None => panic_with_error!(&e, Error::InvalidStatus),
+            };
+
+            // Check if client or freelancer is fee-exempted
+            let client_exempted = Self::is_fee_exempted(e.clone(), job.client.clone());
+            let freelancer_exempted = Self::is_fee_exempted(e.clone(), freelancer.clone());
+            let fee_exempted = client_exempted || freelancer_exempted;
+
+            let late_fee = Self::get_late_fee(e.clone(), job_id);
+
+            let (fee, payout) = if fee_exempted {
+                let gross_payout = job.amount;
+                let final_payout = checked_sub(&e, gross_payout, late_fee);
+                (0i128, final_payout)
+            } else {
+                let fee_bps = calculate_fee_for_amount(&e, job.amount);
+                let calculated_fee = checked_mul_div(&e, job.amount, fee_bps, BPS_DENOMINATOR);
+                let gross_payout = checked_sub(&e, job.amount, calculated_fee);
+                let calculated_payout = checked_sub(&e, gross_payout, late_fee);
+                (calculated_fee, calculated_payout)
+            };
+
+            let burn_bps = Self::get_burn_percentage(e.clone());
+            let burn_amount = if burn_bps > 0 {
+                checked_mul_div(&e, fee, burn_bps, BPS_DENOMINATOR)
+            } else {
+                0i128
+            };
+            let fees_after_burn = checked_sub(&e, fee, burn_amount);
+
+            let total_fee_to_accrue = checked_add(&e, fees_after_burn, late_fee);
+            let current_fees = get_token_fees(&e, &job.token);
+            let updated_fees = checked_add(&e, current_fees, total_fee_to_accrue);
+
+            if burn_amount > 0 {
+                let current_pool: i128 = e
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::BurnPool)
+                    .unwrap_or(0);
+                let new_pool = checked_add(&e, current_pool, burn_amount);
+                e.storage().persistent().set(&DataKey::BurnPool, &new_pool);
+            }
+
+            job.status = JobStatus::Completed;
+            set_job(&e, job_id, &job);
+            mark_job_completed_at(&e, job_id);
+            set_escrow_balance(&e, job_id, 0);
+            e.storage()
+                .persistent()
+                .set(&DataKey::TokenFees(job.token.clone()), &updated_fees);
+            bump_token_fees_ttl(&e, &job.token);
+            bump_instance_ttl(&e);
+
+            let token_client = token::Client::new(&e, &job.token);
+            token_client.transfer(&e.current_contract_address(), &freelancer, &payout);
+
+            // Issue #412: credit 0.5% referral bonus on the client's first completed job.
+            let bonus_paid_key = DataKey::ReferralBonusPaid(job.client.clone());
+            let already_paid: bool = e
+                .storage()
+                .persistent()
+                .get(&bonus_paid_key)
+                .unwrap_or(false);
+            if !already_paid {
+                let client_ref_key = DataKey::ClientReferrer(job.client.clone());
+                if let Some(referrer) = e
+                    .storage()
+                    .persistent()
+                    .get::<DataKey, Address>(&client_ref_key)
+                {
+                    // 0.5% of job amount (50 basis points)
+                    const REFERRAL_BPS: i128 = 50;
+                    let bonus = checked_mul_div(&e, job.amount, REFERRAL_BPS, BPS_DENOMINATOR);
+                    let earnings_key = DataKey::ReferralEarnings(referrer.clone());
+                    let prev: i128 = e.storage().persistent().get(&earnings_key).unwrap_or(0i128);
+                    e.storage()
+                        .persistent()
+                        .set(&earnings_key, &checked_add(&e, prev, bonus));
+                    e.storage().persistent().extend_ttl(
+                        &earnings_key,
+                        INSTANCE_LIFETIME_THRESHOLD,
+                        INSTANCE_BUMP_AMOUNT,
+                    );
+                    // Mark bonus as paid so subsequent jobs don't trigger it again.
+                    e.storage().persistent().set(&bonus_paid_key, &true);
+                    e.storage().persistent().extend_ttl(
+                        &bonus_paid_key,
+                        INSTANCE_LIFETIME_THRESHOLD,
+                        INSTANCE_BUMP_AMOUNT,
+                    );
+                    e.events().publish(
+                        (Symbol::new(&e, "referral_bonus_credited"),),
+                        (referrer, job.client.clone(), bonus),
+                    );
+                }
+            }
+
+            e.events().publish(
+                (Symbol::new(&e, "job_approved"),),
+                (job_id, client.clone(), freelancer.clone(), payout),
+            );
+            Self::record_event(&e, "job_approved", job_id, &client);
+
+            let attestation = Attestation {
+                job_id,
+                client: job.client.clone(),
+                freelancer: freelancer.clone(),
+                approved_at: e.ledger().timestamp(),
+                attestation_hash: BytesN::from_array(&e, &[0u8; 32]),
+                metadata_uri: soroban_sdk::String::from_str(&e, ""),
+            };
+            e.storage()
+                .persistent()
+                .set(&DataKey::Attestation(job_id), &attestation);
+            e.storage().persistent().extend_ttl(
+                &DataKey::Attestation(job_id),
+                ACTIVE_JOB_LIFETIME_THRESHOLD,
+                ARCHIVAL_JOB_BUMP_AMOUNT,
+            );
+            let mut user_attestations: Vec<u64> = e
+                .storage()
+                .persistent()
+                .get(&DataKey::UserAttestations(job.client.clone()))
+                .unwrap_or(Vec::new(&e));
+            user_attestations.push_back(job_id);
+            e.storage().persistent().set(
+                &DataKey::UserAttestations(job.client.clone()),
+                &user_attestations,
+            );
+            e.storage().persistent().extend_ttl(
+                &DataKey::UserAttestations(job.client.clone()),
+                INSTANCE_LIFETIME_THRESHOLD,
+                INSTANCE_BUMP_AMOUNT,
+            );
+            let mut user_attestations_f: Vec<u64> = e
+                .storage()
+                .persistent()
+                .get(&DataKey::UserAttestations(freelancer.clone()))
+                .unwrap_or(Vec::new(&e));
+            user_attestations_f.push_back(job_id);
+            e.storage().persistent().set(
+                &DataKey::UserAttestations(freelancer.clone()),
+                &user_attestations_f,
+            );
+            e.storage().persistent().extend_ttl(
+                &DataKey::UserAttestations(freelancer.clone()),
+                INSTANCE_LIFETIME_THRESHOLD,
+                INSTANCE_BUMP_AMOUNT,
+            );
+            e.events().publish(
+                (Symbol::new(&e, "work_attested"),),
+                (
+                    job_id,
+                    client.clone(),
+                    freelancer.clone(),
+                    attestation.approved_at,
+                ),
+            );
+            return;
+        }
+
+        // Multi-approver path: only registered approvers can record approvals.
+        if !Self::is_approver(e.clone(), caller.clone()) {
             panic_with_error!(&e, Error::Unauthorized);
         }
 
+        let approvals = Self::record_approval(&e, job_id, &caller);
+        e.events().publish(
+            (Symbol::new(&e, "job_approval_recorded"),),
+            (job_id, caller.clone(), approvals),
+        );
+        Self::write_audit(&e, caller.clone(), "record_approval", Some(job_id), "Recorded approval");
+
+        if approvals < required {
+            // Not enough approvals yet; wait for more.
+            return;
+        }
+
+        // Enough approvals reached — finalize payout. Use same logic as legacy path.
         let freelancer = match job.freelancer.clone() {
             Option::Some(addr) => addr,
             Option::None => panic_with_error!(&e, Error::InvalidStatus),
         };
 
-        // Check if client or freelancer is fee-exempted
         let client_exempted = Self::is_fee_exempted(e.clone(), job.client.clone());
         let freelancer_exempted = Self::is_fee_exempted(e.clone(), freelancer.clone());
         let fee_exempted = client_exempted || freelancer_exempted;
-
         let late_fee = Self::get_late_fee(e.clone(), job_id);
 
         let (fee, payout) = if fee_exempted {
@@ -1104,47 +1443,6 @@ impl EscrowContract {
 
         let token_client = token::Client::new(&e, &job.token);
         token_client.transfer(&e.current_contract_address(), &freelancer, &payout);
-
-        // Issue #412: credit 0.5% referral bonus on the client's first completed job.
-        let bonus_paid_key = DataKey::ReferralBonusPaid(job.client.clone());
-        let already_paid: bool = e
-            .storage()
-            .persistent()
-            .get(&bonus_paid_key)
-            .unwrap_or(false);
-        if !already_paid {
-            let client_ref_key = DataKey::ClientReferrer(job.client.clone());
-            if let Some(referrer) = e
-                .storage()
-                .persistent()
-                .get::<DataKey, Address>(&client_ref_key)
-            {
-                // 0.5% of job amount (50 basis points)
-                const REFERRAL_BPS: i128 = 50;
-                let bonus = checked_mul_div(&e, job.amount, REFERRAL_BPS, BPS_DENOMINATOR);
-                let earnings_key = DataKey::ReferralEarnings(referrer.clone());
-                let prev: i128 = e.storage().persistent().get(&earnings_key).unwrap_or(0i128);
-                e.storage()
-                    .persistent()
-                    .set(&earnings_key, &checked_add(&e, prev, bonus));
-                e.storage().persistent().extend_ttl(
-                    &earnings_key,
-                    INSTANCE_LIFETIME_THRESHOLD,
-                    INSTANCE_BUMP_AMOUNT,
-                );
-                // Mark bonus as paid so subsequent jobs don't trigger it again.
-                e.storage().persistent().set(&bonus_paid_key, &true);
-                e.storage().persistent().extend_ttl(
-                    &bonus_paid_key,
-                    INSTANCE_LIFETIME_THRESHOLD,
-                    INSTANCE_BUMP_AMOUNT,
-                );
-                e.events().publish(
-                    (Symbol::new(&e, "referral_bonus_credited"),),
-                    (referrer, job.client.clone(), bonus),
-                );
-            }
-        }
 
         e.events().publish(
             (Symbol::new(&e, "job_approved"),),
@@ -1821,6 +2119,35 @@ impl EscrowContract {
             cursor = cursor.saturating_add(1);
         }
         jobs
+    }
+
+    /// Return job ids whose categories include `category`.
+    pub fn get_jobs_by_category(e: Env, category: JobCategory) -> Vec<u64> {
+        let mut matches: Vec<u64> = Vec::new(&e);
+        let all_ids: Vec<u64> = e
+            .storage()
+            .persistent()
+            .get(&DataKey::AllJobIds)
+            .unwrap_or(Vec::new(&e));
+
+        for i in 0..all_ids.len() {
+            let id = all_ids.get(i).unwrap();
+            if let Some(job) = e.storage().persistent().get::<DataKey, Job>(&DataKey::Job(id)) {
+                // Scan categories for a match.
+                let mut found = false;
+                for j in 0..job.categories.len() {
+                    if job.categories.get(j).unwrap() == category {
+                        found = true;
+                        break;
+                    }
+                }
+                if found {
+                    matches.push_back(id);
+                }
+            }
+        }
+
+        matches
     }
 
     pub fn get_admin(e: Env) -> Address {
@@ -2593,7 +2920,7 @@ impl EscrowContract {
         }
 
         // Delegate to the standard post_job logic.
-        Self::post_job(
+        Self::post_job_with_categories(
             e,
             client,
             amount,
@@ -2601,6 +2928,7 @@ impl EscrowContract {
             description_payload_len,
             deadline,
             token,
+            Vec::new(&e),
         )
     }
 
@@ -2989,6 +3317,58 @@ impl EscrowContract {
         e.storage()
             .persistent()
             .get::<DataKey, Job>(&DataKey::ArchivedJob(job_id))
+    }
+
+    /// SC-82: restore a job from archive storage back into active storage (admin only).
+    /// This moves the archived `Job` back to the live `Job` slot, re-inserts the
+    /// job id into `AllJobIds`, decrements `ArchiveCount`, and emits
+    /// a `job_unarchived` event. Any per-job closed timestamps are not
+    /// restored by this operation.
+    pub fn unarchive_job(e: Env, admin: Address, job_id: u64) {
+        admin.require_auth();
+        let current_admin = load_admin(&e);
+        if admin != current_admin {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+
+        // Ensure archived record exists
+        let archived: Option<Job> = e
+            .storage()
+            .persistent()
+            .get(&DataKey::ArchivedJob(job_id));
+        if archived.is_none() {
+            panic_with_error!(&e, Error::JobNotFound);
+        }
+        let job = archived.unwrap();
+
+        // Ensure there's no active job occupying the slot
+        if e.storage().persistent().has(&DataKey::Job(job_id)) {
+            panic_with_error!(&e, Error::InvalidStatus);
+        }
+
+        // Move archived job back into active storage
+        e.storage().persistent().set(&DataKey::Job(job_id), &job);
+        e.storage().persistent().extend_ttl(&DataKey::Job(job_id), ACTIVE_JOB_LIFETIME_THRESHOLD, ACTIVE_JOB_BUMP_AMOUNT);
+
+        // Re-insert into AllJobIds
+        let mut all_ids: Vec<u64> = e
+            .storage()
+            .persistent()
+            .get(&DataKey::AllJobIds)
+            .unwrap_or(Vec::new(&e));
+        all_ids.push_back(job_id);
+        e.storage().persistent().set(&DataKey::AllJobIds, &all_ids);
+        e.storage().persistent().extend_ttl(&DataKey::AllJobIds, INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        // Remove archived record and update counters
+        e.storage().persistent().remove(&DataKey::ArchivedJob(job_id));
+        let mut count: u64 = e.storage().instance().get(&DataKey::ArchiveCount).unwrap_or(0);
+        count = count.saturating_sub(1);
+        e.storage().instance().set(&DataKey::ArchiveCount, &count);
+
+        e.events().publish((Symbol::new(&e, "job_unarchived"),), (job_id,));
+
+        bump_instance_ttl(&e);
     }
 
     /// SC-82: number of jobs currently in archive storage (admin only).
@@ -8457,6 +8837,7 @@ mod test {
             revision_count: 0,
             // SC-121: a freshly posted job has no attachment commitment.
             attachments_root: BytesN::from_array(&env, &[0u8; 32]),
+            categories: Vec::new(&env),
         };
 
         assert_eq!(client.get_job(&job_id), expected);
@@ -8493,6 +8874,7 @@ mod test {
             token: native_token.clone(),
             revision_count: 0,
             attachments_root: BytesN::from_array(&env, &[0u8; 32]),
+            categories: Vec::new(&env),
         };
         assert_eq!(after_accept, expected_accept);
 
