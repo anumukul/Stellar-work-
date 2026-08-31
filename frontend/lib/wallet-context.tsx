@@ -18,13 +18,13 @@ import {
 } from "@/lib/stellar";
 import type { StellarNetwork } from "@/lib/network-config";
 import LegalConsentModal, { hasAcceptedLegal } from "@/components/LegalConsentModal";
-import LegalConsentModal, { hasAcceptedLegal, acceptLegal } from "@/components/LegalConsentModal";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import { CONFIRM_KEYS } from "@/lib/confirm-prefs";
 import { toXlm } from "@/lib/format";
 
 // Storage keys
 const LAST_ACCOUNT_KEY = "stellarwork:last-connected-account";
+const WALLET_AUTO_RECONNECT_KEY = "stellarwork:wallet-auto-reconnect";
 const JOB_CACHE_PREFIX = "job-desc:";
 
 interface WalletContextType {
@@ -81,6 +81,30 @@ function persistLastAccount(address: string | null) {
   }
 }
 
+function getLastConnectedAccount(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem(LAST_ACCOUNT_KEY);
+}
+
+function getAutoReconnectPreference(): boolean {
+  if (typeof window === "undefined") return false;
+  const stored = localStorage.getItem(WALLET_AUTO_RECONNECT_KEY);
+  if (stored === "true") return true;
+  if (stored === "false") return false;
+  // Migrate existing sessions that stored an address before the flag existed.
+  return getLastConnectedAccount() !== null;
+}
+
+function setAutoReconnectPreference(connected: boolean) {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(WALLET_AUTO_RECONNECT_KEY, connected ? "true" : "false");
+}
+
+function clearPersistedWalletSession() {
+  persistLastAccount(null);
+  setAutoReconnectPreference(false);
+}
+
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [wallet, setWallet] = useState<string | null>(null);
   const [walletNetwork, setWalletNetwork] = useState<StellarNetwork | null>(null);
@@ -93,14 +117,22 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setWalletNetwork(nextNetwork);
   }, []);
 
-  // On mount: restore last session via Freighter if still allowed.
+  // On mount: restore last session when the user opted in to auto-reconnect.
   useEffect(() => {
+    if (!getAutoReconnectPreference()) {
+      return;
+    }
+
     getPublicKey().then(async (key) => {
       if (key) {
         setWallet(key);
         persistLastAccount(key);
         await refreshWalletNetwork();
+        return;
       }
+
+      // Freighter permission was revoked or the extension is unavailable.
+      clearPersistedWalletSession();
     });
   }, [refreshWalletNetwork]);
 
@@ -179,13 +211,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const key = await connectPromiseRef.current;
     setWallet(key);
     persistLastAccount(key);
+    setAutoReconnectPreference(true);
     await refreshWalletNetwork();
   }, [wallet, refreshWalletNetwork]);
 
   const disconnectWallet = useCallback(() => {
     setWallet(null);
     setWalletNetwork(null);
-    persistLastAccount(null);
+    clearPersistedWalletSession();
     // Clear session display preference
     if (typeof window !== "undefined") {
       sessionStorage.removeItem("wallet-display-mode");
@@ -210,6 +243,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         clearJobCache();
         setWallet(newKey);
         persistLastAccount(newKey);
+        setAutoReconnectPreference(true);
       }
       await refreshWalletNetwork();
     } finally {
