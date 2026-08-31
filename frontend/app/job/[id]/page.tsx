@@ -58,6 +58,7 @@ import type { Job } from "@/lib/types";
 import { useWallet } from "@/lib/wallet-context";
 import { useMeetings } from "@/lib/meetings-context";
 import CertificateDownloadButton from "@/components/CertificateDownloadButton";
+import SimilarJobsSection from "@/components/SimilarJobsSection";
 import { buildCertificateData } from "@/lib/certificate-pdf";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -1569,6 +1570,15 @@ useEffect(() => {
         </>
       )}
 
+      {job && (
+        <SimilarJobsSection
+          job={job}
+          jobId={id}
+          description={description}
+          fiatCurrency={fiatCurrency}
+          fiatRates={fiatRates}
+        />
+      )}
 
       {canTopUp && showTopUpForm && (
         <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-3">

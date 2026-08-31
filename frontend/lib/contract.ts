@@ -286,6 +286,31 @@ export async function getJob(jobId: string): Promise<Job | null> {
   return (response.data as Job) ?? null;
 }
 
+export async function getJobsBatch(start: string, limit: number): Promise<Job[]> {
+  const response = await callContract(
+    getActiveContractId(),
+    "get_jobs_batch",
+    [
+      nativeToScVal(start, { type: "u64" }),
+      nativeToScVal(limit, { type: "u32" }),
+    ],
+    { readOnly: true },
+  );
+  return (response.data as Job[]) ?? [];
+}
+
+export async function getJobsByCategory(category: string): Promise<number[]> {
+  const response = await callContract(
+    getActiveContractId(),
+    "get_jobs_by_category",
+    [nativeToScVal(category, { type: "symbol" })],
+    { readOnly: true },
+  );
+  const data = response.data as number[] | string[] | undefined;
+  if (!data) return [];
+  return data.map((id) => Number(id));
+}
+
 export async function getJobCount(): Promise<number> {
   const response = await callContract(
     getActiveContractId(),
