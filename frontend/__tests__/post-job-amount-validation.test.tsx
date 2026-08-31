@@ -20,6 +20,25 @@ vi.mock("@/lib/ipfs-service", () => ({
   fetchFromIpfs: vi.fn(),
 }));
 
+vi.mock("@/components/RichTextEditor", () => ({
+  default: ({
+    value,
+    onChange,
+    labelId,
+  }: {
+    value: string;
+    onChange: (value: string) => void;
+    labelId?: string;
+  }) => (
+    <textarea
+      aria-labelledby={labelId}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  ),
+  htmlToPlainText: (html: string) => html.replace(/<[^>]*>/g, "").trim(),
+}));
+
 vi.mock("@/lib/wallet-context", () => ({
   useWallet: () => mockUseWallet(),
 }));

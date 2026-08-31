@@ -19,6 +19,25 @@ vi.mock("@/lib/ipfs-service", () => ({
   fetchFromIpfs: vi.fn(),
 }));
 
+vi.mock("@/components/RichTextEditor", () => ({
+  default: ({
+    value,
+    onChange,
+    labelId,
+  }: {
+    value: string;
+    onChange: (value: string) => void;
+    labelId?: string;
+  }) => (
+    <textarea
+      aria-labelledby={labelId}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  ),
+  htmlToPlainText: (html: string) => html.replace(/<[^>]*>/g, "").trim(),
+}));
+
 vi.mock("@/lib/wallet-context", () => ({
   useWallet: () => ({
     wallet: "GCLIENT",
@@ -156,5 +175,28 @@ describe("Post job form validation", () => {
       "0",
       VALID_TOKEN,
     );
+  });
+
+  it("shows a friendly error when the contract transaction is rejected", async () => {
+    mockPostJob.mockRejectedValue(new Error("sendTransaction failed: tx_bad_auth"));
+    render(<PostJobPage />);
+
+    fireEvent.change(screen.getByRole("spinbutton", { name: /Amount/ }), {
+      target: { value: "1.25" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: /Job Description/ }), {
+      target: { value: "Build escrow UI" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: /Token Address/ }), {
+      target: { value: "GNATIVE" },
+    });
+    fireEvent.submit(screen.getByRole("button", { name: "Post Job" }).closest("form")!);
+
+    expect(
+      await screen.findByText(
+        "Stellar rejected the transaction. Check your wallet network, balance, and token address, then try again.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Job submitted to contract.")).not.toBeInTheDocument();
   });
 });

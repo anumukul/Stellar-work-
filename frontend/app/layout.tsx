@@ -3,6 +3,8 @@ import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages } from "next-intl/server";
+import dynamic from "next/dynamic";
+import Link from "next/link";
 import { WalletProvider } from "@/lib/wallet-context";
 import { ToastProvider } from "@/components/ToastProvider";
 import { NotificationProvider } from "@/lib/notifications-context";
@@ -17,6 +19,7 @@ import ErrorBoundary from "@/components/ErrorBoundary";
 import JsonLd from "@/components/JsonLd";
 import AppFooter from "@/components/AppFooter";
 import OfflineIndicator from "@/components/OfflineIndicator";
+import WalletNetworkWarning from "@/components/WalletNetworkWarning";
 import DeferredClientFeatures from "@/components/DeferredClientFeatures";
 import { ClientProviders } from "./client-providers";
 import "./globals.css";
@@ -131,6 +134,14 @@ export default async function RootLayout({
           }}
         />
         <NextIntlClientProvider messages={messages} locale={locale}>
+          <ThemeProvider>
+            <TypographyProvider>
+              <NetworkProvider>
+                <WalletProvider>
+                  <NotificationProvider>
+                    <MessagingProvider>
+                      <MeetingsProvider>
+                        <ToastProvider>
 
         <ThemeProvider>
         <TypographyProvider>
@@ -149,6 +160,7 @@ export default async function RootLayout({
           <DeferredClientFeatures />
           <ClientProviders>
           <OfflineIndicator />
+          <WalletNetworkWarning />
           <Navigation />
           <ScrollRestorer />
           <main id="main-content" tabIndex={-1} className="mx-auto w-full max-w-5xl flex-1 px-3 py-6 sm:px-4 sm:py-8 lg:ml-[220px]">
@@ -181,6 +193,14 @@ export default async function RootLayout({
             </div>
           </footer>
           <AppFooter />
+                        </ToastProvider>
+                      </MeetingsProvider>
+                    </MessagingProvider>
+                  </NotificationProvider>
+                </WalletProvider>
+              </NetworkProvider>
+            </TypographyProvider>
+          </ThemeProvider>
           </ClientProviders>
           </ToastProvider>
           </MeetingsProvider>

@@ -291,7 +291,7 @@ function TestimonialForm({
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function ProfilePageClient({ address }: { address: string }) {
-  const { wallet, connectWallet } = useWallet();
+  const { wallet } = useWallet();
 
   const [jobs, setJobs] = useState<ProfileJob[]>([]);
   const [loading, setLoading] = useState(false);
@@ -315,6 +315,7 @@ export default function ProfilePageClient({ address }: { address: string }) {
   // Load portfolio + testimonials from localStorage
   useEffect(() => {
     if (!addressValid) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setPortfolio(loadPortfolio(address));
     setTestimonials(loadTestimonials(address));
   }, [address, addressValid]);
@@ -324,7 +325,7 @@ export default function ProfilePageClient({ address }: { address: string }) {
   }, [address]);
 
   const fetchJobs = useCallback(async () => {
-    if (!wallet || !addressValid) return;
+    if (!addressValid) return;
     setLoading(true);
     setError(null);
     try {
@@ -344,7 +345,7 @@ export default function ProfilePageClient({ address }: { address: string }) {
         } else {
           setRestricted(false);
         }
-      } catch (e) {
+      } catch {
         // ignore errors reading access control
       }
 
@@ -362,12 +363,12 @@ export default function ProfilePageClient({ address }: { address: string }) {
     } finally {
       setLoading(false);
     }
-  }, [wallet, address, addressValid]);
+  }, [address, addressValid]);
 
   useEffect(() => {
-    if (wallet) { fetchJobs(); }
-    else { setJobs([]); setLoading(false); setError(null); }
-  }, [wallet, fetchJobs]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void fetchJobs();
+  }, [fetchJobs]);
 
   useEffect(() => {
     if (!wallet || !addressValid) return;
@@ -433,6 +434,7 @@ export default function ProfilePageClient({ address }: { address: string }) {
     }));
 
   function startEdit() {
+    if (!isOwner) return;
     setDraft({ ...portfolio, skills: [...portfolio.skills], links: [...portfolio.links], highlightedJobIds: [...portfolio.highlightedJobIds] });
     setEditMode(true);
     setSaveSuccess(false);
@@ -443,6 +445,7 @@ export default function ProfilePageClient({ address }: { address: string }) {
   }
 
   function saveEdit() {
+    if (!isOwner) return;
     const cleaned: Portfolio = {
       version: 1,
       bio: draft.bio.trim().slice(0, MAX_BIO_LENGTH),
@@ -484,26 +487,6 @@ export default function ProfilePageClient({ address }: { address: string }) {
   }
 
   // ── Not connected ────────────────────────────────────────────────────────
-  if (!wallet) {
-    return (
-      <section className="mx-auto max-w-3xl space-y-6">
-        <div className="flex items-center gap-4">
-          <Link href="/" className="text-sm text-blue-600 hover:underline">Back to Home</Link>
-          <h1 className="text-2xl font-semibold">Profile</h1>
-        </div>
-        <div className="rounded-lg border border-slate-200 bg-white p-8 text-center">
-          <p className="text-slate-600">Connect your wallet to view this profile.</p>
-          <button
-            className="mt-4 rounded-md bg-slate-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-slate-800"
-            onClick={async () => { try { await connectWallet(); } catch { /* cancelled */ } }}
-          >
-            Connect Wallet
-          </button>
-        </div>
-      </section>
-    );
-  }
-
   // Completed jobs eligible for highlights (as freelancer)
   const highlightableJobs = completedAsFreelancer;
   const highlightedJobs = jobs.filter((j) =>
@@ -513,7 +496,9 @@ export default function ProfilePageClient({ address }: { address: string }) {
   // Jobs where connected wallet is client and address is the freelancer (for testimonials)
   const clientCanTestifyJobs = jobs.filter(
     (j) =>
-      j.role === "client" &&
+      wallet &&
+      j.role === "freelancer" &&
+      j.job.client === wallet &&
       j.job.freelancer === address &&
       j.job.status === "Completed" &&
       wallet !== address,

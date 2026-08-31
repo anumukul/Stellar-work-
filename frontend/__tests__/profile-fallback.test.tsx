@@ -10,6 +10,10 @@ vi.mock("next/link", () => ({
   ),
 }));
 
+vi.mock("@/components/StatusPill", () => ({
+  default: ({ status }: { status: string }) => <span>{status}</span>,
+}));
+
 // Mock wallet context
 const mockConnectWallet = vi.fn();
 const mockWalletContext = {
@@ -57,15 +61,15 @@ describe("Profile Route Fallback Handling", () => {
     expect(backLink).toHaveAttribute("href", "/");
   });
 
-  it("shows wallet connection prompt with back navigation when not connected", () => {
+  it("renders a public profile with back navigation when not connected", async () => {
     const validAddress = "GABC7DEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUV";
     mockWalletContext.wallet = null;
     
     render(<ProfilePageClient address={validAddress} />);
 
-    // Check for wallet connection prompt
-    expect(screen.getByText("Connect your wallet to view this profile.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Connect Wallet/ })).toBeInTheDocument();
+    expect(await screen.findByText(validAddress)).toBeInTheDocument();
+    expect(screen.queryByText("Connect your wallet to view this profile.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Edit Portfolio/ })).not.toBeInTheDocument();
 
     // Check for back navigation
     const backLink = screen.getByRole("link", { name: /Back to Home/ });
@@ -126,9 +130,10 @@ describe("Profile Route Fallback Handling", () => {
       mockWalletContext.wallet = null;
       const { unmount } = render(<ProfilePageClient address={address} />);
       
-      // Should show wallet connection prompt, not invalid address
-      expect(screen.getByText("Connect your wallet to view this profile.")).toBeInTheDocument();
+      // Should show the public profile, not invalid address or a wallet gate
+      expect(screen.getByText(address)).toBeInTheDocument();
       expect(screen.queryByText("Invalid Address")).not.toBeInTheDocument();
+      expect(screen.queryByText("Connect your wallet to view this profile.")).not.toBeInTheDocument();
       
       unmount();
     }

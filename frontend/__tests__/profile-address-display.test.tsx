@@ -10,6 +10,10 @@ vi.mock("next/link", () => ({
   ),
 }));
 
+vi.mock("@/components/StatusPill", () => ({
+  default: ({ status }: { status: string }) => <span>{status}</span>,
+}));
+
 const mockWalletContext = {
   wallet: null as string | null,
   connectWallet: vi.fn(),

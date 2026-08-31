@@ -14,8 +14,10 @@ import {
 import {
   getAddress,
   isAllowed,
+  getNetwork as getFreighterNetwork,
   requestAccess,
   signTransaction as freighterSignTransaction,
+  WatchWalletChanges,
 } from "@stellar/freighter-api";
 import {
   type StellarNetwork,
@@ -41,6 +43,62 @@ function getActiveNetwork(): StellarNetwork {
 const getRpcUrl = () => getNetworkConfig(getActiveNetwork()).rpcUrl;
 
 export type { StellarNetwork };
+
+const FREIGHTER_NETWORK_BY_NAME: Record<string, StellarNetwork> = {
+  TESTNET: "testnet",
+  FUTURENET: "futurenet",
+  PUBLIC: "mainnet",
+  MAINNET: "mainnet",
+};
+
+export function normalizeFreighterNetwork(
+  network?: string,
+  networkPassphrase?: string,
+): StellarNetwork | null {
+  if (network) {
+    const normalized = FREIGHTER_NETWORK_BY_NAME[network.toUpperCase()];
+    if (normalized) return normalized;
+  }
+
+  if (networkPassphrase) {
+    const match = (["testnet", "futurenet", "mainnet"] as const).find(
+      (candidate) => getNetworkConfig(candidate).passphrase === networkPassphrase,
+    );
+    if (match) return match;
+  }
+
+  return null;
+}
+
+export async function getWalletNetwork(): Promise<StellarNetwork | null> {
+  const walletNetwork = await getFreighterNetwork();
+  if (walletNetwork.error) {
+    return null;
+  }
+  return normalizeFreighterNetwork(
+    walletNetwork.network,
+    walletNetwork.networkPassphrase,
+  );
+}
+
+export function watchWalletNetworkChanges(
+  onChange: (snapshot: { address: string; network: StellarNetwork | null }) => void,
+): () => void {
+  if (typeof window === "undefined") {
+    return () => undefined;
+  }
+
+  const watcher = new WatchWalletChanges(3000);
+  watcher.watch(({ address, network, networkPassphrase, error }) => {
+    if (error) return;
+    onChange({
+      address,
+      network: normalizeFreighterNetwork(network, networkPassphrase),
+    });
+  });
+
+  return () => watcher.stop();
+}
 
 export function getConfiguredNetwork(): StellarNetwork | null {
   return getExplicitNetwork();
