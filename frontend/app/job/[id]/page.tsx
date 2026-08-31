@@ -6,6 +6,7 @@ import DeadlineCountdown from "@/components/DeadlineCountdown";
 import InfoTooltip from "@/components/InfoTooltip";
 import { useToast } from "@/components/ToastProvider";
 import StatusPill from "@/components/StatusPill";
+import JobStatusTimeline from "@/components/JobStatusTimeline";
 import ShareButton from "@/components/ShareButton";
 import dynamic from "next/dynamic";
 import { isRichText, PlainTextRenderer } from "@/lib/rich-text";
@@ -732,6 +733,11 @@ function JobDetailPageContent() {
             </div>
           );
         })()}
+
+      <div className="rounded-lg border border-slate-200 bg-white p-5 mb-6">
+        <h3 className="text-lg font-medium text-slate-800 mb-4">Job Progress</h3>
+        <JobStatusTimeline job={job} />
+      </div>
 
       <article className="space-y-2 rounded-lg border border-slate-200 bg-white p-5 text-sm">
         <div className="flex items-center justify-between gap-2">
