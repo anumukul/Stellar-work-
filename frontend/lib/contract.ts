@@ -6,7 +6,7 @@ import { getContractIdForNetwork, getPersistedNetwork } from "@/lib/network-conf
 export { requireContractId };
 import type { Job, Milestone, JobStatusCounts } from "@/lib/types";
 
-function getActiveContractId(): string {
+export function getActiveContractId(): string {
   if (typeof window !== "undefined") {
     const id = getContractIdForNetwork(getPersistedNetwork());
     if (id) return id;
