@@ -279,7 +279,7 @@ pub enum DataKey {
     FeeTier(u32),
     FeeTierCount,
     DescriptionPayloadMaxBytes,
-    MaxActiveJobsPerClient,
+    MaxJobsPerUser,
     PendingUpgradeWasmHash,
     PendingUpgradeDeadline,
     DescriptionCidMapping(BytesN<32>),
@@ -977,6 +977,7 @@ impl EscrowContract {
         e.storage()
             .instance()
             .set(&DataKey::FeeBps, &DEFAULT_FEE_BPS);
+        e.storage().instance().set(&DataKey::MaxJobsPerUser, &50u32);
         e.storage().instance().set(
             &DataKey::DescriptionPayloadMaxBytes,
             &DEFAULT_DESCRIPTION_PAYLOAD_MAX_BYTES,
@@ -1022,6 +1023,7 @@ impl EscrowContract {
         if !Self::is_token_allowed(e.clone(), token.clone()) {
             panic_with_error!(&e, Error::UnsupportedToken);
         }
+        enforce_user_active_job_limit(&e, &client);
         if categories.len() == 0 || categories.len() > MAX_CATEGORIES {
             panic_with_error!(&e, Error::InvalidCategory);
         }
@@ -1105,6 +1107,7 @@ impl EscrowContract {
         let mut job = get_job_or_panic(&e, job_id);
         freelancer.require_auth();
         require_active_access(&e, &freelancer);
+        enforce_user_active_job_limit(&e, &freelancer);
 
         if job.status != JobStatus::Open {
             panic_with_error!(&e, Error::InvalidStatus);
@@ -2623,7 +2626,7 @@ impl EscrowContract {
         get_fee_tier_count(&e)
     }
 
-    pub fn set_max_active_jobs_per_client(e: Env, caller: Address, limit: u32) {
+    pub fn set_max_jobs_per_user(e: Env, caller: Address, limit: u32) {
         caller.require_auth();
         let admin = load_admin(&e);
         if caller != admin {
@@ -2631,23 +2634,23 @@ impl EscrowContract {
         }
         e.storage()
             .instance()
-            .set(&DataKey::MaxActiveJobsPerClient, &limit);
+            .set(&DataKey::MaxJobsPerUser, &limit);
         bump_instance_ttl(&e);
         e.events().publish(
-            (Symbol::new(&e, "max_active_jobs_updated"),),
+            (Symbol::new(&e, "max_jobs_per_user_updated"),),
             (caller, limit),
         );
     }
 
-    pub fn get_max_active_jobs_per_client(e: Env) -> u32 {
+    pub fn get_max_jobs_per_user(e: Env) -> u32 {
         e.storage()
             .instance()
-            .get::<DataKey, u32>(&DataKey::MaxActiveJobsPerClient)
-            .unwrap_or(0)
+            .get::<DataKey, u32>(&DataKey::MaxJobsPerUser)
+            .unwrap_or(50)
     }
 
-    pub fn get_client_active_jobs_count(e: Env, client: Address) -> u32 {
-        count_client_active_jobs(&e, &client)
+    pub fn get_user_active_jobs_count(e: Env, user: Address) -> u32 {
+        count_user_active_jobs(&e, &user)
     }
 
     pub fn withdraw_fees(e: Env, token: Address) {
@@ -4392,7 +4395,7 @@ fn is_active_job_status(status: &JobStatus) -> bool {
     )
 }
 
-fn count_client_active_jobs(e: &Env, client: &Address) -> u32 {
+fn count_user_active_jobs(e: &Env, user: &Address) -> u32 {
     let total = get_jobs_count(e);
     let mut count: u32 = 0;
     let mut i: u64 = 1;
@@ -4402,7 +4405,8 @@ fn count_client_active_jobs(e: &Env, client: &Address) -> u32 {
             .persistent()
             .get::<DataKey, Job>(&DataKey::Job(i))
         {
-            if &job.client == client && is_active_job_status(&job.status) {
+            let is_user = &job.client == user || job.freelancer.as_ref() == Some(user);
+            if is_user && is_active_job_status(&job.status) {
                 count = count.saturating_add(1);
             }
         }
@@ -4411,16 +4415,16 @@ fn count_client_active_jobs(e: &Env, client: &Address) -> u32 {
     count
 }
 
-fn enforce_client_active_job_limit(e: &Env, client: &Address) {
+fn enforce_user_active_job_limit(e: &Env, user: &Address) {
     let limit = e
         .storage()
         .instance()
-        .get::<DataKey, u32>(&DataKey::MaxActiveJobsPerClient)
-        .unwrap_or(0);
+        .get::<DataKey, u32>(&DataKey::MaxJobsPerUser)
+        .unwrap_or(50);
     if limit == 0 {
         return;
     }
-    let active = count_client_active_jobs(e, client);
+    let active = count_user_active_jobs(e, user);
     if active >= limit {
         panic_with_error!(e, Error::ActiveJobLimitExceeded);
     }

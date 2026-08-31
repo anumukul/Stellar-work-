@@ -21,6 +21,7 @@ import LegalConsentModal, { hasAcceptedLegal, acceptLegal } from "@/components/L
 import ConfirmDialog from "@/components/ConfirmDialog";
 import { CONFIRM_KEYS } from "@/lib/confirm-prefs";
 import { toXlm } from "@/lib/format";
+import { checkConnectionRateLimit, recordConnectionSuccess, recordConnectionFailure } from "@/lib/connection-rate-limiter";
 
 // Storage keys
 const LAST_ACCOUNT_KEY = "stellarwork:last-connected-account";
@@ -183,8 +184,23 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const connectWallet = useCallback(async () => {
     if (wallet) return;
 
+    try {
+      checkConnectionRateLimit();
+    } catch (e) {
+      if (typeof window !== "undefined") {
+        alert(e instanceof Error ? e.message : String(e));
+      }
+      throw e;
+    }
+
     if (!connectPromiseRef.current) {
-      connectPromiseRef.current = stellarConnectWallet().finally(() => {
+      connectPromiseRef.current = stellarConnectWallet().then((res) => {
+        recordConnectionSuccess();
+        return res;
+      }).catch((err) => {
+        recordConnectionFailure();
+        throw err;
+      }).finally(() => {
         connectPromiseRef.current = null;
       });
     }
@@ -218,14 +234,22 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const switchAccount = useCallback(async () => {
     setIsSwitching(true);
     try {
+      checkConnectionRateLimit();
       // Re-request access so Freighter shows the account picker.
       const newKey = await stellarConnectWallet();
+      recordConnectionSuccess();
       if (newKey && newKey !== wallet) {
         clearWalletData();
         setWallet(newKey);
         persistLastAccount(newKey);
       }
       await refreshWalletNetwork();
+    } catch (err) {
+      recordConnectionFailure();
+      if (typeof window !== "undefined" && err instanceof Error && err.message.includes("Too many")) {
+        alert(err.message);
+      }
+      throw err;
     } finally {
       setIsSwitching(false);
     }

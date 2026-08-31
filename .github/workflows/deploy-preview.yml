@@ -2,6 +2,7 @@ name: Preview Deployment
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, closed]
     branches: [main]
     paths:
       - 'frontend/**'
@@ -13,6 +14,7 @@ concurrency:
 
 jobs:
   deploy-preview:
+    if: github.event.action != 'closed'
     name: Deploy Preview
     runs-on: ubuntu-latest
     environment: preview
@@ -58,6 +60,8 @@ jobs:
         env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          NEXT_PUBLIC_NETWORK: testnet
+          NEXT_PUBLIC_SOROBAN_RPC: https://soroban-testnet.stellar.org
 
       - name: Deploy to Vercel (preview)
         id: deploy
@@ -67,6 +71,8 @@ jobs:
         env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          NEXT_PUBLIC_NETWORK: testnet
+          NEXT_PUBLIC_SOROBAN_RPC: https://soroban-testnet.stellar.org
 
       - name: Comment preview URL on PR
         uses: actions/github-script@v7
@@ -111,3 +117,37 @@ jobs:
                 body,
               });
             }
+
+  remove-preview:
+    if: github.event.action == 'closed'
+    name: Remove Preview
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Get Preview URL
+        id: get_url
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c =>
+              c.user.login === 'github-actions[bot]' &&
+              c.body.includes('🚀 Preview Deployment')
+            );
+            if (existing) {
+              const match = existing.body.match(/Preview URL: \*\*(https:\/\/[^*]+)\*\*/);
+              if (match) {
+                core.setOutput('url', match[1]);
+              }
+            }
+
+      - name: Remove Vercel deployment
+        if: steps.get_url.outputs.url != ''
+        run: vercel rm ${{ steps.get_url.outputs.url }} --token=${{ secrets.VERCEL_TOKEN }} --yes
