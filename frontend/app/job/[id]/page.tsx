@@ -48,6 +48,8 @@ import { isConfirmSuppressed, CONFIRM_KEYS } from "@/lib/confirm-prefs";
 import type { Job } from "@/lib/types";
 import { useWallet } from "@/lib/wallet-context";
 import { useMeetings } from "@/lib/meetings-context";
+import CertificateDownloadButton from "@/components/CertificateDownloadButton";
+import { buildCertificateData } from "@/lib/certificate-pdf";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
@@ -307,6 +309,8 @@ function JobDetailPageContent() {
         job.status === "InProgress" ||
         job.status === "SubmittedForReview"),
   );
+  /** Freelancer may download a certificate once the job is Completed. */
+  const canDownloadCertificate = Boolean(isFreelancer && job?.status === "Completed");
   const hasPrimaryActions = !wallet
     ? Boolean(job && ["Open", "InProgress", "SubmittedForReview"].includes(job.status))
     : canAccept ||
@@ -1106,9 +1110,54 @@ function JobDetailPageContent() {
         )}
       </article>
 
+      {/* ── Completion Certificate (issue #818) ─────────────────────────────── */}
+      {canDownloadCertificate && (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 p-5 dark:border-emerald-800 dark:bg-emerald-950/40">
+          <div className="flex items-start gap-3">
+            <svg
+              className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600 dark:text-emerald-400"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+              aria-hidden="true"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z"
+              />
+            </svg>
+            <div className="min-w-0 flex-1">
+              <h2 className="text-sm font-semibold text-emerald-800 dark:text-emerald-300">
+                Job Completed — Your Certificate is Ready
+              </h2>
+              <p className="mt-0.5 text-xs text-emerald-700 dark:text-emerald-400">
+                Download a verifiable proof-of-work certificate or share it on
+                LinkedIn and your portfolio.
+              </p>
+              <div className="mt-3">
+                <CertificateDownloadButton
+                  certificateData={buildCertificateData(
+                    {
+                      job_id: numericId,
+                      client: job.client,
+                      freelancer: job.freelancer ?? wallet ?? "",
+                      amount: job.amount,
+                      completed_at: job.submitted_at ?? "0",
+                      metadata_uri: "",
+                    },
+                    { jobTitle: job.title || `Job #${id}` },
+                  )}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {hasPrimaryActions && (
         <>
-          {/* Spacer on mobile to prevent content hiding behind sticky footer */}
           <div className="h-20 sm:hidden" aria-hidden="true" />
 
           <div className="fixed inset-x-0 bottom-0 z-20 border-t border-slate-200 bg-white/95 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 shadow-[0_-6px_24px_rgba(15,23,42,0.08)] backdrop-blur-sm sm:static sm:border-0 sm:bg-transparent sm:px-0 sm:py-0 sm:pb-0 sm:shadow-none sm:backdrop-blur-none">

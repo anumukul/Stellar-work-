@@ -3,6 +3,8 @@
 import ErrorBanner from "@/components/ErrorBanner";
 import StatusPill from "@/components/StatusPill";
 import TruncatedAddress from "@/components/TruncatedAddress";
+import CertificateDownloadButton from "@/components/CertificateDownloadButton";
+import { buildCertificateData } from "@/lib/certificate-pdf";
 import { getJob, getJobCount, isBlacklisted, isWhitelisted, isWhitelistModeEnabled, getCertificates, getCertificateCount } from "@/lib/contract";
 import type { CompletionCertificate } from "@/lib/contract";
 import { toXlm } from "@/lib/format";
@@ -951,13 +953,17 @@ export default function ProfilePageClient({ address }: { address: string }) {
                   <p><span className="font-medium">Amount:</span> {toXlm(cert.amount)} XLM</p>
                   <p><span className="font-medium">Completed:</span> ledger {cert.completed_at}</p>
                 </div>
+                <div className="mt-3">
+                  <CertificateDownloadButton
+                    variant="compact"
+                    certificateData={buildCertificateData(cert)}
+                  />
+                </div>
               </div>
             ))}
           </div>
         </div>
       )}
-
-      {/* ── Job History ────────────────────────────────────────────────────── */}
       {!loading && (
         <div className="rounded-lg border border-slate-200 bg-white p-5">
           <h2 className="text-lg font-semibold">Job History</h2>
