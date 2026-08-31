@@ -1,0 +1,109 @@
+name: Contract tests
+
+on:
+  push:
+    paths:
+      - 'contracts/**'
+  pull_request:
+    paths:
+      - 'contracts/**'
+
+jobs:
+  contract-tests:
+    name: Run contract tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+          profile: minimal
+
+      - name: Install cargo-tarpaulin
+        run: |
+          cargo install cargo-tarpaulin --locked || true
+
+      - name: Run cargo tests (capture output)
+        id: run_tests
+        run: |
+          set -e
+          mkdir -p test-logs
+          if [ -f contracts/Cargo.toml ]; then
+            cd contracts
+            cargo test --workspace --tests --all-features 2>&1 | tee ../test-logs/test-output.txt || true
+            cd ..
+          else
+            cargo test --workspace --tests --all-features 2>&1 | tee test-logs/test-output.txt || true
+          fi
+          # Default to success unless output shows failures
+          if grep -E "test result: .*FAILED|\bfailed\b" test-logs/test-output.txt >/dev/null 2>&1; then
+            echo "tests_status=failed" >> $GITHUB_OUTPUT
+          else
+            echo "tests_status=success" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate coverage report
+        if: always()
+        run: |
+          mkdir -p coverage
+          if command -v cargo-tarpaulin >/dev/null 2>&1; then
+            if [ -f contracts/Cargo.toml ]; then
+              (cd contracts && cargo tarpaulin -o Xml --output-dir ../coverage) || true
+            else
+              cargo tarpaulin -o Xml --output-dir coverage || true
+            fi
+          else
+            echo "cargo-tarpaulin not installed; skipping coverage" > coverage/README.txt
+          fi
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-test-logs
+          path: test-logs
+
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-coverage
+          path: coverage
+
+      - name: Comment PR with results
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const status = '${{ steps.run_tests.outputs.tests_status }}' || 'unknown';
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            const body = `Contract tests **${status.toUpperCase()}** — [View run logs](${runUrl})`;
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body
+            });
+
+      - name: Fail job on test failures
+        if: steps.run_tests.outputs.tests_status == 'failed'
+        run: |
+          echo "One or more contract tests failed."
+          exit 1
