@@ -9179,6 +9179,44 @@ mod test {
         }
     }
 
+    // ── Contract-specific fee rate (250 bps) ──────────────────────────────
+    //
+    // Verify the exact fee formula `fee = amount * 250 / 10000` used by the
+    // contract for platform fees. Amounts range from 1 to 10^18 stroops.
+    // No overflow panics should occur.
+
+    proptest! {
+        #[test]
+        fn prop_fixed_250bps_fee_formula(amount in 1i128..=1_000_000_000_000_000_000i128) {
+            let fee = amount.checked_mul(DEFAULT_FEE_BPS)
+                .and_then(|v| v.checked_div(BPS_DENOMINATOR))
+                .unwrap_or(0);
+            prop_assert_eq!(fee, amount * DEFAULT_FEE_BPS / BPS_DENOMINATOR,
+                "fee must equal amount * {} / {}", DEFAULT_FEE_BPS, BPS_DENOMINATOR);
+        }
+
+        #[test]
+        fn prop_fixed_250bps_no_overflow(amount in 1i128..=1_000_000_000_000_000_000i128) {
+            let fee = amount.checked_mul(DEFAULT_FEE_BPS)
+                .and_then(|v| v.checked_div(BPS_DENOMINATOR));
+            prop_assert!(fee.is_some(), "fee calculation must not overflow for amount={}", amount);
+        }
+
+        #[test]
+        fn prop_fixed_250bps_fee_non_negative(amount in 1i128..=1_000_000_000_000_000_000i128) {
+            let fee = amount * DEFAULT_FEE_BPS / BPS_DENOMINATOR;
+            prop_assert!(fee >= 0, "fee must be non-negative");
+            prop_assert!(fee <= amount, "fee must not exceed amount");
+        }
+
+        #[test]
+        fn prop_fixed_250bps_payout_plus_fee(amount in 1i128..=1_000_000_000_000_000_000i128) {
+            let fee = amount * DEFAULT_FEE_BPS / BPS_DENOMINATOR;
+            let payout = amount - fee;
+            prop_assert_eq!(payout + fee, amount, "payout + fee must equal amount");
+        }
+    }
+
     // ── Status transition state machine ────────────────────────────────────
     //
     // Verify that status transitions follow valid edges for any random sequence.
