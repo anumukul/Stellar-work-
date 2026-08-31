@@ -73,6 +73,28 @@ export function getPersistedNetwork(): StellarNetwork {
   return getDefaultNetwork();
 }
 
+/**
+ * Returns only an explicitly configured network — persisted user choice or
+ * NEXT_PUBLIC_NETWORK — falling back to null when neither is set.
+ */
+export function getExplicitNetwork(): StellarNetwork | null {
+  if (typeof window !== "undefined") {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored === "testnet" || stored === "futurenet" || stored === "mainnet") {
+        return stored;
+      }
+    } catch {
+      // localStorage unavailable
+    }
+  }
+  const envNetwork = process.env.NEXT_PUBLIC_NETWORK;
+  if (envNetwork === "mainnet" || envNetwork === "testnet" || envNetwork === "futurenet") {
+    return envNetwork;
+  }
+  return null;
+}
+
 export function persistNetwork(network: StellarNetwork): void {
   if (typeof window === "undefined") return;
   try {

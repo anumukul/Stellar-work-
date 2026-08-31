@@ -21,9 +21,14 @@ export const ConfirmDialog: StoryObj<typeof CancelJobConfirmModal> = {
     onClose: () => undefined,
     onConfirm: () => undefined,
   },
-  render: (args) => (
+  render: (args: Record<string, unknown>) => (
     <div className="min-h-[420px] bg-slate-100">
-      <CancelJobConfirmModal {...args} />
+      <CancelJobConfirmModal
+        jobId={args.jobId as string}
+        loading={args.loading as boolean}
+        onClose={args.onClose as () => void}
+        onConfirm={args.onConfirm as () => void}
+      />
     </div>
   ),
 };
@@ -72,7 +77,7 @@ export const Toast: Story = {
       control: "text",
     },
   },
-  render: (args) => (
+  render: (args: Record<string, unknown>) => (
     <ToastProvider>
       <main className="min-h-[320px] bg-slate-50 p-8">
         <ToastDemo

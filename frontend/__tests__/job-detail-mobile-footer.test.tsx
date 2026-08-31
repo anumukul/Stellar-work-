@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 // Mock Next.js modules
@@ -14,11 +14,9 @@ vi.mock("next/link", () => ({
 }));
 
 // Mock wallet context
+const mockUseWallet = vi.fn();
 vi.mock("@/lib/wallet-context", () => ({
-  useWallet: () => ({
-    wallet: "GTEST123",
-    connectWallet: vi.fn(),
-  }),
+  useWallet: mockUseWallet,
 }));
 
 // Mock toast provider
@@ -47,15 +45,6 @@ vi.mock("@/lib/ipfs-service", () => ({
   fetchFromIpfs: vi.fn(),
 }));
 
-// Mock format utilities
-vi.mock("@/lib/format", () => ({
-  toXlm: (value: string) => `${Number(value) / 10000000}`,
-  formatDeadline: (deadline: string) => {
-    if (deadline === "0") return undefined;
-    return { isPast: false, relative: "in 30 days", exact: "2025-07-26" };
-  },
-}));
-
 // Mock stellar utilities
 vi.mock("@/lib/stellar", () => ({
   getExplorerTxUrl: (hash: string) => `https://stellar.expert/tx/${hash}`,
@@ -76,9 +65,30 @@ vi.mock("@/lib/notifications-context", () => ({
   getEventLabel: (event: string) => event,
 }));
 
+vi.mock("@/lib/meetings-context", () => ({
+  useMeetings: () => ({
+    meetings: [],
+    proposeMeeting: vi.fn(),
+    cancelMeeting: vi.fn(),
+    confirmMeeting: vi.fn(),
+    getMeetingsForJob: () => [],
+    getUpcomingMeetings: () => [],
+    getPastMeetings: () => [],
+  }),
+  MeetingsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
 describe("Job Detail Mobile Footer", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseWallet.mockReturnValue({
+      wallet: "GTEST123",
+      connectWallet: vi.fn(),
+      disconnectWallet: vi.fn(),
+      switchAccount: vi.fn(),
+      clearCachedData: vi.fn(),
+      isSwitching: false,
+    });
   });
 
   it("renders sticky footer on mobile with proper spacing", async () => {
@@ -93,6 +103,7 @@ describe("Job Detail Mobile Footer", () => {
       deadline: "0",
       token: "GTOKEN123",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     const JobDetailPage = (await import("@/app/job/[id]/page")).default;
@@ -126,6 +137,7 @@ describe("Job Detail Mobile Footer", () => {
       deadline: "0",
       token: "GTOKEN123",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     const JobDetailPage = (await import("@/app/job/[id]/page")).default;
@@ -154,6 +166,7 @@ describe("Job Detail Mobile Footer", () => {
       deadline: "0",
       token: "GTOKEN123",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     const JobDetailPage = (await import("@/app/job/[id]/page")).default;
@@ -198,6 +211,7 @@ describe("Job Detail Mobile Footer", () => {
       deadline: "0",
       token: "GTOKEN123",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     const JobDetailPage = (await import("@/app/job/[id]/page")).default;
@@ -239,6 +253,7 @@ describe("Job Detail Mobile Footer", () => {
       deadline: "0",
       token: "GTOKEN123",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     const JobDetailPage = (await import("@/app/job/[id]/page")).default;
@@ -267,6 +282,7 @@ describe("Job Detail Mobile Footer", () => {
       deadline: "0",
       token: "GTOKEN123",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     // Mock acceptJob to simulate loading state
@@ -281,7 +297,9 @@ describe("Job Detail Mobile Footer", () => {
     const acceptButton = await screen.findByRole("button", { name: /Accept Job/ });
     
     // Click to trigger loading
-    acceptButton.click();
+    await act(async () => {
+      fireEvent.click(acceptButton);
+    });
 
     // Button should be disabled and show "Processing..."
     await expect(acceptButton).toBeDisabled();
@@ -294,6 +312,10 @@ describe("Job Detail Mobile Footer", () => {
     vi.mocked(useWallet).mockReturnValue({
       wallet: null,
       connectWallet: vi.fn(),
+      disconnectWallet: vi.fn(),
+      switchAccount: vi.fn(),
+      clearCachedData: vi.fn(),
+      isSwitching: false,
     });
 
     const { getJob } = await import("@/lib/contract");
@@ -307,6 +329,7 @@ describe("Job Detail Mobile Footer", () => {
       deadline: "0",
       token: "GTOKEN123",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     const JobDetailPage = (await import("@/app/job/[id]/page")).default;
@@ -333,6 +356,7 @@ describe("Job Detail Mobile Footer", () => {
       deadline: "0",
       token: "GTOKEN123",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     const JobDetailPage = (await import("@/app/job/[id]/page")).default;
@@ -351,6 +375,10 @@ describe("Job Detail Mobile Footer", () => {
     vi.mocked(useWallet).mockReturnValue({
       wallet: null,
       connectWallet: vi.fn(),
+      disconnectWallet: vi.fn(),
+      switchAccount: vi.fn(),
+      clearCachedData: vi.fn(),
+      isSwitching: false,
     });
 
     const { getJob } = await import("@/lib/contract");
@@ -364,6 +392,7 @@ describe("Job Detail Mobile Footer", () => {
       deadline: "0",
       token: "GTOKEN123",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     const JobDetailPage = (await import("@/app/job/[id]/page")).default;
@@ -394,6 +423,7 @@ describe("Job Detail Mobile Footer", () => {
       deadline: "0",
       token: "GTOKEN123",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     // Mock localStorage to return a long description
@@ -428,6 +458,7 @@ describe("Job Detail Mobile Footer", () => {
       deadline: "0",
       token: "GTOKEN123",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     const JobDetailPage = (await import("@/app/job/[id]/page")).default;
@@ -452,6 +483,7 @@ describe("Job Detail Mobile Footer", () => {
       deadline: "0",
       token: "GTOKEN123",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     const JobDetailPage = (await import("@/app/job/[id]/page")).default;

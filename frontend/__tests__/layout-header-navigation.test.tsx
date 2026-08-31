@@ -27,8 +27,26 @@ vi.mock("next/link", () => ({
   ),
 }));
 
+vi.mock("next-intl", () => ({
+  useLocale: () => "en",
+  useTranslations: () => (key: string) => key,
+  NextIntlClientProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
 vi.mock("next/navigation", () => ({
   usePathname: () => mockUsePathname(),
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    refresh: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+  useSearchParams: () => ({
+    get: vi.fn().mockReturnValue(null),
+    toString: vi.fn().mockReturnValue(""),
+  }),
 }));
 
 vi.mock("@/lib/wallet-context", () => ({
@@ -87,6 +105,11 @@ function mobileNav() {
 }
 
 // ─── Test suite ───────────────────────────────────────────────────────────────
+
+vi.mock("@/lib/messaging-context", () => ({
+  useMessaging: () => ({ unreadCount: 0 }),
+  MessagingProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
 
 describe("Layout header navigation", () => {
   // ─── 1. UNAUTHENTICATED NAV ──────────────────────────────────────────────────
@@ -456,6 +479,8 @@ describe("Layout header navigation", () => {
         within(desktopNav()).getByRole("link", { name: "Meetings" }),
       ).toHaveClass("font-semibold");
     });
+    // Navigation is memoized; a remount makes the mocked wallet take effect.
+    rerender(<Navigation key="with-wallet" />);
 
     it("highlights Transactions link when on /transactions", () => {
       mockUsePathname.mockReturnValue("/transactions");

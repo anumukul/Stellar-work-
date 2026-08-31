@@ -78,12 +78,13 @@ class WalletConnectWallet implements WalletProvider {
 
   async connect(): Promise<WalletConnection> {
     const { Web3Wallet } = await import('@walletconnect/web3wallet');
-    
+    const { Core } = await import('@walletconnect/core');
+
     // Initialize WalletConnect client
     this.client = await Web3Wallet.init({
-      core: {
+      core: new Core({
         projectId: process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || '',
-      },
+      }),
       metadata: {
         name: 'StellarWork',
         description: 'Decentralized freelance marketplace',
@@ -166,9 +167,9 @@ class LedgerWallet implements WalletProvider {
   private app: any = null;
 
   async connect(): Promise<WalletConnection> {
-    const { WebHID } = await import('@ledgerhq/hw-transport-webhid');
-    const { StrApp } = await import('@ledgerhq/hw-app-str');
-    
+    const { default: WebHID } = await import('@ledgerhq/hw-transport-webhid');
+    const { default: StrApp } = await import('@ledgerhq/hw-app-str');
+
     // Create WebHID transport
     this.transport = await WebHID.create();
     this.app = new StrApp(this.transport);

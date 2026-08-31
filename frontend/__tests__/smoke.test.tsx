@@ -103,6 +103,7 @@ describe("Home page render states", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       })
       .mockResolvedValueOnce({
         client: "GCLIENT",
@@ -114,6 +115,7 @@ describe("Home page render states", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       });
 
     render(<HomePage />);
@@ -138,6 +140,7 @@ describe("Home page render states", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       })
       .mockResolvedValueOnce({
         client: "GCLIENT",
@@ -149,6 +152,7 @@ describe("Home page render states", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       });
 
     render(<HomePage />);
@@ -175,6 +179,7 @@ describe("Home page render states", () => {
       deadline: "0",
       token: "GTOKEN",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     render(<HomePage />);
@@ -196,6 +201,7 @@ describe("Home page render states", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       })
       .mockResolvedValueOnce({
         client: "GCLIENT",
@@ -207,6 +213,7 @@ describe("Home page render states", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       });
 
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
@@ -233,6 +240,7 @@ describe("Home page render states", () => {
       deadline: "0",
       token: "GTOKEN",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     render(<HomePage />);
@@ -253,6 +261,7 @@ describe("Home page render states", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       })
       .mockResolvedValueOnce({
         client: "GCLIENT",
@@ -264,6 +273,7 @@ describe("Home page render states", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       });
 
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
@@ -292,6 +302,7 @@ describe("Home page render states", () => {
       deadline: "0",
       token: "GTOKEN",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     const { rerender } = render(<HomePage />);
@@ -321,6 +332,7 @@ describe("Home page render states", () => {
       deadline: "0",
       token: "GTOKEN",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     render(<HomePage />);

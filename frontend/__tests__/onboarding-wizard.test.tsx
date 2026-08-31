@@ -2,6 +2,7 @@
  * Tests for the OnboardingWizard component (issue #413).
  */
 import React from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import OnboardingWizard from "@/components/OnboardingWizard";
 
@@ -74,7 +75,7 @@ describe("OnboardingWizard", () => {
   });
 
   it("calls onClose callback when closed", () => {
-    const onClose = jest.fn();
+    const onClose = vi.fn();
     render(<OnboardingWizard forceOpen onClose={onClose} />);
     fireEvent.click(screen.getByRole("button", { name: /skip tour/i }));
     expect(onClose).toHaveBeenCalledTimes(1);

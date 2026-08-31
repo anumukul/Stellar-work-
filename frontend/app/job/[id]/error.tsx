@@ -3,10 +3,14 @@
 import RouteErrorState from "@/components/RouteErrorState";
 
 export default function JobError({
+  retry,
   reset,
 }: {
   error: Error & { digest?: string };
-  reset: () => void;
+  /** Next 16.3 (stable): re-fetches the segment. See app/error.tsx. */
+  retry?: () => void;
+  /** Pre-16.3 name, kept as a fallback. */
+  reset?: () => void;
 }) {
   return (
     <RouteErrorState
@@ -14,7 +18,7 @@ export default function JobError({
       description="The job page could not be loaded. Retry or return to the job list."
       backHref="/"
       backLabel="Jobs"
-      onRetry={reset}
+      onRetry={retry ?? reset ?? (() => undefined)}
     />
   );
 }

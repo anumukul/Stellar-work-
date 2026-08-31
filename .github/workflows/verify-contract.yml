@@ -1,0 +1,115 @@
+name: Verify Contract on StellarExpert
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      contract_id:
+        description: 'Deployed contract ID to verify'
+        required: true
+        type: string
+      network:
+        description: 'Network (testnet or mainnet)'
+        required: true
+        default: 'testnet'
+        type: choice
+        options:
+          - testnet
+          - mainnet
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Build & Verify Contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            contracts/escrow/target/
+          key: ${{ runner.os }}-cargo-verify-${{ hashFiles('contracts/escrow/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-verify-
+            ${{ runner.os }}-cargo-
+
+      - name: Install soroban-cli
+        run: |
+          if ! command -v soroban &> /dev/null; then
+            cargo install soroban-cli --locked
+          fi
+
+      - name: Build contract WASM
+        working-directory: contracts/escrow/
+        run: soroban contract build
+
+      - name: Compute WASM hash
+        id: wasm_hash
+        run: |
+          WASM_FILE="contracts/escrow/target/wasm32-unknown-unknown/release/escrow.wasm"
+          HASH=$(sha256sum "$WASM_FILE" | cut -d' ' -f1)
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+          echo "WASM hash: $HASH"
+
+      - name: Determine contract ID and network
+        id: contract_info
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "contract_id=${{ inputs.contract_id }}" >> "$GITHUB_OUTPUT"
+            echo "network=${{ inputs.network }}" >> "$GITHUB_OUTPUT"
+          else
+            CONTRACT_ID=$(node -e "
+              const fs = require('fs');
+              const data = JSON.parse(fs.readFileSync('contract-addresses.json', 'utf8'));
+              const network = 'testnet';
+              console.log(data[network]?.contractId || '');
+            ")
+            echo "contract_id=$CONTRACT_ID" >> "$GITHUB_OUTPUT"
+            echo "network=testnet" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify contract on StellarExpert
+        if: steps.contract_info.outputs.contract_id != ''
+        run: |
+          chmod +x scripts/verify-contract.sh
+          ./scripts/verify-contract.sh \
+            "${{ steps.contract_info.outputs.contract_id }}" \
+            "${{ steps.contract_info.outputs.network }}" \
+            "contracts/escrow/target/wasm32-unknown-unknown/release/escrow.wasm"
+
+      - name: Upload WASM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: escrow-wasm-${{ steps.wasm_hash.outputs.hash }}
+          path: contracts/escrow/target/wasm32-unknown-unknown/release/escrow.wasm
+          retention-days: 30
+
+      - name: Verification summary
+        run: |
+          echo "## Contract Verification Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Field | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Contract ID | \`${{ steps.contract_info.outputs.contract_id }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Network | ${{ steps.contract_info.outputs.network }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| WASM Hash | \`${{ steps.wasm_hash.outputs.hash }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Git Ref | ${{ github.ref }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Commit | ${{ github.sha }} |" >> "$GITHUB_STEP_SUMMARY"
