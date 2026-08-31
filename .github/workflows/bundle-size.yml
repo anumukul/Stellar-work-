@@ -103,7 +103,7 @@ jobs:
       # ── Save baseline on main for future comparisons ────────────────────
       - name: Store baseline report (main branch)
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: frontend/.next/analyze/bundle-size-report.json
           key: bundle-size-baseline-${{ github.sha }}
