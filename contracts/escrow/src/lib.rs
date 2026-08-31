@@ -207,6 +207,16 @@ pub struct Oracle {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Rating {
+    pub job_id: u64,
+    pub rater: Address,
+    pub score: u32,
+    pub comment_hash: BytesN<32>,
+    pub created_at: u64,
+}
+
+#[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
     JobsCount,
@@ -270,6 +280,9 @@ pub enum DataKey {
     BurnPool,
     BurnPercentage,
     TotalBurned,
+    JobRating(u64, Address),
+    JobEscrowBalance(u64),
+    TotalEscrowBalance,
 }
 
 #[contracttype]
@@ -849,6 +862,7 @@ impl EscrowContract {
         };
 
         set_job(&e, job_id, &job);
+        set_escrow_balance(&e, job_id, amount);
 
         let mut all_ids: Vec<u64> = e
             .storage()
@@ -1034,6 +1048,7 @@ impl EscrowContract {
         job.status = JobStatus::Completed;
         set_job(&e, job_id, &job);
         mark_job_completed_at(&e, job_id);
+        set_escrow_balance(&e, job_id, 0);
         e.storage()
             .persistent()
             .set(&DataKey::TokenFees(job.token.clone()), &updated_fees);
@@ -1189,6 +1204,7 @@ impl EscrowContract {
         job.status = JobStatus::Cancelled;
         set_job(&e, job_id, &job);
         mark_job_cancelled_at(&e, job_id);
+        set_escrow_balance(&e, job_id, 0);
         bump_instance_ttl(&e);
 
         let token_client = token::Client::new(&e, &job.token);
@@ -1232,6 +1248,7 @@ impl EscrowContract {
 
         job.amount = new_amount;
         set_job(&e, job_id, &job);
+        set_escrow_balance(&e, job_id, new_amount);
         bump_instance_ttl(&e);
 
         e.events().publish(
@@ -1255,6 +1272,7 @@ impl EscrowContract {
         job.status = JobStatus::Cancelled;
         set_job(&e, job_id, &job);
         mark_job_cancelled_at(&e, job_id);
+        set_escrow_balance(&e, job_id, 0);
         bump_instance_ttl(&e);
 
         let token_client = token::Client::new(&e, &job.token);
@@ -1287,6 +1305,7 @@ impl EscrowContract {
         job.status = JobStatus::Cancelled;
         set_job(&e, job_id, &job);
         mark_job_cancelled_at(&e, job_id);
+        set_escrow_balance(&e, job_id, 0);
         bump_instance_ttl(&e);
 
         let token_client = token::Client::new(&e, &job.token);
@@ -1326,6 +1345,7 @@ impl EscrowContract {
         job.status = JobStatus::Cancelled;
         set_job(&e, job_id, &job);
         mark_job_cancelled_at(&e, job_id);
+        set_escrow_balance(&e, job_id, 0);
         bump_instance_ttl(&e);
 
         let token_client = token::Client::new(&e, &job.token);
@@ -1555,6 +1575,7 @@ impl EscrowContract {
         job.status = JobStatus::Completed;
         set_job(&e, job_id, &job);
         mark_job_completed_at(&e, job_id);
+        set_escrow_balance(&e, job_id, 0);
         e.storage()
             .persistent()
             .set(&DataKey::TokenFees(job.token.clone()), &updated_fees);
@@ -1636,6 +1657,7 @@ impl EscrowContract {
         job.status = JobStatus::Cancelled;
         set_job(&e, job_id, &job);
         mark_job_cancelled_at(&e, job_id);
+        set_escrow_balance(&e, job_id, 0);
         bump_instance_ttl(&e);
 
         let token_client = token::Client::new(&e, &job.token);
@@ -3139,6 +3161,7 @@ impl EscrowContract {
             job.status = JobStatus::Cancelled;
             set_job(&e, dispute_id, &job);
             mark_job_cancelled_at(&e, dispute_id);
+            set_escrow_balance(&e, dispute_id, 0);
             token_client.transfer(&e.current_contract_address(), &job.client, &job.amount);
         } else {
             let fee_bps = calculate_fee_for_amount(&e, job.amount);
@@ -3151,6 +3174,7 @@ impl EscrowContract {
             job.status = JobStatus::Completed;
             set_job(&e, dispute_id, &job);
             mark_job_completed_at(&e, dispute_id);
+            set_escrow_balance(&e, dispute_id, 0);
             e.storage()
                 .persistent()
                 .set(&DataKey::TokenFees(job.token.clone()), &updated_fees);
@@ -3243,6 +3267,89 @@ impl EscrowContract {
         e.events()
             .publish((Symbol::new(&e, "tokens_burned"),), (amount, new_total));
     }
+
+    pub fn rate_job(e: Env, caller: Address, job_id: u64, score: u32, comment_hash: BytesN<32>) {
+        caller.require_auth();
+        require_active_access(&e, &caller);
+
+        if score < 1 || score > 5 {
+            panic_with_error!(&e, Error::InvalidRating);
+        }
+
+        let job = get_job_or_panic(&e, job_id);
+        if job.status != JobStatus::Completed {
+            panic_with_error!(&e, Error::InvalidStatus);
+        }
+
+        if caller != job.client && job.freelancer != Option::Some(caller.clone()) {
+            panic_with_error!(&e, Error::Unauthorized);
+        }
+
+        let rating_key = DataKey::JobRating(job_id, caller.clone());
+        if e.storage().persistent().has(&rating_key) {
+            panic_with_error!(&e, Error::InvalidRating);
+        }
+
+        let rating = Rating {
+            job_id,
+            rater: caller.clone(),
+            score,
+            comment_hash,
+            created_at: e.ledger().timestamp(),
+        };
+        e.storage().persistent().set(&rating_key, &rating);
+        e.storage().persistent().extend_ttl(
+            &rating_key,
+            ACTIVE_JOB_LIFETIME_THRESHOLD,
+            ARCHIVAL_JOB_BUMP_AMOUNT,
+        );
+        bump_instance_ttl(&e);
+
+        e.events()
+            .publish((Symbol::new(&e, "job_rated"),), (job_id, caller, score));
+    }
+
+    pub fn get_rating(e: Env, job_id: u64, party: Address) -> Option<Rating> {
+        e.storage()
+            .persistent()
+            .get(&DataKey::JobRating(job_id, party))
+    }
+
+    pub fn get_user_rating_summary(e: Env, address: Address) -> (u32, u32) {
+        let total = get_jobs_count(&e);
+        let mut sum: u32 = 0;
+        let mut count: u32 = 0;
+        let mut i: u64 = 1;
+        while i <= total {
+            let key = DataKey::JobRating(i, address.clone());
+            if let Some(rating) = e.storage().persistent().get::<DataKey, Rating>(&key) {
+                sum = sum.saturating_add(rating.score);
+                count = count.saturating_add(1);
+            }
+            i = i.saturating_add(1);
+        }
+        (sum, count)
+    }
+
+    pub fn get_job_escrow_balance(e: Env, job_id: u64) -> i128 {
+        get_job_or_panic(&e, job_id);
+        e.storage()
+            .persistent()
+            .get(&DataKey::JobEscrowBalance(job_id))
+            .unwrap_or(0i128)
+    }
+
+    pub fn get_total_escrow_balance(e: Env, admin: Address) -> i128 {
+        admin.require_auth();
+        let current_admin = load_admin(&e);
+        if admin != current_admin {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+        e.storage()
+            .persistent()
+            .get(&DataKey::TotalEscrowBalance)
+            .unwrap_or(0i128)
+    }
 }
 
 /// Core dispute resolution logic shared by `resolve_dispute` and `batch_resolve_disputes`.
@@ -3330,6 +3437,7 @@ fn resolve_single_dispute(e: &Env, admin: &Address, job_id: u64, resolution: Dis
         job.status = JobStatus::Cancelled;
         set_job(e, job_id, &job);
         mark_job_cancelled_at(e, job_id);
+        set_escrow_balance(e, job_id, 0);
         bump_instance_ttl(e);
         token_client.transfer(&e.current_contract_address(), &job.client, &job.amount);
     } else {
@@ -3354,6 +3462,7 @@ fn resolve_single_dispute(e: &Env, admin: &Address, job_id: u64, resolution: Dis
         job.status = JobStatus::Completed;
         set_job(e, job_id, &job);
         mark_job_completed_at(e, job_id);
+        set_escrow_balance(e, job_id, 0);
         bump_instance_ttl(e);
 
         if client_share > 0 {
@@ -3468,6 +3577,35 @@ fn enforce_client_active_job_limit(e: &Env, client: &Address) {
     if active >= limit {
         panic_with_error!(e, Error::ActiveJobLimitExceeded);
     }
+}
+
+fn set_escrow_balance(e: &Env, job_id: u64, amount: i128) {
+    let old: i128 = e
+        .storage()
+        .persistent()
+        .get(&DataKey::JobEscrowBalance(job_id))
+        .unwrap_or(0i128);
+    e.storage()
+        .persistent()
+        .set(&DataKey::JobEscrowBalance(job_id), &amount);
+    e.storage().persistent().extend_ttl(
+        &DataKey::JobEscrowBalance(job_id),
+        ACTIVE_JOB_LIFETIME_THRESHOLD,
+        ARCHIVAL_JOB_BUMP_AMOUNT,
+    );
+    let total: i128 = e
+        .storage()
+        .persistent()
+        .get(&DataKey::TotalEscrowBalance)
+        .unwrap_or(0i128);
+    let new_total = total - old + amount;
+    e.storage()
+        .persistent()
+        .set(&DataKey::TotalEscrowBalance, &new_total);
+    e.events().publish(
+        (Symbol::new(e, "escrow_balance_updated"),),
+        (job_id, old, amount),
+    );
 }
 
 fn get_job_or_panic(e: &Env, job_id: u64) -> Job {
@@ -12813,5 +12951,314 @@ mod test {
         );
         client.accept_job(&freelancer, &job_id);
         assert_eq!(client.get_job(&job_id).status, JobStatus::InProgress);
+    }
+
+    #[test]
+    fn rate_job_happy_path() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
+
+        let comment = BytesN::from_array(&env, &[1u8; 32]);
+        client.rate_job(&user, &job_id, &5u32, &comment);
+        let rating = client.get_rating(&job_id, &user).unwrap();
+        assert_eq!(rating.score, 5);
+        assert_eq!(rating.job_id, job_id);
+        assert_eq!(rating.rater, user);
+        assert_eq!(rating.comment_hash, comment);
+    }
+
+    #[test]
+    fn rate_job_both_parties_can_rate() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
+
+        let comment = BytesN::from_array(&env, &[0u8; 32]);
+        client.rate_job(&user, &job_id, &4u32, &comment);
+        client.rate_job(&freelancer, &job_id, &3u32, &comment);
+
+        let client_rating = client.get_rating(&job_id, &user).unwrap();
+        let freelancer_rating = client.get_rating(&job_id, &freelancer).unwrap();
+        assert_eq!(client_rating.score, 4);
+        assert_eq!(freelancer_rating.score, 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #49)")]
+    fn rate_job_double_rating_rejected() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
+
+        let comment = BytesN::from_array(&env, &[0u8; 32]);
+        client.rate_job(&user, &job_id, &5u32, &comment);
+        client.rate_job(&user, &job_id, &3u32, &comment);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #49)")]
+    fn rate_job_score_zero_rejected() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
+
+        let comment = BytesN::from_array(&env, &[0u8; 32]);
+        client.rate_job(&user, &job_id, &0u32, &comment);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #49)")]
+    fn rate_job_score_above_five_rejected() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
+
+        let comment = BytesN::from_array(&env, &[0u8; 32]);
+        client.rate_job(&user, &job_id, &6u32, &comment);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn rate_job_non_completed_rejected() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+
+        let comment = BytesN::from_array(&env, &[0u8; 32]);
+        client.rate_job(&user, &job_id, &5u32, &comment);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #2)")]
+    fn rate_job_unauthorized_party_rejected() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
+
+        let stranger = Address::generate(&env);
+        let comment = BytesN::from_array(&env, &[0u8; 32]);
+        client.rate_job(&stranger, &job_id, &5u32, &comment);
+    }
+
+    #[test]
+    fn get_user_rating_summary_empty() {
+        let (env, client, _, _, _, _) = setup();
+        let addr = Address::generate(&env);
+        let (sum, count) = client.get_user_rating_summary(&addr);
+        assert_eq!(sum, 0);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn get_user_rating_summary_aggregates() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+
+        let job1 = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job1);
+        client.submit_work(&freelancer, &job1);
+        client.approve_work(&user, &job1);
+
+        let job2 = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job2);
+        client.submit_work(&freelancer, &job2);
+        client.approve_work(&user, &job2);
+
+        let comment = BytesN::from_array(&env, &[0u8; 32]);
+        client.rate_job(&user, &job1, &4u32, &comment);
+        client.rate_job(&user, &job2, &2u32, &comment);
+
+        let (sum, count) = client.get_user_rating_summary(&user);
+        assert_eq!(sum, 6);
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn escrow_balance_set_on_post() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        assert_eq!(client.get_job_escrow_balance(&job_id), 1_000_000i128);
+    }
+
+    #[test]
+    fn escrow_balance_zero_after_cancel() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.cancel_job(&user, &job_id);
+        assert_eq!(client.get_job_escrow_balance(&job_id), 0);
+    }
+
+    #[test]
+    fn escrow_balance_zero_after_approve() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
+        assert_eq!(client.get_job_escrow_balance(&job_id), 0);
+    }
+
+    #[test]
+    fn escrow_balance_updated_on_top_up() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        assert_eq!(client.get_job_escrow_balance(&job_id), 1_000_000i128);
+        client.top_up_escrow(&user, &job_id, &500_000i128);
+        assert_eq!(client.get_job_escrow_balance(&job_id), 1_500_000i128);
+    }
+
+    #[test]
+    fn total_escrow_balance_tracks_multiple_jobs() {
+        let (env, client, admin, user, _, native_token) = setup();
+        let job1 = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        let job2 = client.post_job(
+            &user,
+            &2_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        assert_eq!(client.get_total_escrow_balance(&admin), 3_000_000i128);
+
+        client.cancel_job(&user, &job1);
+        assert_eq!(client.get_total_escrow_balance(&admin), 2_000_000i128);
+
+        let _ = job2;
+    }
+
+    #[test]
+    fn escrow_balance_consistency_across_lifecycle() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        assert_eq!(client.get_job_escrow_balance(&job_id), 1_000_000i128);
+        assert_eq!(client.get_total_escrow_balance(&admin), 1_000_000i128);
+
+        client.accept_job(&freelancer, &job_id);
+        assert_eq!(client.get_job_escrow_balance(&job_id), 1_000_000i128);
+
+        client.submit_work(&freelancer, &job_id);
+        assert_eq!(client.get_job_escrow_balance(&job_id), 1_000_000i128);
+
+        client.approve_work(&user, &job_id);
+        assert_eq!(client.get_job_escrow_balance(&job_id), 0);
+        assert_eq!(client.get_total_escrow_balance(&admin), 0);
     }
 }
