@@ -736,7 +736,7 @@ function JobDetailPageContent() {
       <article className="space-y-2 rounded-lg border border-slate-200 bg-white p-5 text-sm">
         <div className="flex items-center justify-between gap-2">
           <p>
-            <strong>Status:</strong> <StatusPill status={job.status} />
+            <strong>Status:</strong> <StatusPill status={job.status} isLoading={loading} />
           </p>
           <span className="inline-flex items-center gap-1 text-slate-500" title={`${viewCount} people viewed this job`}>
             <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
