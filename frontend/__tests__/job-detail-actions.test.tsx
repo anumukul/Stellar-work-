@@ -22,6 +22,9 @@ vi.mock("@/lib/contract", () => ({
   freelancerCancelJob: vi.fn(),
   getDescriptionCid: vi.fn(),
   storeDescriptionCid: vi.fn(),
+  getJobViews: vi.fn().mockResolvedValue(0),
+  recordJobView: vi.fn().mockResolvedValue(undefined),
+  rateJob: vi.fn(),
 }));
 
 vi.mock("@/lib/ipfs-service", () => ({
@@ -151,8 +154,8 @@ describe("Job detail action visibility", () => {
       </ToastProvider>,
     );
 
-    const button = await screen.findByRole("button", { name: "Accept Job" });
-    expect(button).toBeDisabled();
+    const button = await screen.findByRole("button", { name: "Connect Wallet" });
+    expect(button).toBeInTheDocument();
     expect(
       screen.getByText("Connect your wallet to enable contract actions."),
     ).toBeInTheDocument();

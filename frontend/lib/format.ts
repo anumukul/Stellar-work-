@@ -243,3 +243,40 @@ export function getDeadlineCountdown(deadline: string, now = Date.now()): Deadli
     urgency,
   };
 }
+
+/** Formats elapsed duration between job creation and completion. */
+export function formatJobDuration(
+  createdAt?: string | number | null,
+  completedAt: string | number = Date.now() / 1000,
+): string {
+  if (!createdAt) return "N/A";
+  const startSec = typeof createdAt === "string" ? Number(createdAt) : createdAt;
+  const endSec = typeof completedAt === "string" ? Number(completedAt) : completedAt;
+
+  if (!startSec || Number.isNaN(startSec) || Number.isNaN(endSec)) {
+    return "N/A";
+  }
+
+  // Normalize seconds to ms if under 1e11 (Stellar ledger timestamps are in seconds)
+  const startMs = startSec > 1e11 ? startSec : startSec * 1000;
+  const endMs = endSec > 1e11 ? endSec : endSec * 1000;
+
+  const diffMs = Math.max(0, endMs - startMs);
+  const totalMinutes = Math.floor(diffMs / 60000);
+  const totalHours = Math.floor(totalMinutes / 60);
+  const days = Math.floor(totalHours / 24);
+  const hours = totalHours % 24;
+  const minutes = totalMinutes % 60;
+
+  if (days > 0) {
+    return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+  }
+  if (hours > 0) {
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m`;
+  }
+  return "< 1m";
+}
+

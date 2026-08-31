@@ -2,6 +2,7 @@
 
 import CancelJobConfirmModal from "@/components/CancelJobConfirmModal";
 import ConfirmDialog from "@/components/ConfirmDialog";
+import JobCelebrationModal from "@/components/JobCelebrationModal";
 import AvailabilityIndicator from "@/components/AvailabilityIndicator";
 import ContractRetryBanner from "@/components/ContractRetryBanner";
 import DeadlineCountdown from "@/components/DeadlineCountdown";
@@ -18,6 +19,7 @@ import { useNotifications } from "@/lib/notifications-context";
 import {
   acceptJob,
   approveWork,
+  rateJob,
   cancelJob,
   freelancerCancelJob,
   getDescriptionCid,
@@ -159,6 +161,7 @@ function JobDetailPageContent() {
   const [showTopUpForm, setShowTopUpForm] = useState(false);
   const [topUpAmountXlm, setTopUpAmountXlm] = useState("");
   const [topUpStroops, setTopUpStroops] = useState<string | null>(null);
+  const [showCelebrationModal, setShowCelebrationModal] = useState(false);
   const lastActionRef = useRef<{
     action: () => Promise<{ hash?: string }>;
     successMessage: string;
@@ -294,13 +297,20 @@ useEffect(() => {
     if (!id || !isIdValid) return;
     let cancelled = false;
 
-    getJobViews(id)
-      .then((count) => {
-        if (!cancelled) setViewCount(count);
-      })
-      .catch(() => {});
+    if (typeof getJobViews === "function") {
+      getJobViews(id)
+        .then((count) => {
+          if (!cancelled) setViewCount(count);
+        })
+        .catch(() => {});
+    }
 
-    if (wallet && !hasViewedToday(id, wallet) && !hasViewedThisSession(id)) {
+    if (
+      wallet &&
+      !hasViewedToday(id, wallet) &&
+      !hasViewedThisSession(id) &&
+      typeof recordJobView === "function"
+    ) {
       recordJobView(wallet, id)
         .then(() => {
           markViewed(id, wallet);
@@ -430,6 +440,7 @@ useEffect(() => {
             message: `Work for Job #${id} was approved and payment released.`,
           },
         );
+        setShowCelebrationModal(true);
         break;
       case "submitWork":
         await handleAction(
@@ -808,6 +819,18 @@ useEffect(() => {
                 fiatRates?.rates,
               )}
             />
+            {job.status === "Completed" && (
+              <button
+                type="button"
+                onClick={() => setShowCelebrationModal(true)}
+                className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-sm font-medium text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-900/60"
+                title="Celebrate job completion"
+                aria-label="Celebrate job completion"
+                data-testid="celebrate-job-btn"
+              >
+                🎉 Celebrate
+              </button>
+            )}
             <button
               type="button"
               onClick={toggleBookmark}
@@ -1399,6 +1422,29 @@ useEffect(() => {
           onCancel={() => setPendingAction(null)}
         />
       ) : null}
+
+      {/* Celebration Animation Modal */}
+      {job && (
+        <JobCelebrationModal
+          isOpen={showCelebrationModal}
+          onClose={() => setShowCelebrationModal(false)}
+          jobId={id}
+          jobTitle={job.title || `Job #${id}`}
+          amount={job.amount}
+          createdAt={job.created_at}
+          completedAt={Date.now() / 1000}
+          isClient={Boolean(isClient)}
+          isFreelancer={Boolean(isFreelancer)}
+          onRate={async (score) => {
+            if (wallet) {
+              await rateJob(wallet, id, score);
+            }
+          }}
+          onDownloadCertificate={() => {
+            setShowCelebrationModal(false);
+          }}
+        />
+      )}
     </section>
   );
 }
