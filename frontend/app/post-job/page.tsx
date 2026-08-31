@@ -592,11 +592,15 @@ export default function PostJobPage() {
           <input
             className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2"
             type="number"
-            min="0.0000001"
+            min="0"
             step="0.0000001"
             value={amount}
             onChange={(e) => {
-              setAmount(e.target.value);
+              const nextValue = e.target.value;
+              if (nextValue.includes("-")) {
+                return;
+              }
+              setAmount(nextValue);
               setFieldErrors((current) => ({ ...current, amount: undefined }));
             }}
             aria-invalid={Boolean(fieldErrors.amount)}
