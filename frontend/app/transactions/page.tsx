@@ -7,6 +7,8 @@ import PullToRefresh from "@/components/PullToRefresh";
 import SectionCard from "@/components/SectionCard";
 import TransactionRowSkeleton from "@/components/TransactionRowSkeleton";
 import TruncatedAddress from "@/components/TruncatedAddress";
+import WalletTransactionHistory from "@/components/WalletTransactionHistory";
+import TransactionCSVExport from "@/components/TransactionCSVExport";
 import { getJob, getJobCount } from "@/lib/contract";
 import { useWallet } from "@/lib/wallet-context";
 import {
@@ -75,6 +77,9 @@ function sumXlm(txns: Transaction[]): string {
 
 export default function TransactionsPage() {
   const { wallet, connectWallet } = useWallet();
+
+  // ── ui state ──
+  const [activeTab, setActiveTab] = useState<"platform" | "wallet">("platform");
 
   // ── data ──
   const [allJobs, setAllJobs] = useState<Array<{ id: number; job: Job }>>([]);
@@ -156,8 +161,10 @@ export default function TransactionsPage() {
   // ── announce results to screen readers ───────────────────────────
   useEffect(() => {
     if (loading || !announcerRef.current) return;
-    announcerRef.current.textContent = `${filteredTransactions.length} transaction${filteredTransactions.length !== 1 ? "s" : ""} shown.`;
-  }, [filteredTransactions.length, loading]);
+    if (activeTab === "platform") {
+      announcerRef.current.textContent = `${filteredTransactions.length} transaction${filteredTransactions.length !== 1 ? "s" : ""} shown.`;
+    }
+  }, [filteredTransactions.length, loading, activeTab]);
 
   // ── type filter toggle ────────────────────────────────────────────
   function toggleType(type: TransactionType) {
@@ -215,14 +222,43 @@ export default function TransactionsPage() {
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold">Transaction History</h1>
-        <button
-          type="button"
-          onClick={() => void fetchJobs()}
-          disabled={loading}
-          className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {loading ? "Refreshing…" : "Refresh"}
-        </button>
+        <div className="flex items-center gap-3">
+          <TransactionCSVExport platformTransactions={allTransactions} wallet={wallet} />
+          <button
+            type="button"
+            onClick={() => void fetchJobs()}
+            disabled={loading}
+            className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {loading ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="border-b border-slate-200">
+        <nav className="-mb-px flex gap-6" aria-label="Tabs">
+          <button
+            onClick={() => setActiveTab("platform")}
+            className={`whitespace-nowrap border-b-2 px-1 py-4 text-sm font-medium transition-colors ${
+              activeTab === "platform"
+                ? "border-blue-500 text-blue-600"
+                : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700"
+            }`}
+          >
+            Platform Activity
+          </button>
+          <button
+            onClick={() => setActiveTab("wallet")}
+            className={`whitespace-nowrap border-b-2 px-1 py-4 text-sm font-medium transition-colors ${
+              activeTab === "wallet"
+                ? "border-blue-500 text-blue-600"
+                : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700"
+            }`}
+          >
+            On-Chain Wallet Activity
+          </button>
+        </nav>
       </div>
 
       {error && (
@@ -232,6 +268,14 @@ export default function TransactionsPage() {
           onRetry={() => void fetchJobs()}
         />
       )}
+
+      {activeTab === "wallet" ? (
+        <SectionCard>
+          <WalletTransactionHistory wallet={wallet} platformTransactions={allTransactions} />
+        </SectionCard>
+      ) : (
+        <>
+
 
       {/* Summary stats */}
       {!loading && allTransactions.length > 0 && (
@@ -398,6 +442,8 @@ export default function TransactionsPage() {
           </p>
         )}
       </SectionCard>
+      </>
+      )}
     </section>
   );
 }

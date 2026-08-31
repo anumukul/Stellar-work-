@@ -1,5 +1,7 @@
 #![no_std]
 
+extern crate alloc;
+
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, Bytes,
     BytesN, Env, String, Symbol, Vec,
@@ -15,14 +17,20 @@ const DEFAULT_DESCRIPTION_PAYLOAD_MAX_BYTES: u32 = 4096;
 const MIN_DESCRIPTION_PAYLOAD_MAX_BYTES: u32 = 32;
 const MAX_DESCRIPTION_PAYLOAD_MAX_BYTES: u32 = 65_536;
 const MAX_FEE_TIERS: u32 = 10;
+/// Default minimum time (seconds) a job must be stuck before recovery can be proposed.
+const DEFAULT_STUCK_THRESHOLD_SECS: u64 = 7 * 24 * 60 * 60; // 7 days
+/// Timelock (seconds) between proposing and executing a recovery.
+const RECOVERY_TIMELOCK_SECS: u64 = 48 * 60 * 60; // 48 hours
+/// Maximum number of active (pending) recovery proposals.
+const MAX_RECOVERY_PROPOSALS: u32 = 50;
 #[allow(dead_code)]
 const XLM_STROOP: i128 = 10_000_000;
 const UPGRADE_TIMELOCK_SECS: u64 = 86_400;
-/// Default dispute deposit: 5 XLM in stroops.
+
 const DEFAULT_DISPUTE_FEE: i128 = 50_000_000;
 /// Maximum number of milestones allowed per job.
 const MAX_MILESTONES: u32 = 20;
-/// Maximum number of disputes that can be resolved in a single batch call.
+
 const MAX_BATCH_DISPUTES: u32 = 20;
 /// Default burn percentage in basis points (0% = disabled by default).
 const DEFAULT_BURN_BPS: i128 = 0;
@@ -31,10 +39,9 @@ const DEFAULT_ORACLE_FEE: i128 = 20_000_000;
 /// SC-123: largest page an indexer may request in one `get_events` call.
 /// Bounded so a single call cannot exceed the contract's read budget.
 const MAX_EVENT_PAGE_LIMIT: u32 = 100;
-/// SC-121: largest number of attachment hashes committable in one call.
-/// A Merkle build is O(n) reads and writes, so the ceiling keeps the call
-/// inside a single transaction's budget.
+
 const MAX_ATTACHMENT_LEAVES: u32 = 256;
+const MAX_CATEGORIES: u32 = 5;
 
 const INSTANCE_LIFETIME_THRESHOLD: u32 = 17_280;
 const INSTANCE_BUMP_AMOUNT: u32 = 518_400;
@@ -66,11 +73,26 @@ pub enum JobVisibility {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum JobCategory {
+    Development,
+    Design,
+    Writing,
+    Marketing,
+    DevOps,
+    Other,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Job {
     pub client: Address,
     pub freelancer: Option<Address>,
     pub amount: i128,
     pub description_hash: BytesN<32>,
+    /// SC-138: SHA-256 hash of the job's extended metadata document stored
+    /// off-chain on IPFS. All-zero bytes means no extended metadata has been
+    /// committed yet.
+    pub metadata_hash: BytesN<32>,
     pub status: JobStatus,
     pub created_at: u64,
     pub deadline: u64,
@@ -80,6 +102,8 @@ pub struct Job {
     /// attachments, making deliverables tamper-evident without storing them
     /// on-chain. All-zero bytes means no attachments have been committed.
     pub attachments_root: BytesN<32>,
+    /// Categories for the job. Multiple allowed.
+    pub categories: Vec<JobCategory>,
 }
 
 /// SC-123: one lifecycle event, recorded in a sequence an indexer can page.
@@ -216,6 +240,31 @@ pub struct Rating {
     pub created_at: u64,
 }
 
+/// Proposal for an emergency fund recovery of a stuck escrow job.
+///
+/// Created by an admin, subject to a timelock and multi-sig approval threshold
+/// before execution.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecoveryProposal {
+    /// Auto-incrementing proposal id.
+    pub id: u64,
+    /// The stuck job whose escrow funds should be recovered.
+    pub job_id: u64,
+    /// Admin who created the proposal.
+    pub proposed_by: Address,
+    /// Human-readable justification for the recovery.
+    pub justification: String,
+    /// Ledger timestamp when the proposal was created.
+    pub proposed_at: u64,
+    /// Ledger timestamp after which the proposal may be executed (proposed_at + timelock).
+    pub executable_after: u64,
+    /// Whether the proposal has been executed (funds recovered).
+    pub executed: bool,
+    /// Number of unique approver addresses that have signed off.
+    pub approval_count: u32,
+}
+
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
@@ -283,6 +332,13 @@ pub enum DataKey {
     JobRating(u64, Address),
     JobEscrowBalance(u64),
     TotalEscrowBalance,
+    /// SC-130: high-value multi-approver configuration and state
+    /// Jobs with amount >= HighValueThreshold require RequiredApprovals approvals
+    HighValueThreshold,
+    RequiredApprovals,
+    Approver(Address),
+    JobApproval(u64, Address),
+    JobApprovalCount(u64),
 }
 
 #[contracttype]
@@ -313,6 +369,22 @@ pub enum ExtKey {
     FreelancerRatingSum(Address),
     /// Count of ratings received by a freelancer.
     FreelancerRatingCount(Address),
+    /// SC-138: maps a job metadata hash to the IPFS CID v1 string of the
+    /// off-chain metadata document it corresponds to.
+    MetadataCidMapping(BytesN<32>),
+    // SC-137: emergency fund recovery for stuck escrows
+    /// Recovery proposal by id.
+    RecoveryProposal(u64),
+    /// Number of recovery proposals ever created.
+    RecoveryCount,
+    /// Minimum time (seconds) a job must be in a stuck state before recovery.
+    StuckThreshold,
+    /// Addresses authorized to approve recovery proposals.
+    RecoverySigner(Address),
+    /// Number of unique signers required to approve a recovery execution.
+    RecoverySignerThreshold,
+    /// Approval status of a signer for a specific recovery proposal.
+    RecoveryApproval(u64, Address),
 }
 
 #[contracterror]
@@ -375,6 +447,12 @@ pub enum Error {
     UnsupportedToken = 47,
     BelowMinimumRating = 48,
     InvalidRating = 49,
+    /// SC-138: a metadata hash must be non-zero to be stored on a job.
+    InvalidMetadataHash = 50,
+    // SC-137: emergency fund recovery. A single error code covers the invalid
+    // states of recovery proposals; details are surfaced via events + audit log.
+    RecoveryError = 50,
+    InvalidCategory = 50,
 }
 
 #[contract]
@@ -581,6 +659,109 @@ impl EscrowContract {
             .map(|f| Self::is_freelancer_verified(e.clone(), f))
     }
 
+    // ── SC-130: multi-approver admin and helpers ───────────────────────────
+
+    pub fn add_approver(e: Env, admin: Address, approver: Address) {
+        admin.require_auth();
+        let stored = load_admin(&e);
+        if admin != stored {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+        e.storage()
+            .persistent()
+            .set(&DataKey::Approver(approver.clone()), &true);
+        e.events().publish((Symbol::new(&e, "approver_added"),), (approver.clone(),));
+        Self::record_event(&e, "approver_added", 0, &admin);
+    }
+
+    pub fn remove_approver(e: Env, admin: Address, approver: Address) {
+        admin.require_auth();
+        let stored = load_admin(&e);
+        if admin != stored {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+        e.storage().persistent().remove(&DataKey::Approver(approver.clone()));
+        e.events().publish((Symbol::new(&e, "approver_removed"),), (approver.clone(),));
+        Self::record_event(&e, "approver_removed", 0, &admin);
+    }
+
+    pub fn is_approver(e: Env, addr: Address) -> bool {
+        e.storage()
+            .persistent()
+            .get(&DataKey::Approver(addr))
+            .unwrap_or(false)
+    }
+
+    pub fn set_high_value_threshold(e: Env, admin: Address, amount: i128) {
+        admin.require_auth();
+        let stored = load_admin(&e);
+        if admin != stored {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+        e.storage().instance().set(&DataKey::HighValueThreshold, &amount);
+        e.events().publish((Symbol::new(&e, "high_value_threshold_set"),), (amount,));
+        Self::record_event(&e, "set_high_value_threshold", 0, &admin);
+    }
+
+    pub fn get_high_value_threshold(e: Env) -> i128 {
+        // Default to very large threshold so feature is opt-in.
+        e.storage()
+            .instance()
+            .get(&DataKey::HighValueThreshold)
+            .unwrap_or(i128::MAX)
+    }
+
+    pub fn set_required_approvals(e: Env, admin: Address, req: u32) {
+        admin.require_auth();
+        let stored = load_admin(&e);
+        if admin != stored {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+        if req == 0 {
+            panic_with_error!(&e, Error::InvalidAmount);
+        }
+        e.storage().instance().set(&DataKey::RequiredApprovals, &req);
+        e.events()
+            .publish((Symbol::new(&e, "required_approvals_set"),), (req,));
+        Self::record_event(&e, "set_required_approvals", 0, &admin);
+    }
+
+    pub fn get_required_approvals(e: Env) -> u32 {
+        e.storage()
+            .instance()
+            .get(&DataKey::RequiredApprovals)
+            .unwrap_or(1u32)
+    }
+
+    fn has_approver_approved(e: &Env, job_id: u64, approver: &Address) -> bool {
+        e.storage()
+            .persistent()
+            .get(&DataKey::JobApproval(job_id, approver.clone()))
+            .unwrap_or(false)
+    }
+
+    fn get_approval_count(e: &Env, job_id: u64) -> u32 {
+        e.storage()
+            .persistent()
+            .get(&DataKey::JobApprovalCount(job_id))
+            .unwrap_or(0u32)
+    }
+
+    fn record_approval(e: &Env, job_id: u64, approver: &Address) -> u32 {
+        if Self::has_approver_approved(e, job_id, approver) {
+            return Self::get_approval_count(e, job_id);
+        }
+        e.storage()
+            .persistent()
+            .set(&DataKey::JobApproval(job_id, approver.clone()), &true);
+        let mut count = Self::get_approval_count(e, job_id);
+        count += 1;
+        e.storage()
+            .persistent()
+            .set(&DataKey::JobApprovalCount(job_id), &count);
+        count
+    }
+
     // ── SC-122: idempotency nonces ───────────────────────────────────────────
 
     /// The highest nonce this client has used. 0 means none yet, so the next
@@ -633,7 +814,7 @@ impl EscrowContract {
             panic_with_error!(&e, Error::DuplicateNonce);
         }
 
-        let job_id = Self::post_job(
+        let job_id = Self::post_job_with_categories(
             e.clone(),
             client.clone(),
             amount,
@@ -641,6 +822,7 @@ impl EscrowContract {
             description_payload_len,
             deadline,
             token,
+            Vec::new(&e),
         );
 
         e.storage()
@@ -810,7 +992,7 @@ impl EscrowContract {
         bump_instance_ttl(&e);
     }
 
-    pub fn post_job(
+    pub fn post_job_with_categories(
         e: Env,
         client: Address,
         amount: i128,
@@ -818,6 +1000,7 @@ impl EscrowContract {
         description_payload_len: u32,
         deadline: u64,
         token: Address,
+        categories: Vec<JobCategory>,
     ) -> u64 {
         if amount <= 0 {
             panic_with_error!(&e, Error::InvalidAmount);
@@ -839,6 +1022,9 @@ impl EscrowContract {
         if !Self::is_token_allowed(e.clone(), token.clone()) {
             panic_with_error!(&e, Error::UnsupportedToken);
         }
+        if categories.len() == 0 || categories.len() > MAX_CATEGORIES {
+            panic_with_error!(&e, Error::InvalidCategory);
+        }
         enforce_client_active_job_limit(&e, &client);
 
         let token_client = token::Client::new(&e, &token);
@@ -852,6 +1038,8 @@ impl EscrowContract {
             freelancer: Option::None,
             amount,
             description_hash: desc_hash,
+            // SC-138: no extended metadata committed at creation.
+            metadata_hash: BytesN::from_array(&e, &[0u8; 32]),
             status: JobStatus::Open,
             created_at: e.ledger().timestamp(),
             deadline,
@@ -859,6 +1047,7 @@ impl EscrowContract {
             revision_count: 0,
             // SC-121: no attachments committed at creation.
             attachments_root: BytesN::from_array(&e, &[0u8; 32]),
+            categories: categories.clone(),
         };
 
         set_job(&e, job_id, &job);
@@ -888,6 +1077,28 @@ impl EscrowContract {
         Self::write_audit(&e, client, "post_job", Some(job_id), "Posted a job");
 
         job_id
+    }
+
+    /// Backwards-compatible wrapper for callers that don't provide categories.
+    pub fn post_job(
+        e: Env,
+        client: Address,
+        amount: i128,
+        desc_hash: BytesN<32>,
+        description_payload_len: u32,
+        deadline: u64,
+        token: Address,
+    ) -> u64 {
+        Self::post_job_with_categories(
+            e,
+            client,
+            amount,
+            desc_hash,
+            description_payload_len,
+            deadline,
+            token,
+            Vec::new(&e),
+        )
     }
 
     pub fn accept_job(e: Env, freelancer: Address, job_id: u64) {
@@ -987,28 +1198,216 @@ impl EscrowContract {
         );
     }
 
-    pub fn approve_work(e: Env, client: Address, job_id: u64) {
+    pub fn approve_work(e: Env, caller: Address, job_id: u64) {
         let mut job = get_job_or_panic(&e, job_id);
-        client.require_auth();
-        require_active_access(&e, &client);
+        caller.require_auth();
+        require_active_access(&e, &caller);
 
         if job.status != JobStatus::SubmittedForReview {
             panic_with_error!(&e, Error::InvalidStatus);
         }
-        if job.client != client {
+
+        let client = job.client.clone();
+
+        // multi-approver configuration
+        let threshold = Self::get_high_value_threshold(e.clone());
+        let required = Self::get_required_approvals(e.clone());
+
+        // Simple/legacy path: if job amount below threshold or only one approval
+        if job.amount < threshold || required <= 1 {
+            if caller != client {
+                panic_with_error!(&e, Error::Unauthorized);
+            }
+            let freelancer = match job.freelancer.clone() {
+                Option::Some(addr) => addr,
+                Option::None => panic_with_error!(&e, Error::InvalidStatus),
+            };
+
+            // Check if client or freelancer is fee-exempted
+            let client_exempted = Self::is_fee_exempted(e.clone(), job.client.clone());
+            let freelancer_exempted = Self::is_fee_exempted(e.clone(), freelancer.clone());
+            let fee_exempted = client_exempted || freelancer_exempted;
+
+            let late_fee = Self::get_late_fee(e.clone(), job_id);
+
+            let (fee, payout) = if fee_exempted {
+                let gross_payout = job.amount;
+                let final_payout = checked_sub(&e, gross_payout, late_fee);
+                (0i128, final_payout)
+            } else {
+                let fee_bps = calculate_fee_for_amount(&e, job.amount);
+                let calculated_fee = checked_mul_div(&e, job.amount, fee_bps, BPS_DENOMINATOR);
+                let gross_payout = checked_sub(&e, job.amount, calculated_fee);
+                let calculated_payout = checked_sub(&e, gross_payout, late_fee);
+                (calculated_fee, calculated_payout)
+            };
+
+            let burn_bps = Self::get_burn_percentage(e.clone());
+            let burn_amount = if burn_bps > 0 {
+                checked_mul_div(&e, fee, burn_bps, BPS_DENOMINATOR)
+            } else {
+                0i128
+            };
+            let fees_after_burn = checked_sub(&e, fee, burn_amount);
+
+            let total_fee_to_accrue = checked_add(&e, fees_after_burn, late_fee);
+            let current_fees = get_token_fees(&e, &job.token);
+            let updated_fees = checked_add(&e, current_fees, total_fee_to_accrue);
+
+            if burn_amount > 0 {
+                let current_pool: i128 = e
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::BurnPool)
+                    .unwrap_or(0);
+                let new_pool = checked_add(&e, current_pool, burn_amount);
+                e.storage().persistent().set(&DataKey::BurnPool, &new_pool);
+            }
+
+            job.status = JobStatus::Completed;
+            set_job(&e, job_id, &job);
+            mark_job_completed_at(&e, job_id);
+            set_escrow_balance(&e, job_id, 0);
+            e.storage()
+                .persistent()
+                .set(&DataKey::TokenFees(job.token.clone()), &updated_fees);
+            bump_token_fees_ttl(&e, &job.token);
+            bump_instance_ttl(&e);
+
+            let token_client = token::Client::new(&e, &job.token);
+            token_client.transfer(&e.current_contract_address(), &freelancer, &payout);
+
+            // Issue #412: credit 0.5% referral bonus on the client's first completed job.
+            let bonus_paid_key = DataKey::ReferralBonusPaid(job.client.clone());
+            let already_paid: bool = e
+                .storage()
+                .persistent()
+                .get(&bonus_paid_key)
+                .unwrap_or(false);
+            if !already_paid {
+                let client_ref_key = DataKey::ClientReferrer(job.client.clone());
+                if let Some(referrer) = e
+                    .storage()
+                    .persistent()
+                    .get::<DataKey, Address>(&client_ref_key)
+                {
+                    // 0.5% of job amount (50 basis points)
+                    const REFERRAL_BPS: i128 = 50;
+                    let bonus = checked_mul_div(&e, job.amount, REFERRAL_BPS, BPS_DENOMINATOR);
+                    let earnings_key = DataKey::ReferralEarnings(referrer.clone());
+                    let prev: i128 = e.storage().persistent().get(&earnings_key).unwrap_or(0i128);
+                    e.storage()
+                        .persistent()
+                        .set(&earnings_key, &checked_add(&e, prev, bonus));
+                    e.storage().persistent().extend_ttl(
+                        &earnings_key,
+                        INSTANCE_LIFETIME_THRESHOLD,
+                        INSTANCE_BUMP_AMOUNT,
+                    );
+                    // Mark bonus as paid so subsequent jobs don't trigger it again.
+                    e.storage().persistent().set(&bonus_paid_key, &true);
+                    e.storage().persistent().extend_ttl(
+                        &bonus_paid_key,
+                        INSTANCE_LIFETIME_THRESHOLD,
+                        INSTANCE_BUMP_AMOUNT,
+                    );
+                    e.events().publish(
+                        (Symbol::new(&e, "referral_bonus_credited"),),
+                        (referrer, job.client.clone(), bonus),
+                    );
+                }
+            }
+
+            e.events().publish(
+                (Symbol::new(&e, "job_approved"),),
+                (job_id, client.clone(), freelancer.clone(), payout),
+            );
+            Self::record_event(&e, "job_approved", job_id, &client);
+
+            let attestation = Attestation {
+                job_id,
+                client: job.client.clone(),
+                freelancer: freelancer.clone(),
+                approved_at: e.ledger().timestamp(),
+                attestation_hash: BytesN::from_array(&e, &[0u8; 32]),
+                metadata_uri: soroban_sdk::String::from_str(&e, ""),
+            };
+            e.storage()
+                .persistent()
+                .set(&DataKey::Attestation(job_id), &attestation);
+            e.storage().persistent().extend_ttl(
+                &DataKey::Attestation(job_id),
+                ACTIVE_JOB_LIFETIME_THRESHOLD,
+                ARCHIVAL_JOB_BUMP_AMOUNT,
+            );
+            let mut user_attestations: Vec<u64> = e
+                .storage()
+                .persistent()
+                .get(&DataKey::UserAttestations(job.client.clone()))
+                .unwrap_or(Vec::new(&e));
+            user_attestations.push_back(job_id);
+            e.storage().persistent().set(
+                &DataKey::UserAttestations(job.client.clone()),
+                &user_attestations,
+            );
+            e.storage().persistent().extend_ttl(
+                &DataKey::UserAttestations(job.client.clone()),
+                INSTANCE_LIFETIME_THRESHOLD,
+                INSTANCE_BUMP_AMOUNT,
+            );
+            let mut user_attestations_f: Vec<u64> = e
+                .storage()
+                .persistent()
+                .get(&DataKey::UserAttestations(freelancer.clone()))
+                .unwrap_or(Vec::new(&e));
+            user_attestations_f.push_back(job_id);
+            e.storage().persistent().set(
+                &DataKey::UserAttestations(freelancer.clone()),
+                &user_attestations_f,
+            );
+            e.storage().persistent().extend_ttl(
+                &DataKey::UserAttestations(freelancer.clone()),
+                INSTANCE_LIFETIME_THRESHOLD,
+                INSTANCE_BUMP_AMOUNT,
+            );
+            e.events().publish(
+                (Symbol::new(&e, "work_attested"),),
+                (
+                    job_id,
+                    client.clone(),
+                    freelancer.clone(),
+                    attestation.approved_at,
+                ),
+            );
+            return;
+        }
+
+        // Multi-approver path: only registered approvers can record approvals.
+        if !Self::is_approver(e.clone(), caller.clone()) {
             panic_with_error!(&e, Error::Unauthorized);
         }
 
+        let approvals = Self::record_approval(&e, job_id, &caller);
+        e.events().publish(
+            (Symbol::new(&e, "job_approval_recorded"),),
+            (job_id, caller.clone(), approvals),
+        );
+        Self::write_audit(&e, caller.clone(), "record_approval", Some(job_id), "Recorded approval");
+
+        if approvals < required {
+            // Not enough approvals yet; wait for more.
+            return;
+        }
+
+        // Enough approvals reached — finalize payout. Use same logic as legacy path.
         let freelancer = match job.freelancer.clone() {
             Option::Some(addr) => addr,
             Option::None => panic_with_error!(&e, Error::InvalidStatus),
         };
 
-        // Check if client or freelancer is fee-exempted
         let client_exempted = Self::is_fee_exempted(e.clone(), job.client.clone());
         let freelancer_exempted = Self::is_fee_exempted(e.clone(), freelancer.clone());
         let fee_exempted = client_exempted || freelancer_exempted;
-
         let late_fee = Self::get_late_fee(e.clone(), job_id);
 
         let (fee, payout) = if fee_exempted {
@@ -1057,47 +1456,6 @@ impl EscrowContract {
 
         let token_client = token::Client::new(&e, &job.token);
         token_client.transfer(&e.current_contract_address(), &freelancer, &payout);
-
-        // Issue #412: credit 0.5% referral bonus on the client's first completed job.
-        let bonus_paid_key = DataKey::ReferralBonusPaid(job.client.clone());
-        let already_paid: bool = e
-            .storage()
-            .persistent()
-            .get(&bonus_paid_key)
-            .unwrap_or(false);
-        if !already_paid {
-            let client_ref_key = DataKey::ClientReferrer(job.client.clone());
-            if let Some(referrer) = e
-                .storage()
-                .persistent()
-                .get::<DataKey, Address>(&client_ref_key)
-            {
-                // 0.5% of job amount (50 basis points)
-                const REFERRAL_BPS: i128 = 50;
-                let bonus = checked_mul_div(&e, job.amount, REFERRAL_BPS, BPS_DENOMINATOR);
-                let earnings_key = DataKey::ReferralEarnings(referrer.clone());
-                let prev: i128 = e.storage().persistent().get(&earnings_key).unwrap_or(0i128);
-                e.storage()
-                    .persistent()
-                    .set(&earnings_key, &checked_add(&e, prev, bonus));
-                e.storage().persistent().extend_ttl(
-                    &earnings_key,
-                    INSTANCE_LIFETIME_THRESHOLD,
-                    INSTANCE_BUMP_AMOUNT,
-                );
-                // Mark bonus as paid so subsequent jobs don't trigger it again.
-                e.storage().persistent().set(&bonus_paid_key, &true);
-                e.storage().persistent().extend_ttl(
-                    &bonus_paid_key,
-                    INSTANCE_LIFETIME_THRESHOLD,
-                    INSTANCE_BUMP_AMOUNT,
-                );
-                e.events().publish(
-                    (Symbol::new(&e, "referral_bonus_credited"),),
-                    (referrer, job.client.clone(), bonus),
-                );
-            }
-        }
 
         e.events().publish(
             (Symbol::new(&e, "job_approved"),),
@@ -1776,6 +2134,35 @@ impl EscrowContract {
         jobs
     }
 
+    /// Return job ids whose categories include `category`.
+    pub fn get_jobs_by_category(e: Env, category: JobCategory) -> Vec<u64> {
+        let mut matches: Vec<u64> = Vec::new(&e);
+        let all_ids: Vec<u64> = e
+            .storage()
+            .persistent()
+            .get(&DataKey::AllJobIds)
+            .unwrap_or(Vec::new(&e));
+
+        for i in 0..all_ids.len() {
+            let id = all_ids.get(i).unwrap();
+            if let Some(job) = e.storage().persistent().get::<DataKey, Job>(&DataKey::Job(id)) {
+                // Scan categories for a match.
+                let mut found = false;
+                for j in 0..job.categories.len() {
+                    if job.categories.get(j).unwrap() == category {
+                        found = true;
+                        break;
+                    }
+                }
+                if found {
+                    matches.push_back(id);
+                }
+            }
+        }
+
+        matches
+    }
+
     pub fn get_admin(e: Env) -> Address {
         load_admin(&e)
     }
@@ -2057,6 +2444,101 @@ impl EscrowContract {
         e.storage()
             .persistent()
             .get::<DataKey, String>(&DataKey::DescriptionCidMapping(desc_hash))
+            .unwrap_or(String::from_str(&e, ""))
+    }
+
+    // ── SC-138: job extended metadata IPFS hash storage ──────────────────────
+
+    /// Update the extended metadata hash for a job.
+    ///
+    /// Only the job's client may update it. The hash must be non-zero. When a
+    /// CID is provided it must be an IPFS CID v1; it is registered under the
+    /// new hash so the off-chain metadata stays resolvable. Committing a new
+    /// hash supersedes the previous metadata: the mapping for the old hash is
+    /// left intact (so a past CID remains retrievable by hash), while the new
+    /// mapping is written when a CID is supplied.
+    pub fn update_metadata(
+        e: Env,
+        caller: Address,
+        job_id: u64,
+        metadata_hash: BytesN<32>,
+        cid: String,
+    ) {
+        caller.require_auth();
+        let mut job = get_job_or_panic(&e, job_id);
+        if caller != job.client {
+            panic_with_error!(&e, Error::Unauthorized);
+        }
+        if metadata_hash == BytesN::from_array(&e, &[0u8; 32]) {
+            panic_with_error!(&e, Error::InvalidMetadataHash);
+        }
+        if !cid.is_empty() && !is_valid_cid_v1(&cid) {
+            panic_with_error!(&e, Error::InvalidMetadataHash);
+        }
+
+        job.metadata_hash = metadata_hash.clone();
+        set_job(&e, job_id, &job);
+
+        if !cid.is_empty() {
+            e.storage()
+                .persistent()
+                .set(&ExtKey::MetadataCidMapping(metadata_hash.clone()), &cid);
+            e.storage().persistent().extend_ttl(
+                &ExtKey::MetadataCidMapping(metadata_hash.clone()),
+                ACTIVE_JOB_LIFETIME_THRESHOLD,
+                INSTANCE_BUMP_AMOUNT,
+            );
+        }
+        bump_instance_ttl(&e);
+
+        e.events().publish(
+            (Symbol::new(&e, "metadata_updated"),),
+            (job_id, caller.clone(), metadata_hash.clone()),
+        );
+        Self::record_event(&e, "metadata_updated", job_id, &caller);
+
+        Self::write_audit(
+            &e,
+            caller,
+            "update_metadata",
+            Some(job_id),
+            "Updated job extended metadata hash",
+        );
+    }
+
+    /// The extended metadata hash for a job. All-zero bytes means none has
+    /// been committed yet.
+    pub fn get_metadata_hash(e: Env, job_id: u64) -> BytesN<32> {
+        get_job_or_panic(&e, job_id).metadata_hash
+    }
+
+    /// Register an IPFS CID v1 for a metadata hash.
+    ///
+    /// Any active caller may register a CID for a hash they hold. Mirrors
+    /// [`Self::store_description_cid`].
+    pub fn store_metadata_cid(e: Env, caller: Address, metadata_hash: BytesN<32>, cid: String) {
+        caller.require_auth();
+        require_active_access(&e, &caller);
+        if cid.is_empty() || !is_valid_cid_v1(&cid) {
+            panic_with_error!(&e, Error::InvalidMetadataHash);
+        }
+        e.storage()
+            .persistent()
+            .set(&ExtKey::MetadataCidMapping(metadata_hash.clone()), &cid);
+        e.storage().persistent().extend_ttl(
+            &ExtKey::MetadataCidMapping(metadata_hash),
+            ACTIVE_JOB_LIFETIME_THRESHOLD,
+            INSTANCE_BUMP_AMOUNT,
+        );
+        bump_instance_ttl(&e);
+    }
+
+    /// The IPFS CID v1 registered for a metadata hash, or an empty string if
+    /// none has been stored.
+    pub fn get_metadata_cid(e: Env, metadata_hash: BytesN<32>) -> String {
+        e.storage()
+            .persistent()
+            .get::<ExtKey, String>(&ExtKey::MetadataCidMapping(metadata_hash))
             .unwrap_or(String::from_str(&e, ""))
     }
 
@@ -2546,7 +3028,7 @@ impl EscrowContract {
         }
 
         // Delegate to the standard post_job logic.
-        Self::post_job(
+        Self::post_job_with_categories(
             e,
             client,
             amount,
@@ -2554,6 +3036,7 @@ impl EscrowContract {
             description_payload_len,
             deadline,
             token,
+            Vec::new(&e),
         )
     }
 
@@ -2942,6 +3425,58 @@ impl EscrowContract {
         e.storage()
             .persistent()
             .get::<DataKey, Job>(&DataKey::ArchivedJob(job_id))
+    }
+
+    /// SC-82: restore a job from archive storage back into active storage (admin only).
+    /// This moves the archived `Job` back to the live `Job` slot, re-inserts the
+    /// job id into `AllJobIds`, decrements `ArchiveCount`, and emits
+    /// a `job_unarchived` event. Any per-job closed timestamps are not
+    /// restored by this operation.
+    pub fn unarchive_job(e: Env, admin: Address, job_id: u64) {
+        admin.require_auth();
+        let current_admin = load_admin(&e);
+        if admin != current_admin {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+
+        // Ensure archived record exists
+        let archived: Option<Job> = e
+            .storage()
+            .persistent()
+            .get(&DataKey::ArchivedJob(job_id));
+        if archived.is_none() {
+            panic_with_error!(&e, Error::JobNotFound);
+        }
+        let job = archived.unwrap();
+
+        // Ensure there's no active job occupying the slot
+        if e.storage().persistent().has(&DataKey::Job(job_id)) {
+            panic_with_error!(&e, Error::InvalidStatus);
+        }
+
+        // Move archived job back into active storage
+        e.storage().persistent().set(&DataKey::Job(job_id), &job);
+        e.storage().persistent().extend_ttl(&DataKey::Job(job_id), ACTIVE_JOB_LIFETIME_THRESHOLD, ACTIVE_JOB_BUMP_AMOUNT);
+
+        // Re-insert into AllJobIds
+        let mut all_ids: Vec<u64> = e
+            .storage()
+            .persistent()
+            .get(&DataKey::AllJobIds)
+            .unwrap_or(Vec::new(&e));
+        all_ids.push_back(job_id);
+        e.storage().persistent().set(&DataKey::AllJobIds, &all_ids);
+        e.storage().persistent().extend_ttl(&DataKey::AllJobIds, INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        // Remove archived record and update counters
+        e.storage().persistent().remove(&DataKey::ArchivedJob(job_id));
+        let mut count: u64 = e.storage().instance().get(&DataKey::ArchiveCount).unwrap_or(0);
+        count = count.saturating_sub(1);
+        e.storage().instance().set(&DataKey::ArchiveCount, &count);
+
+        e.events().publish((Symbol::new(&e, "job_unarchived"),), (job_id,));
+
+        bump_instance_ttl(&e);
     }
 
     /// SC-82: number of jobs currently in archive storage (admin only).
@@ -3350,6 +3885,318 @@ impl EscrowContract {
             .get(&DataKey::TotalEscrowBalance)
             .unwrap_or(0i128)
     }
+
+    // ── SC-137: Emergency fund recovery for stuck escrows ─────────────────────
+
+    /// Configure the minimum time (in seconds) a job must be in a non-terminal
+    /// status before it qualifies for emergency recovery.
+    ///
+    /// Admin only.  Pass `None` to reset to the default (7 days).
+    pub fn set_stuck_threshold(e: Env, admin: Address, threshold_secs: Option<u64>) {
+        admin.require_auth();
+        let current_admin = load_admin(&e);
+        if admin != current_admin {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+        let value = threshold_secs.unwrap_or(DEFAULT_STUCK_THRESHOLD_SECS);
+        e.storage()
+            .persistent()
+            .set(&ExtKey::StuckThreshold, &value);
+        e.storage().persistent().extend_ttl(
+            &ExtKey::StuckThreshold,
+            INSTANCE_LIFETIME_THRESHOLD,
+            INSTANCE_BUMP_AMOUNT,
+        );
+        bump_instance_ttl(&e);
+        e.events().publish(
+            (Symbol::new(&e, "stuck_threshold_updated"),),
+            (admin, value),
+        );
+    }
+
+    /// The configured stuck threshold in seconds.
+    pub fn get_stuck_threshold_secs(e: Env) -> u64 {
+        get_stuck_threshold(&e)
+    }
+
+    /// Register an address as a recovery signer.  Admin only.
+    ///
+    /// `is_signer = true` adds the address; `false` removes it.
+    pub fn set_recovery_signer(e: Env, admin: Address, signer: Address, is_signer: bool) {
+        admin.require_auth();
+        let current_admin = load_admin(&e);
+        if admin != current_admin {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+        if is_signer {
+            e.storage()
+                .persistent()
+                .set(&ExtKey::RecoverySigner(signer.clone()), &true);
+            e.storage().persistent().extend_ttl(
+                &ExtKey::RecoverySigner(signer.clone()),
+                INSTANCE_LIFETIME_THRESHOLD,
+                INSTANCE_BUMP_AMOUNT,
+            );
+        } else {
+            e.storage()
+                .persistent()
+                .remove(&ExtKey::RecoverySigner(signer.clone()));
+        }
+        bump_instance_ttl(&e);
+        e.events().publish(
+            (Symbol::new(&e, "recovery_signer_updated"),),
+            (admin, signer, is_signer),
+        );
+    }
+
+    /// Whether `address` is a registered recovery signer.
+    pub fn is_recovery_signer(e: Env, address: Address) -> bool {
+        e.storage()
+            .persistent()
+            .get(&ExtKey::RecoverySigner(address))
+            .unwrap_or(false)
+    }
+
+    /// Set the number of unique signer approvals required to execute a recovery.
+    /// Admin only.  Setting to 0 disables the multi-sig requirement.
+    pub fn set_recovery_signer_threshold(e: Env, admin: Address, threshold: u32) {
+        admin.require_auth();
+        let current_admin = load_admin(&e);
+        if admin != current_admin {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+        e.storage()
+            .persistent()
+            .set(&ExtKey::RecoverySignerThreshold, &threshold);
+        e.storage().persistent().extend_ttl(
+            &ExtKey::RecoverySignerThreshold,
+            INSTANCE_LIFETIME_THRESHOLD,
+            INSTANCE_BUMP_AMOUNT,
+        );
+        bump_instance_ttl(&e);
+        e.events().publish(
+            (Symbol::new(&e, "recovery_threshold_updated"),),
+            (admin, threshold),
+        );
+    }
+
+    /// The number of signer approvals required for recovery execution.
+    pub fn get_recovery_threshold_val(e: Env) -> u32 {
+        get_recovery_signer_threshold(&e)
+    }
+
+    /// Whether a specific job qualifies for emergency fund recovery.
+    ///
+    /// Returns `true` when the job is in a non-terminal status and has been
+    /// stuck for longer than the configured threshold.
+    pub fn is_job_stuck_for_recovery(e: Env, job_id: u64) -> bool {
+        let job = get_job_or_panic(&e, job_id);
+        is_job_stuck(&e, &job, job_id)
+    }
+
+    /// Propose an emergency fund recovery for a stuck job.
+    ///
+    /// Admin only.  The job must meet the stuck-job criteria.  A timelock of
+    /// [`RECOVERY_TIMELOCK_SECS`] is imposed before the proposal can be
+    /// executed, giving stakeholders time to react.
+    ///
+    /// Emits `recovery_proposed` and records an audit-log entry.
+    pub fn propose_recovery(e: Env, admin: Address, job_id: u64, justification: String) -> u64 {
+        admin.require_auth();
+        let current_admin = load_admin(&e);
+        if admin != current_admin {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+
+        let job = get_job_or_panic(&e, job_id);
+        if !is_job_stuck(&e, &job, job_id) {
+            panic_with_error!(&e, Error::RecoveryError);
+        }
+
+        let recovery_count = get_recovery_count(&e);
+        if recovery_count >= MAX_RECOVERY_PROPOSALS as u64 {
+            panic_with_error!(&e, Error::RecoveryError);
+        }
+
+        let now = e.ledger().timestamp();
+        let executable_after = now + RECOVERY_TIMELOCK_SECS;
+
+        let proposal = RecoveryProposal {
+            id: recovery_count + 1,
+            job_id,
+            proposed_by: admin.clone(),
+            justification,
+            proposed_at: now,
+            executable_after,
+            executed: false,
+            approval_count: 0,
+        };
+
+        set_recovery_proposal(&e, &proposal);
+        set_recovery_count(&e, proposal.id);
+        bump_instance_ttl(&e);
+
+        e.events().publish(
+            (Symbol::new(&e, "recovery_proposed"),),
+            (
+                proposal.id,
+                job_id,
+                admin.clone(),
+                proposal.proposed_at,
+                executable_after,
+            ),
+        );
+        Self::record_event(
+            &e,
+            "recovery_proposed",
+            job_id,
+            &admin,
+        );
+        Self::write_audit(
+            &e,
+            admin,
+            "propose_recovery",
+            Some(job_id),
+            "Proposed emergency recovery for stuck job",
+        );
+
+        proposal.id
+    }
+
+    /// Approve a pending recovery proposal.
+    ///
+    /// Only registered recovery signers may approve.  Each signer may approve
+    /// at most once per proposal.  Once the required threshold of unique
+    /// approvals is reached **and** the timelock has elapsed, anyone may call
+    /// [`Self::execute_recovery`].
+    pub fn approve_recovery(e: Env, signer: Address, proposal_id: u64) {
+        signer.require_auth();
+
+        if !Self::is_recovery_signer(e.clone(), signer.clone()) {
+            panic_with_error!(&e, Error::RecoveryError);
+        }
+
+        let mut proposal = match get_recovery_proposal(&e, proposal_id) {
+            Some(p) => p,
+            None => panic_with_error!(&e, Error::RecoveryError),
+        };
+        if proposal.executed {
+            panic_with_error!(&e, Error::RecoveryError);
+        }
+
+        let approval_key = ExtKey::RecoveryApproval(proposal_id, signer.clone());
+        if e.storage().persistent().has(&approval_key) {
+            panic_with_error!(&e, Error::RecoveryError);
+        }
+
+        e.storage().persistent().set(&approval_key, &true);
+        e.storage().persistent().extend_ttl(
+            &approval_key,
+            INSTANCE_LIFETIME_THRESHOLD,
+            INSTANCE_BUMP_AMOUNT,
+        );
+
+        proposal.approval_count += 1;
+        set_recovery_proposal(&e, &proposal);
+        bump_instance_ttl(&e);
+
+        e.events().publish(
+            (Symbol::new(&e, "recovery_approved"),),
+            (proposal_id, signer.clone(), proposal.approval_count),
+        );
+        Self::record_event(
+            &e,
+            "recovery_approved",
+            proposal.job_id,
+            &signer,
+        );
+    }
+
+    /// Execute an approved recovery proposal.
+    ///
+    /// Requirements:
+    ///  - The proposal must exist and not have been executed already.
+    ///  - The timelock must have elapsed.
+    ///  - The required number of signer approvals must have been reached.
+    ///  - The job must still be in a non-terminal status (not yet completed
+    ///    or cancelled by other means).
+    ///
+    /// The escrowed funds are returned to the original client.  The job is
+    /// moved to `Cancelled` status.  A `recovery_executed` event and an
+    /// audit-log entry are emitted.
+    pub fn execute_recovery(e: Env, caller: Address, proposal_id: u64) {
+        caller.require_auth();
+
+        let mut proposal = match get_recovery_proposal(&e, proposal_id) {
+            Some(p) => p,
+            None => panic_with_error!(&e, Error::RecoveryError),
+        };
+        if proposal.executed {
+            panic_with_error!(&e, Error::RecoveryError);
+        }
+
+        let now = e.ledger().timestamp();
+        if now < proposal.executable_after {
+            panic_with_error!(&e, Error::RecoveryError);
+        }
+
+        let required = get_recovery_signer_threshold(&e);
+        if required > 0 && proposal.approval_count < required {
+            panic_with_error!(&e, Error::RecoveryError);
+        }
+
+        let mut job = get_job_or_panic(&e, proposal.job_id);
+        if job.status == JobStatus::Completed || job.status == JobStatus::Cancelled {
+            panic_with_error!(&e, Error::InvalidStatus);
+        }
+
+        // Return full escrowed amount to the client (no fee deducted).
+        let token_client = token::Client::new(&e, &job.token);
+        token_client.transfer(&e.current_contract_address(), &job.client, &job.amount);
+
+        job.status = JobStatus::Cancelled;
+        set_job(&e, proposal.job_id, &job);
+        mark_job_cancelled_at(&e, proposal.job_id);
+        set_escrow_balance(&e, proposal.job_id, 0);
+
+        proposal.executed = true;
+        set_recovery_proposal(&e, &proposal);
+        bump_instance_ttl(&e);
+
+        e.events().publish(
+            (Symbol::new(&e, "recovery_executed"),),
+            (
+                proposal_id,
+                proposal.job_id,
+                caller.clone(),
+                job.client.clone(),
+                job.amount,
+            ),
+        );
+        Self::record_event(
+            &e,
+            "recovery_executed",
+            proposal.job_id,
+            &caller,
+        );
+        Self::write_audit(
+            &e,
+            caller,
+            "execute_recovery",
+            Some(proposal.job_id),
+            "Executed emergency recovery: funds returned to client",
+        );
+    }
+
+    /// Retrieve a recovery proposal by id.
+    pub fn get_recovery_proposal_view(e: Env, proposal_id: u64) -> Option<RecoveryProposal> {
+        get_recovery_proposal(&e, proposal_id)
+    }
+
+    /// Total number of recovery proposals ever created.
+    pub fn get_recovery_count_view(e: Env) -> u64 {
+        get_recovery_count(&e)
+    }
 }
 
 /// Core dispute resolution logic shared by `resolve_dispute` and `batch_resolve_disputes`.
@@ -3608,6 +4455,38 @@ fn set_escrow_balance(e: &Env, job_id: u64, amount: i128) {
     );
 }
 
+/// SC-138: validate the wire-level shape of an IPFS CID v1 in base32.
+///
+/// A base32-encoded CID v1 always begins with the multibase prefix `b`
+/// (base32, lower) followed by `a` (version 1), i.e. `ba…`. The remaining
+/// characters must be the base32 lower alphabet (`a–z`, `2–7`) and long enough
+/// to hold a SHA-256 multihash. This guards against storing a malformed CID; it
+/// does not verify the content hash itself.
+fn is_valid_cid_v1(cid: &String) -> bool {
+    let len = cid.len();
+    if len < 3 {
+        return false;
+    }
+    let mut bytes: alloc::vec::Vec<u8> = alloc::vec![0u8; len as usize];
+    cid.copy_into_slice(&mut bytes);
+    if bytes[0] != b'b' || bytes[1] != b'a' {
+        return false;
+    }
+    // A SHA-256 CID v1 (version + codec + multihash) encodes to 58 base32
+    // chars plus the `b` multibase prefix = 59 total; require a plausible length.
+    let mut payload_len: u32 = 0;
+    let mut i: u32 = 2;
+    while i < len {
+        let c = bytes[i as usize];
+        if !((c >= b'a' && c <= b'z') || (c >= b'2' && c <= b'7')) {
+            return false;
+        }
+        payload_len += 1;
+        i += 1;
+    }
+    payload_len >= 55
+}
+
 fn get_job_or_panic(e: &Env, job_id: u64) -> Job {
     e.storage()
         .persistent()
@@ -3655,6 +4534,92 @@ fn job_terminal_timestamp(e: &Env, job_id: u64, job: &Job) -> Option<u64> {
         ),
         _ => None,
     }
+}
+
+// ── SC-137: emergency fund recovery helpers ──────────────────────────────────
+
+/// Return the timestamp when the job entered its current status.
+///
+/// For terminal statuses (Completed, Cancelled) the contract stores a
+/// dedicated timestamp.  For non-terminal statuses we fall back to
+/// `created_at`, which is conservative (over-estimates stuck duration).
+fn status_changed_at(e: &Env, job_id: u64, job: &Job) -> u64 {
+    match job.status {
+        JobStatus::Completed => e
+            .storage()
+            .persistent()
+            .get(&DataKey::CompletedAt(job_id))
+            .unwrap_or(job.created_at),
+        JobStatus::Cancelled => e
+            .storage()
+            .persistent()
+            .get(&DataKey::CancelledAt(job_id))
+            .unwrap_or(job.created_at),
+        _ => job.created_at,
+    }
+}
+
+/// Whether `job` meets the stuck-job criteria for emergency recovery.
+///
+/// A job is considered stuck when:
+///  1. It is **not** in a terminal status (Completed / Cancelled).
+///  2. It has been in its current status longer than the configured
+///     `StuckThreshold` (or the default [`DEFAULT_STUCK_THRESHOLD_SECS`]).
+fn is_job_stuck(e: &Env, job: &Job, job_id: u64) -> bool {
+    if job.status == JobStatus::Completed || job.status == JobStatus::Cancelled {
+        return false;
+    }
+    let threshold: u64 = get_stuck_threshold(e);
+    let since = status_changed_at(e, job_id, job);
+    let now = e.ledger().timestamp();
+    now > since && (now - since) >= threshold
+}
+
+/// Retrieve a recovery proposal by id, or `None`.
+fn get_recovery_proposal(e: &Env, proposal_id: u64) -> Option<RecoveryProposal> {
+    e.storage()
+        .persistent()
+        .get(&ExtKey::RecoveryProposal(proposal_id))
+}
+
+/// Store a recovery proposal.
+fn set_recovery_proposal(e: &Env, proposal: &RecoveryProposal) {
+    e.storage()
+        .persistent()
+        .set(&ExtKey::RecoveryProposal(proposal.id), proposal);
+    e.storage().persistent().extend_ttl(
+        &ExtKey::RecoveryProposal(proposal.id),
+        INSTANCE_LIFETIME_THRESHOLD,
+        INSTANCE_BUMP_AMOUNT,
+    );
+}
+
+/// The current recovery signer threshold (number of required approvals).
+fn get_recovery_signer_threshold(e: &Env) -> u32 {
+    e.storage()
+        .persistent()
+        .get(&ExtKey::RecoverySignerThreshold)
+        .unwrap_or(0)
+}
+
+/// The configured stuck threshold in seconds.
+fn get_stuck_threshold(e: &Env) -> u64 {
+    e.storage()
+        .persistent()
+        .get(&ExtKey::StuckThreshold)
+        .unwrap_or(DEFAULT_STUCK_THRESHOLD_SECS)
+}
+
+/// Number of recovery proposals ever created.
+fn get_recovery_count(e: &Env) -> u64 {
+    e.storage()
+        .persistent()
+        .get(&ExtKey::RecoveryCount)
+        .unwrap_or(0)
+}
+
+fn set_recovery_count(e: &Env, count: u64) {
+    e.storage().persistent().set(&ExtKey::RecoveryCount, &count);
 }
 
 fn remove_job_id_from_all_ids(e: &Env, job_id: u64) {
@@ -7646,6 +8611,146 @@ mod test {
         assert_eq!(retrieved, cid2);
     }
 
+    // ── SC-138: job extended metadata IPFS hash storage ──────────────────────
+
+    fn metadata_cid(env: &Env) -> String {
+        String::from_str(
+            env,
+            "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+        )
+    }
+
+    fn has_event(env: &Env, topic: &str) -> bool {
+        let expected = Symbol::new(env, topic);
+        env.events().all().iter().any(|(_addr, topics, _data)| {
+            if let Some(topic_val) = topics.get(0) {
+                soroban_sdk::TryFromVal::<Env, soroban_sdk::Val>::try_from_val(env, &topic_val)
+                    .map(|sym: Symbol| sym == expected)
+                    .unwrap_or(false)
+            } else {
+                false
+            }
+        })
+    }
+
+    #[test]
+    fn get_metadata_hash_zero_for_fresh_job() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id =
+            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        assert_eq!(
+            client.get_metadata_hash(&job_id),
+            BytesN::from_array(&env, &[0u8; 32])
+        );
+    }
+
+    #[test]
+    fn update_metadata_sets_hash_and_cid_and_emits_event() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id =
+            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+
+        let metadata_hash = BytesN::from_array(&env, &[0x42; 32]);
+        let cid = metadata_cid(&env);
+
+        client.update_metadata(&user, &job_id, &metadata_hash, &cid);
+
+        assert_eq!(client.get_metadata_hash(&job_id), metadata_hash);
+        assert_eq!(client.get_metadata_cid(&metadata_hash), cid);
+        assert!(has_event(&env, "metadata_updated"));
+    }
+
+    #[test]
+    fn update_metadata_without_cid_sets_hash_only() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id =
+            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+
+        let metadata_hash = BytesN::from_array(&env, &[0x99; 32]);
+        client.update_metadata(&user, &job_id, &metadata_hash, &String::from_str(&env, ""));
+
+        assert_eq!(client.get_metadata_hash(&job_id), metadata_hash);
+        assert_eq!(
+            client.get_metadata_cid(&metadata_hash),
+            String::from_str(&env, "")
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #2)")]
+    fn update_metadata_rejects_non_client() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id =
+            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.update_metadata(
+            &freelancer,
+            &job_id,
+            &BytesN::from_array(&env, &[0x42; 32]),
+            &metadata_cid(&env),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #50)")]
+    fn update_metadata_rejects_zero_hash() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id =
+            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.update_metadata(
+            &user,
+            &job_id,
+            &BytesN::from_array(&env, &[0u8; 32]),
+            &metadata_cid(&env),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #50)")]
+    fn update_metadata_rejects_invalid_cid() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id =
+            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.update_metadata(
+            &user,
+            &job_id,
+            &BytesN::from_array(&env, &[0x42; 32]),
+            &String::from_str(&env, "QmNotACidV1"),
+        );
+    }
+
+    #[test]
+    fn metadata_cid_roundtrip_via_store() {
+        let (env, client, _, user, _, _) = setup();
+        let metadata_hash = BytesN::from_array(&env, &[0x7A; 32]);
+        let cid = metadata_cid(&env);
+
+        client.store_metadata_cid(&user, &metadata_hash, &cid);
+
+        assert_eq!(client.get_metadata_cid(&metadata_hash), cid);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #50)")]
+    fn store_metadata_cid_rejects_invalid_cid() {
+        let (env, client, _, user, _, _) = setup();
+        client.store_metadata_cid(
+            &user,
+            &BytesN::from_array(&env, &[0x7A; 32]),
+            &String::from_str(&env, "not-a-cid"),
+        );
+    }
+
+    #[test]
+    fn get_metadata_cid_empty_for_unstored_hash() {
+        let (env, client, _, _, _, _) = setup();
+        let metadata_hash = BytesN::from_array(&env, &[0x7B; 32]);
+        assert_eq!(
+            client.get_metadata_cid(&metadata_hash),
+            String::from_str(&env, "")
+        );
+    }
+
+
     /// After a failed raise_dispute call, the job state and escrow balance
     /// must remain exactly as they were before the call.
     #[test]
@@ -8012,6 +9117,9 @@ mod test {
             revision_count: 0,
             // SC-121: a freshly posted job has no attachment commitment.
             attachments_root: BytesN::from_array(&env, &[0u8; 32]),
+            // SC-138: a freshly posted job has no extended metadata committed.
+            metadata_hash: BytesN::from_array(&env, &[0u8; 32]),
+            categories: Vec::new(&env),
         };
 
         assert_eq!(client.get_job(&job_id), expected);
@@ -8048,6 +9156,9 @@ mod test {
             token: native_token.clone(),
             revision_count: 0,
             attachments_root: BytesN::from_array(&env, &[0u8; 32]),
+            // SC-138: no extended metadata committed.
+            metadata_hash: BytesN::from_array(&env, &[0u8; 32]),
+            categories: Vec::new(&env),
         };
         assert_eq!(after_accept, expected_accept);
 
@@ -13298,5 +14409,193 @@ mod test {
         client.approve_work(&user, &job_id);
         assert_eq!(client.get_job_escrow_balance(&job_id), 0);
         assert_eq!(client.get_total_escrow_balance(&admin), 0);
+    }
+
+    // ── SC-137: emergency fund recovery tests ────────────────────────────────
+
+    #[test]
+    fn recovery_signer_configuration() {
+        let (env, client, admin, _, _, _) = setup();        let signer = Address::generate(&env);
+
+        assert!(!client.is_recovery_signer(&signer));
+        client.set_recovery_signer(&admin, &signer, &true);
+        assert!(client.is_recovery_signer(&signer));
+        client.set_recovery_signer(&admin, &signer, &false);
+        assert!(!client.is_recovery_signer(&signer));
+    }
+
+    #[test]
+    fn stuck_threshold_configuration() {
+        let (_env, client, admin, _, _, _) = setup();
+        assert_eq!(client.get_stuck_threshold_secs(), 7 * 24 * 60 * 60);
+
+        client.set_stuck_threshold(&admin, &Some(3600u64));
+        assert_eq!(client.get_stuck_threshold_secs(), 3600);
+
+        client.set_stuck_threshold(&admin, &Option::None);
+        assert_eq!(client.get_stuck_threshold_secs(), 7 * 24 * 60 * 60);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #50)")]
+    fn propose_recovery_rejected_when_job_not_stuck() {
+        let (env, client, admin, user, _, native_token) = setup();
+        client.set_stuck_threshold(&admin, &Some(100u64));
+
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        // Job is fresh and not yet stuck -> RecoveryError #50.
+        client.propose_recovery(&admin, &job_id, &String::from_str(&env, "not stuck"));
+    }
+
+    #[test]
+    fn full_multisig_recovery_flow() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+        let signer1 = Address::generate(&env);
+        let signer2 = Address::generate(&env);
+
+        client.set_recovery_signer(&admin, &signer1, &true);
+        client.set_recovery_signer(&admin, &signer2, &true);
+        client.set_recovery_signer_threshold(&admin, &2u32);
+        assert_eq!(client.get_recovery_threshold_val(), 2);
+
+        // A small stuck threshold makes the test fast.
+        client.set_stuck_threshold(&admin, &Some(100u64));
+
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        // Put the job in a non-terminal in-progress state.
+        client.accept_job(&freelancer, &job_id);
+        let user_balance_before = token::Client::new(&env, &native_token).balance(&user);
+
+        // Not stuck yet.
+        assert!(!client.is_job_stuck_for_recovery(&job_id));
+
+        // Advance time beyond the 100s stuck threshold.
+        let base = env.ledger().timestamp();
+        env.ledger().with_mut(|li| li.timestamp = base + 1000);
+
+        assert!(client.is_job_stuck_for_recovery(&job_id));
+
+        let proposal_id =
+            client.propose_recovery(&admin, &job_id, &String::from_str(&env, "stuck job"));
+        assert_eq!(proposal_id, 1);
+        assert_eq!(client.get_recovery_count_view(), 1);
+
+        let view = client.get_recovery_proposal_view(&proposal_id).unwrap();
+        assert_eq!(view.job_id, job_id);
+        assert!(!view.executed);
+        assert_eq!(view.approval_count, 0);
+
+        // Both signers approve.
+        client.approve_recovery(&signer1, &proposal_id);
+        client.approve_recovery(&signer2, &proposal_id);
+        let after = client.get_recovery_proposal_view(&proposal_id).unwrap();
+        assert_eq!(after.approval_count, 2);
+
+        // Execution before the timelock elapses must fail (RecoveryError #50).
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.execute_recovery(&user, &proposal_id);
+        }));
+        assert!(caught.is_err(), "execution before timelock must fail");
+
+        // Advance past RECOVERY_TIMELOCK_SECS (48h) and execute.
+        let t = env.ledger().timestamp();
+        env.ledger().with_mut(|li| li.timestamp = t + 48 * 60 * 60 + 1);
+        client.execute_recovery(&user, &proposal_id);
+
+        let job = client.get_job(&job_id);
+        assert_eq!(job.status, JobStatus::Cancelled);
+        assert_eq!(client.get_job_escrow_balance(&job_id), 0);
+
+        // The full amount (no fee) was returned to the client.
+        let user_balance_after = token::Client::new(&env, &native_token).balance(&user);
+        assert_eq!(user_balance_after - user_balance_before, 1_000_000i128);
+
+        let executed = client.get_recovery_proposal_view(&proposal_id).unwrap();
+        assert!(executed.executed);
+
+        // A second execution must fail.
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.execute_recovery(&user, &proposal_id);
+        }));
+        assert!(caught.is_err(), "double execution must fail");
+    }
+
+    #[test]
+    fn recovery_execution_without_multisig_threshold() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+        // Threshold defaults to 0 (no multi-sig requirement).
+        assert_eq!(client.get_recovery_threshold_val(), 0);
+        client.set_stuck_threshold(&admin, &Some(100u64));
+
+        let job_id = client.post_job(
+            &user,
+            &500_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+
+        let base = env.ledger().timestamp();
+        env.ledger().with_mut(|li| li.timestamp = base + 1000);
+
+        let proposal_id =
+            client.propose_recovery(&admin, &job_id, &String::from_str(&env, "stuck job"));
+        assert!(client.get_recovery_threshold_val() == 0);
+
+        // Timelock still pending -> must fail.
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.execute_recovery(&user, &proposal_id);
+        }));
+        assert!(caught.is_err());
+
+        let t = env.ledger().timestamp();
+        env.ledger().with_mut(|li| li.timestamp = t + 48 * 60 * 60 + 1);
+        client.execute_recovery(&user, &proposal_id);
+
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Cancelled);
+        assert_eq!(client.get_job_escrow_balance(&job_id), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #50)")]
+    fn approve_recovery_rejected_for_non_signer() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+        client.set_stuck_threshold(&admin, &Some(100u64));
+
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+
+        let base = env.ledger().timestamp();
+        env.ledger().with_mut(|li| li.timestamp = base + 1000);
+
+        // No signers registered, so freelancer is not a signer.
+        let proposal_id =
+            client.propose_recovery(&admin, &job_id, &String::from_str(&env, "stuck"));
+
+        // freelancer is not a registered signer -> RecoveryError #50.
+        client.approve_recovery(&freelancer, &proposal_id);
     }
 }

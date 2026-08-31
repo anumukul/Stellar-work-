@@ -1,16 +1,4 @@
 #![cfg(test)]
-//! Performance benchmarks for the escrow contract's core functions.
-//!
-//! This module measures real resource consumption for post_job, accept_job, submit_work, and approve_work
-//! using Soroban's test environment budget tracking.
-//!
-//! Resource dimensions measured:
-//! - CPU instructions: The primary cost dimension in Soroban (100M max per transaction)
-//! - Ledger reads/writes: Bytes of storage accessed (includes protocol overhead)
-//! - Memory: Peak memory usage during execution
-//!
-//! Benchmarks are run across varying amounts (small, mid, large) to detect cost sensitivity.
-//! Realistic workflow state is set up (post → accept → submit → approve chain).
 
 use super::*;
 use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, vec, IntoVal};

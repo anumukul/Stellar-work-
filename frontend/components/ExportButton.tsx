@@ -93,9 +93,11 @@ function triggerDownload(content: string, filename: string, mime: string) {
 export default function ExportButton({
   jobs,
   wallet,
+  selectedIds,
 }: {
   jobs: Array<{ id: number; job: Job }>;
   wallet: string;
+  selectedIds?: number[];
 }) {
   const [open, setOpen] = useState(false);
   const [format, setFormat] = useState<ExportFormat>("csv");
@@ -124,7 +126,10 @@ export default function ExportButton({
   const handleExport = () => {
     setLoading(true);
     try {
-      const data = buildExportData(jobs, wallet, dateFrom, dateTo);
+      const sourceJobs = onlySelected && selectedIds && selectedIds.length > 0
+        ? jobs.filter((j) => selectedIds.includes(j.id))
+        : jobs;
+      const data = buildExportData(sourceJobs, wallet, dateFrom, dateTo);
       const timestamp = new Date().toISOString().slice(0, 10);
       if (format === "csv") {
         triggerDownload(toCSV(data), `stellarwork-export-${timestamp}.csv`, "text/csv");
@@ -161,6 +166,34 @@ export default function ExportButton({
           aria-label="Export options"
         >
           <p className="mb-3 text-sm font-semibold">Export Job History</p>
+
+          {selectedIds && selectedIds.length > 0 && (
+            <div className="mb-3">
+              <label className="mb-1 block text-xs font-medium text-slate-600">Scope</label>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setOnlySelected(false)}
+                  className={`rounded-md px-3 py-1 text-xs font-medium ${
+                    !onlySelected
+                      ? "bg-slate-900 text-white"
+                      : "border border-slate-300 text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  All
+                </button>
+                <button
+                  onClick={() => setOnlySelected(true)}
+                  className={`rounded-md px-3 py-1 text-xs font-medium ${
+                    onlySelected
+                      ? "bg-slate-900 text-white"
+                      : "border border-slate-300 text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  Selected ({selectedIds.length})
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="mb-3">
             <label className="mb-1 block text-xs font-medium text-slate-600">
