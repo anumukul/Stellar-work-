@@ -160,7 +160,7 @@ export default function ExportButton({
           role="dialog"
           aria-label="Export options"
         >
-          <h3 className="mb-3 text-sm font-semibold">Export Job History</h3>
+          <p className="mb-3 text-sm font-semibold">Export Job History</p>
 
           <div className="mb-3">
             <label className="mb-1 block text-xs font-medium text-slate-600">

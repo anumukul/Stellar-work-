@@ -134,7 +134,7 @@ export function MeetingsProvider({ children }: { children: ReactNode }) {
     () =>
       meetings
         .filter((m) => m.status === "confirmed" || m.status === "pending")
-        .sort((a, b) => (a.selectedSlot?.start ?? a.createdAt).localeCompare(b.selectedSlot?.start ?? String(b.createdAt))),
+        .sort((a, b) => String(a.selectedSlot?.start ?? a.createdAt).localeCompare(String(b.selectedSlot?.start ?? b.createdAt))),
     [meetings],
   );
 

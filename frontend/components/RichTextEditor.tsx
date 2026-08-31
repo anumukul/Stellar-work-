@@ -94,8 +94,8 @@ export default function RichTextEditor({
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
-        // Restrict headings to h1–h3 only
-        heading: { levels: [1, 2, 3] },
+        // Descriptions are embedded below the page h1, so only h2 is exposed.
+        heading: { levels: [2] },
         // Disable unsupported extensions
         code: false,
         codeBlock: false,
@@ -133,9 +133,7 @@ export default function RichTextEditor({
         class: [
           "min-h-[9rem] w-full px-3 py-2 text-sm text-slate-900 outline-none",
           "prose prose-sm max-w-none",
-          "[&_h1]:text-lg [&_h1]:font-semibold [&_h1]:mt-2",
           "[&_h2]:text-base [&_h2]:font-semibold [&_h2]:mt-2",
-          "[&_h3]:text-sm [&_h3]:font-semibold [&_h3]:mt-2",
           "[&_ul]:list-disc [&_ul]:pl-5",
           "[&_ol]:list-decimal [&_ol]:pl-5",
           "[&_a]:text-blue-600 [&_a]:underline",
@@ -196,25 +194,11 @@ export default function RichTextEditor({
       >
         {/* Headings */}
         <ToolbarButton
-          title="Heading 1"
-          active={editor.isActive("heading", { level: 1 })}
-          onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
-        >
-          H1
-        </ToolbarButton>
-        <ToolbarButton
-          title="Heading 2"
+          title="Heading"
           active={editor.isActive("heading", { level: 2 })}
           onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
         >
-          H2
-        </ToolbarButton>
-        <ToolbarButton
-          title="Heading 3"
-          active={editor.isActive("heading", { level: 3 })}
-          onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
-        >
-          H3
+          H
         </ToolbarButton>
 
         <div className="mx-1 h-5 w-px bg-slate-200" aria-hidden="true" />

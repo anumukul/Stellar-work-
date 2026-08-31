@@ -6,6 +6,7 @@ import LoadingState from "./LoadingState";
 import NetworkBadge from "./NetworkBadge";
 import NoResultsState from "./NoResultsState";
 import SectionCard from "./SectionCard";
+import Spinner from "./Spinner";
 import StatusPill from "./StatusPill";
 import type { JobStatus } from "@/lib/types";
 
@@ -104,6 +105,18 @@ export const LoadingStateStory: StoryObj<typeof LoadingState> = {
     text: "Loading jobs...",
   },
   render: (args) => <LoadingState {...args} />,
+};
+
+export const SpinnerSizes: Story = {
+  name: "Spinner",
+  render: () => (
+    <div className="flex items-center gap-6 text-slate-700">
+      <Spinner size="sm" label="Small spinner" />
+      <Spinner size="md" label="Medium spinner" />
+      <Spinner size="lg" label="Large spinner" />
+      <Spinner size={40} color="#0f766e" label="Custom spinner" />
+    </div>
+  ),
 };
 
 export const TooltipAndNetwork: Story = {

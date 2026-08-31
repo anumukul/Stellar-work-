@@ -13,8 +13,14 @@ import {
   connectWallet as stellarConnectWallet,
   getPublicKey,
   getNativeBalance,
+  getWalletNetwork,
+  watchWalletNetworkChanges,
 } from "@/lib/stellar";
+import type { StellarNetwork } from "@/lib/network-config";
+import LegalConsentModal, { hasAcceptedLegal } from "@/components/LegalConsentModal";
 import LegalConsentModal, { hasAcceptedLegal, acceptLegal } from "@/components/LegalConsentModal";
+import ConfirmDialog from "@/components/ConfirmDialog";
+import { CONFIRM_KEYS } from "@/lib/confirm-prefs";
 import { toXlm } from "@/lib/format";
 
 // Storage keys
@@ -23,10 +29,12 @@ const JOB_CACHE_PREFIX = "job-desc:";
 
 interface WalletContextType {
   wallet: string | null;
+  walletNetwork: StellarNetwork | null;
   connectWallet: () => Promise<void>;
   disconnectWallet: () => void;
   switchAccount: (address?: string) => Promise<void>;
   clearCachedData: () => void;
+  refreshWalletNetwork: () => Promise<void>;
   isSwitching: boolean;
 }
 
@@ -34,6 +42,7 @@ type WalletDisplayMode = "short" | "full";
 
 const WalletContext = createContext<WalletContextType>({
   wallet: null,
+  walletNetwork: null,
   // eslint-disable-next-line @typescript-eslint/no-empty-function
   connectWallet: async () => {},
   // eslint-disable-next-line @typescript-eslint/no-empty-function
@@ -42,6 +51,8 @@ const WalletContext = createContext<WalletContextType>({
   switchAccount: async () => {},
   // eslint-disable-next-line @typescript-eslint/no-empty-function
   clearCachedData: () => {},
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
+  refreshWalletNetwork: async () => {},
   isSwitching: false,
 });
 
@@ -72,22 +83,83 @@ function persistLastAccount(address: string | null) {
 
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [wallet, setWallet] = useState<string | null>(null);
+  const [walletNetwork, setWalletNetwork] = useState<StellarNetwork | null>(null);
   const [showLegalModal, setShowLegalModal] = useState(false);
   const [isSwitching, setIsSwitching] = useState(false);
   const connectPromiseRef = useRef<Promise<string> | null>(null);
 
+  const refreshWalletNetwork = useCallback(async () => {
+    const nextNetwork = await getWalletNetwork();
+    setWalletNetwork(nextNetwork);
+  }, []);
+
   // On mount: restore last session via Freighter if still allowed.
   useEffect(() => {
-    getPublicKey().then((key) => {
+    getPublicKey().then(async (key) => {
       if (key) {
         setWallet(key);
         persistLastAccount(key);
+        await refreshWalletNetwork();
       }
     });
-  }, []);
+  }, [refreshWalletNetwork]);
+
+  useEffect(() => {
+    if (!wallet) {
+      return;
+    }
+
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void refreshWalletNetwork();
+    return watchWalletNetworkChanges(({ address, network }) => {
+      if (address) {
+        setWallet(address);
+        persistLastAccount(address);
+      }
+      setWalletNetwork(network);
+    });
+  }, [wallet, refreshWalletNetwork]);
+
+  // Listen for account change events or Freighter extension wallet switches
+  useEffect(() => {
+    let intervalId: NodeJS.Timeout | null = null;
+
+    const checkAccountChange = async () => {
+      try {
+        const currentKey = await getPublicKey();
+        if (currentKey && wallet && currentKey !== wallet) {
+          clearJobCache();
+          setWallet(currentKey);
+          persistLastAccount(currentKey);
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(
+              new CustomEvent("stellarwork:account-changed", {
+                detail: { address: currentKey },
+              }),
+            );
+          }
+        }
+      } catch {
+        // Ignore extension communication errors
+      }
+    };
+
+    const onFocus = () => {
+      void checkAccountChange();
+    };
+    window.addEventListener("focus", onFocus);
+
+    intervalId = setInterval(checkAccountChange, 2000);
+
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [wallet]);
 
   useEffect(() => {
     if (wallet && !hasAcceptedLegal()) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setShowLegalModal(true);
     }
   }, [wallet]);
@@ -107,10 +179,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const key = await connectPromiseRef.current;
     setWallet(key);
     persistLastAccount(key);
-  }, [wallet]);
+    await refreshWalletNetwork();
+  }, [wallet, refreshWalletNetwork]);
 
   const disconnectWallet = useCallback(() => {
     setWallet(null);
+    setWalletNetwork(null);
     persistLastAccount(null);
     // Clear session display preference
     if (typeof window !== "undefined") {
@@ -127,7 +201,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
    * Triggers Freighter's account selection, clears job cache, then updates state.
    * Caller is responsible for showing a confirmation dialog before calling this.
    */
-  const switchAccount = useCallback(async (_address?: string) => {
+  const switchAccount = useCallback(async () => {
     setIsSwitching(true);
     try {
       // Re-request access so Freighter shows the account picker.
@@ -137,14 +211,24 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         setWallet(newKey);
         persistLastAccount(newKey);
       }
+      await refreshWalletNetwork();
     } finally {
       setIsSwitching(false);
     }
-  }, [wallet]);
+  }, [wallet, refreshWalletNetwork]);
 
   return (
     <WalletContext.Provider
-      value={{ wallet, connectWallet, disconnectWallet, switchAccount, clearCachedData, isSwitching }}
+      value={{
+        wallet,
+        walletNetwork,
+        connectWallet,
+        disconnectWallet,
+        switchAccount,
+        clearCachedData,
+        refreshWalletNetwork,
+        isSwitching,
+      }}
     >
       {children}
       {showLegalModal && (
@@ -168,6 +252,7 @@ export function useWallet() {
 export function WalletButton() {
   const { wallet, connectWallet, disconnectWallet } = useWallet();
   const [connecting, setConnecting] = useState(false);
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [displayMode, setDisplayMode] = useState<WalletDisplayMode>("short");
   const [balance, setBalance] = useState<string | null>(null);
   const [fetchingBalance, setFetchingBalance] = useState(false);
@@ -188,12 +273,14 @@ export function WalletButton() {
   useEffect(() => {
     const stored = sessionStorage.getItem("wallet-display-mode");
     if (stored === "short" || stored === "full") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setDisplayMode(stored);
     }
   }, []);
 
   useEffect(() => {
     if (!wallet) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setDisplayMode("short");
       setBalance(null);
     } else {
@@ -248,11 +335,28 @@ export function WalletButton() {
         </button>
         <button
           type="button"
-          onClick={disconnectWallet}
+          onClick={() => setConfirmDisconnect(true)}
           className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
         >
           Disconnect
         </button>
+        {confirmDisconnect && (
+          <ConfirmDialog
+            open={true}
+            title="Disconnect wallet?"
+            description="Disconnecting removes this wallet from the app. Job actions will be hidden until you reconnect."
+            consequences={["Bookmarks and preferences saved in this browser are kept.", "You can reconnect at any time with the Connect Wallet button."]}
+            confirmLabel="Yes, disconnect"
+            cancelLabel="Cancel"
+            variant="danger"
+            suppressKey={CONFIRM_KEYS.disconnectWallet}
+            onConfirm={() => {
+              setConfirmDisconnect(false);
+              disconnectWallet();
+            }}
+            onCancel={() => setConfirmDisconnect(false)}
+          />
+        )}
       </div>
     );
   }

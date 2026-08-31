@@ -58,11 +58,14 @@ Run the following checklist on each browser/device combination listed in the mat
 
 ### Responsive Layout
 
+See the detailed per-route [responsive-breakpoint-checklist.md](./responsive-breakpoint-checklist.md). CI automates the overflow/clipping check and captures full-page screenshots at 375, 768, and 1280 px (`frontend/e2e/overflow-clip.spec.ts`, artifact `e2e-screenshots`).
+
 - [ ] Layout renders correctly at 1920px (desktop)
 - [ ] Layout renders correctly at 1440px (laptop)
 - [ ] Layout renders correctly at 1024px (tablet landscape)
 - [ ] Layout renders correctly at 768px (tablet portrait)
 - [ ] Layout renders correctly at 375px (mobile)
+- [ ] No horizontal overflow at any breakpoint (CI enforces this)
 - [ ] Navigation collapses to hamburger menu below 768px
 - [ ] Tables scroll horizontally on narrow viewports
 - [ ] Modals and dialogs are usable on touch devices

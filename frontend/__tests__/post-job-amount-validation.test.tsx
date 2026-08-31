@@ -3,6 +3,10 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import PostJobPage from "@/app/post-job/page";
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
 const mockPostJob = vi.fn();
 const mockGetDescPayloadMax = vi.fn();
 const mockUseWallet = vi.fn();
@@ -20,15 +24,59 @@ vi.mock("@/lib/ipfs-service", () => ({
   fetchFromIpfs: vi.fn(),
 }));
 
+vi.mock("@/components/RichTextEditor", () => ({
+  default: ({
+    value,
+    onChange,
+    labelId,
+  }: {
+    value: string;
+    onChange: (value: string) => void;
+    labelId?: string;
+  }) => (
+    <textarea
+      aria-labelledby={labelId}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  ),
+  htmlToPlainText: (html: string) => html.replace(/<[^>]*>/g, "").trim(),
+}));
+
 vi.mock("@/lib/wallet-context", () => ({
   useWallet: () => mockUseWallet(),
 }));
 
 vi.mock("@/lib/stellar", () => ({
   getExplorerTxUrl: (hash: string) => `https://example.test/tx/${hash}`,
+  isValidStellarAddress: (address: string) =>
+    /^[GC][A-Z2-7]{55}$/.test(address.trim()),
 }));
 
-const TOKEN_ADDRESS = "GTOKEN000000000000000000000000000000000000000000000000000";
+vi.mock("@/components/RichTextEditor", () => ({
+  __esModule: true,
+  default: ({
+    value,
+    onChange,
+    labelId,
+    required,
+  }: {
+    value: string;
+    onChange: (html: string) => void;
+    labelId?: string;
+    required?: boolean;
+  }) => (
+    <textarea
+      aria-labelledby={labelId}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      required={required}
+    />
+  ),
+  htmlToPlainText: (html: string) => html.replace(/<[^>]+>/g, "").trim(),
+}));
+
+const TOKEN_ADDRESS = "GABC7DEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUV";
 
 function fillRequiredFields({
   amount,
@@ -53,10 +101,15 @@ describe("Post job amount input validation", () => {
     vi.clearAllMocks();
     localStorage.clear();
     mockGetDescPayloadMax.mockResolvedValue(4096);
-    mockPostJob.mockResolvedValue({ hash: "TX_OK", status: "SUCCESS" });
+    mockPostJob.mockResolvedValue({ hash: "TX_OK", status: "SUCCESS", data: 1n });
     mockUseWallet.mockReturnValue({
       wallet: "GWALLET000000000000000000000000000000000000000000000000000",
       connectWallet: vi.fn(),
+    });
+    vi.stubGlobal("crypto", {
+      subtle: {
+        digest: vi.fn().mockResolvedValue(new Uint8Array(32).buffer),
+      },
     });
   });
 

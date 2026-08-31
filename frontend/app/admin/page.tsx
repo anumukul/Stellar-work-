@@ -6,6 +6,7 @@ import {
   withdrawFees,
   adminGetAllJobs,
   adminGetJobCount,
+  getJobStatusCounts,
   setWhitelistMode,
   addToBlacklist,
   removeFromBlacklist,
@@ -18,10 +19,12 @@ import EmptyState from "@/components/EmptyState";
 import ErrorBanner from "@/components/ErrorBanner";
 import StatusPill from "@/components/StatusPill";
 import SectionCard from "@/components/SectionCard";
+import TruncatedAddress from "@/components/TruncatedAddress";
 import { formatDeadline, toXlm } from "@/lib/format";
 import { isConfirmSuppressed, CONFIRM_KEYS } from "@/lib/confirm-prefs";
 import { useWallet } from "@/lib/wallet-context";
-import type { Job, JobStatus } from "@/lib/types";
+import type { Job, JobStatus, JobStatusCounts } from "@/lib/types";
+import { STATUS_TO_COUNTS_KEY } from "@/lib/types";
 import { useEffect, useState, useCallback } from "react";
 import {
   ANNOUNCEMENT_STORAGE_KEY,
@@ -65,6 +68,15 @@ export default function AdminPage() {
   const [fees, setFees] = useState<bigint>(0n);
   const [nativeToken, setNativeToken] = useState<string>("");
   const [jobs, setJobs] = useState<Array<{ id: number; job: Job }>>([]);
+  const [statusCounts, setStatusCounts] = useState<JobStatusCounts>({
+    open: 0,
+    in_progress: 0,
+    submitted_for_review: 0,
+    completed: 0,
+    cancelled: 0,
+    disputed: 0,
+    total: 0,
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [withdrawing, setWithdrawing] = useState(false);
@@ -109,18 +121,48 @@ export default function AdminPage() {
       setFees(BigInt(accrued));
 
       const envAdmin = process.env.NEXT_PUBLIC_ADMIN_ADDRESS;
-      let actualAdmin = walletAddress;
-      if (envAdmin) {
-        setIsAdmin(walletAddress === envAdmin);
-        actualAdmin = envAdmin;
-      } else {
-        setIsAdmin(true);
+      if (!envAdmin || walletAddress !== envAdmin) {
+        setIsAdmin(false);
+        setLoading(false);
+        return;
       }
+      setIsAdmin(true);
+      const actualAdmin = envAdmin;
 
       const count = await adminGetJobCount(actualAdmin);
-      const jobsList = await adminGetAllJobs(actualAdmin, 0, count);
-      const fetched = jobsList.map((job, idx) => ({ id: idx + 1, job }));
-      setJobs(fetched);
+      setJobs([]);
+      setLoading(true);
+      let fetched: { id: number; job: Awaited<ReturnType<typeof adminGetAllJobs>>[number] }[] = [];
+      try {
+        const limit = 50;
+        const list = await adminGetAllJobs(actualAdmin, 0, Math.max(1, count > limit ? limit : count));
+        fetched = list.map((job, idx) => ({ id: idx + 1, job }));
+        setJobs(fetched);
+      } catch {
+        setJobs([]);
+      }
+
+      // Fetch status counts in a single contract call instead of
+      // iterating all jobs client-side.
+      try {
+        const counts = await getJobStatusCounts();
+        setStatusCounts(counts);
+      } catch {
+        // Fallback to client-side computation if contract call fails
+        const fallback = fetched.reduce<Record<string, number>>((acc, { job }) => {
+          acc[job.status] = (acc[job.status] || 0) + 1;
+          return acc;
+        }, {});
+        setStatusCounts({
+          open: fallback["Open"] || 0,
+          in_progress: fallback["InProgress"] || 0,
+          submitted_for_review: fallback["SubmittedForReview"] || 0,
+          completed: fallback["Completed"] || 0,
+          cancelled: fallback["Cancelled"] || 0,
+          disputed: fallback["Disputed"] || 0,
+          total: fetched.length,
+        });
+      }
 
       const whitelistMode = await isWhitelistModeEnabled();
       setIsWhitelistMode(whitelistMode);
@@ -169,6 +211,7 @@ export default function AdminPage() {
       setIsAdmin(null);
       setFees(0n);
       setJobs([]);
+      setStatusCounts({ open: 0, in_progress: 0, submitted_for_review: 0, completed: 0, cancelled: 0, disputed: 0, total: 0 });
       setError(null);
       setSuccessMessage(null);
     }
@@ -256,6 +299,13 @@ export default function AdminPage() {
       else if (action === "removeWhitelist")
         await removeFromWhitelist(actualAdmin, validated);
       setSuccessMessage(`Successfully processed ${action} for ${validated}`);
+      const actualAdmin = process.env.NEXT_PUBLIC_ADMIN_ADDRESS;
+      if (!actualAdmin || actualAdmin !== wallet) throw new Error("Unauthorized");
+      if (action === "addBlacklist") await addToBlacklist(actualAdmin, accessTarget);
+      else if (action === "removeBlacklist") await removeFromBlacklist(actualAdmin, accessTarget);
+      else if (action === "addWhitelist") await addToWhitelist(actualAdmin, accessTarget);
+      else if (action === "removeWhitelist") await removeFromWhitelist(actualAdmin, accessTarget);
+      setSuccessMessage(`Successfully processed ${action} for ${accessTarget}`);
       setAccessTarget("");
     } catch (e) {
       setError(
@@ -272,7 +322,8 @@ export default function AdminPage() {
     setError(null);
     setSuccessMessage(null);
     try {
-      const actualAdmin = process.env.NEXT_PUBLIC_ADMIN_ADDRESS || wallet;
+      const actualAdmin = process.env.NEXT_PUBLIC_ADMIN_ADDRESS;
+      if (!actualAdmin || actualAdmin !== wallet) throw new Error("Unauthorized");
       await setWhitelistMode(actualAdmin, !isWhitelistMode);
       setIsWhitelistMode(!isWhitelistMode);
       setSuccessMessage(
@@ -328,7 +379,7 @@ export default function AdminPage() {
         <div className="rounded-lg border border-red-200 bg-red-50 p-6 text-center">
           <p className="font-medium text-red-800">Unauthorized</p>
           <p className="mt-1 text-sm text-red-600">
-            Your wallet ({wallet.slice(0, 6)}...{wallet.slice(-4)}) is not the
+            Your wallet (<TruncatedAddress address={wallet} />) is not the
             contract admin.
           </p>
         </div>
@@ -336,10 +387,7 @@ export default function AdminPage() {
     );
   }
 
-  const statusCounts = jobs.reduce<Record<string, number>>((acc, { job }) => {
-    acc[job.status] = (acc[job.status] || 0) + 1;
-    return acc;
-  }, {});
+  const statusTotal = statusCounts.total || jobs.length;
 
   return (
     <section className="space-y-6">
@@ -664,21 +712,86 @@ export default function AdminPage() {
         </SectionCard>
       )}
 
+      {/* ── Platform Analytics (#442) ─────────────────────────────────────────── */}
+      <SectionCard title="Platform Analytics">
+        <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="rounded-md border border-slate-200 p-3 text-center">
+            <p className="text-2xl font-bold tabular-nums">{jobs.length}</p>
+            <p className="text-xs text-slate-500">Total Jobs</p>
+          </div>
+          <div className="rounded-md border border-slate-200 p-3 text-center">
+            <p className="text-2xl font-bold tabular-nums">
+              {jobs.filter(({ job }) => job.status === "Completed").length}
+            </p>
+            <p className="text-xs text-slate-500">Completed</p>
+          </div>
+          <div className="rounded-md border border-slate-200 p-3 text-center">
+            <p className="text-2xl font-bold tabular-nums">
+              {jobs.filter(({ job }) => job.status === "Disputed").length}
+            </p>
+            <p className="text-xs text-slate-500">Disputed</p>
+          </div>
+          <div className="rounded-md border border-slate-200 p-3 text-center">
+            <p className="text-2xl font-bold tabular-nums">
+              {jobs.length > 0
+                ? `${Math.round(
+                    (jobs.filter(({ job }) => job.status === "Completed").length /
+                      jobs.length) *
+                      100,
+                  )}%`
+                : "—"}
+            </p>
+            <p className="text-xs text-slate-500">Completion Rate</p>
+          </div>
+        </div>
+        {jobs.length > 0 && (
+          <div className="mt-4 rounded-md border border-slate-200 p-3">
+            <p className="text-xs font-medium text-slate-500">Total Platform Volume</p>
+            <p className="mt-1 text-2xl font-bold tabular-nums">
+              {(
+                jobs.reduce((sum, { job }) => sum + Number(job.amount), 0) /
+                10_000_000
+              ).toFixed(2)}{" "}
+              <span className="text-base font-normal text-slate-500">XLM</span>
+            </p>
+            <p className="mt-1 text-xs text-slate-400">
+              Across all {jobs.length} posted job{jobs.length !== 1 ? "s" : ""}
+            </p>
+          </div>
+        )}
+        <p className="mt-3 text-xs text-slate-400">
+          Full per-client breakdowns and historical trends are tracked in{" "}
+          <a
+            href="https://github.com/anumukul/Stellar-work-/issues/442"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-slate-600"
+          >
+            issue #442
+          </a>
+          .
+        </p>
+      </SectionCard>
+
       <SectionCard title="Job Overview">
         <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-6">
           <div className="rounded-md border border-slate-200 p-3 text-center">
-            <p className="text-2xl font-bold">{jobs.length}</p>
+            <p className="text-2xl font-bold">{statusTotal}</p>
             <p className="text-xs text-slate-500">Total</p>
           </div>
-          {(Object.keys(STATUS_LABELS) as JobStatus[]).map((status) => (
+          {(Object.keys(STATUS_LABELS) as JobStatus[]).map((status) => {
+            const key = STATUS_TO_COUNTS_KEY[status];
+            const count = statusCounts[key] ?? 0;
+            return (
             <div
               key={status}
               className="rounded-md border border-slate-200 p-3 text-center"
             >
-              <p className="text-2xl font-bold">{statusCounts[status] || 0}</p>
+              <p className="text-2xl font-bold">{count}</p>
               <p className="text-xs text-slate-500">{STATUS_LABELS[status]}</p>
             </div>
-          ))}
+          );
+          })}
         </div>
       </SectionCard>
 
@@ -726,12 +839,17 @@ export default function AdminPage() {
                       <StatusPill status={job.status} />
                     </td>
                     <td className="py-2 pr-4 font-mono text-xs">
-                      {job.client.slice(0, 8)}...
+                      <TruncatedAddress address={job.client} />
                     </td>
                     <td className="py-2 pr-4 font-mono text-xs">
                       {job.freelancer
                         ? `${job.freelancer.slice(0, 8)}...`
                         : "-"}
+                      {job.freelancer ? (
+                        <TruncatedAddress address={job.freelancer} />
+                      ) : (
+                        "-"
+                      )}
                     </td>
                     <td className="py-2 pr-4 text-right">
                       <span className="inline-flex min-w-0 items-baseline justify-end gap-1">

@@ -48,6 +48,22 @@ vi.mock("@/lib/notifications-context", () => ({
   getEventLabel: (event: string) => event,
 }));
 
+vi.mock("@/lib/meetings-context", () => ({
+  useMeetings: () => ({
+    meetings: [],
+    proposeMeeting: vi.fn(),
+    confirmSlot: vi.fn(),
+    cancelMeeting: vi.fn(),
+    completeMeeting: vi.fn(),
+    rescheduleProposal: vi.fn(),
+    confirmMeeting: vi.fn(),
+    getMeetingsForJob: () => [],
+    getUpcomingMeetings: () => [],
+    getPastMeetings: () => [],
+  }),
+  MeetingsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
 function makeJob(overrides: Partial<Job> = {}): Job {
   return {
     client: "GWALLET",
@@ -59,6 +75,7 @@ function makeJob(overrides: Partial<Job> = {}): Job {
     deadline: "0",
     token: "GTOKEN",
     revision_count: 0,
+    submitted_at: "0",
     ...overrides,
   };
 }
@@ -91,7 +108,7 @@ describe("Cancel job confirmation", () => {
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
     expect(mockCancelJob).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Keep job" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
     expect(mockCancelJob).not.toHaveBeenCalled();
   });
@@ -103,12 +120,16 @@ describe("Cancel job confirmation", () => {
     fireEvent.click(screen.getByText("Cancel Job"));
 
     const dialog = screen.getByRole("alertdialog");
-    expect(dialog).toHaveAttribute("aria-labelledby", "cancel-job-title");
+    expect(dialog).toHaveAttribute("aria-labelledby", "confirm-dialog-title");
 
-    fireEvent.click(screen.getByRole("button", { name: "Confirm cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Yes, cancel job" }));
     await waitFor(() => expect(mockCancelJob).toHaveBeenCalledWith("GWALLET", "1"));
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent("Job cancelled and funds refunded."),
+      expect(
+        screen
+          .getAllByRole("status")
+          .some((el) => el.textContent?.includes("Job cancelled and funds refunded.")),
+      ).toBe(true),
     );
   });
 });

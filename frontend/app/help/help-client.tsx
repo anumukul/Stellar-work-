@@ -75,7 +75,7 @@ export default function HelpClient() {
             Your 12-word recovery phrase is the master key to your entire Stellar account. If you lose it, you lose access to your funds.
           </p>
           <div className="rounded-lg bg-amber-50 p-4 border border-amber-200 dark:bg-amber-950/30 dark:border-amber-900/50">
-            <h4 className="font-semibold text-amber-900 dark:text-amber-400 text-sm">Backup Checklist:</h4>
+            <h3 className="font-semibold text-amber-900 dark:text-amber-400 text-sm">Backup Checklist:</h3>
             <ul className="list-disc pl-5 mt-2 space-y-1 text-xs text-amber-800 dark:text-amber-300">
               <li>Write it down on paper with a pen. Do not take a screenshot or save it digitally.</li>
               <li>Store it in a physical safe, lockbox, or a secure location protected from fire and water.</li>
@@ -249,9 +249,9 @@ export default function HelpClient() {
 
       {/* Full Guide Link Callout */}
       <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-6 text-center dark:border-blue-900/30 dark:bg-blue-950/10">
-        <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+        <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
           Need the full technical guide?
-        </h3>
+        </h2>
         <p className="mt-2 text-sm text-slate-600 dark:text-slate-400 max-w-xl mx-auto">
           For detailed information on hardware wallets (like Ledger), advanced key management practices, and technical recovery paths, read the official repository guide.
         </p>

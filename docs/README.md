@@ -29,6 +29,7 @@ Index of project documentation. Start with the [root README](../README.md) for s
 |----------|-------------|
 | [DEPLOYMENT.md](./DEPLOYMENT.md) | Full production deployment guide: contract, frontend, DNS, SSL, and post-deploy verification |
 | [DEPLOY.md](./DEPLOY.md) | Vercel deployment setup, preview deployments, secrets, and environment variables |
+| [FRONTEND_DEPLOYMENT.md](./FRONTEND_DEPLOYMENT.md) | Frontend hosting guide: Vercel, Netlify, Docker, and production env configuration |
 | [environments.md](./environments.md) | Environment variables and target networks |
 | [testnet-deployment-guide.md](./testnet-deployment-guide.md) | Deploy escrow to Stellar testnet |
 
@@ -37,6 +38,9 @@ Index of project documentation. Start with the [root README](../README.md) for s
 | Document | Description |
 |----------|-------------|
 | [OPS_RUNBOOK.md](./OPS_RUNBOOK.md) | Operations runbook: monitoring, backups, incident response, contract upgrades, and maintenance |
+| [incident-runbook-template.md](./incident-runbook-template.md) | Incident logging and postmortem template for production incidents |
+| [responsive-breakpoint-checklist.md](./responsive-breakpoint-checklist.md) | Per-route responsive QA checklist tied to the automated overflow/screenshot CI checks |
+| [MONITORING.md](./MONITORING.md) | Prometheus/Grafana dashboards, metrics reference, and alert rules |
 | [PRODUCTION_CHECKLIST.md](./PRODUCTION_CHECKLIST.md) | Pre-launch checklist covering code, infrastructure, contract deploy, E2E verification, and sign-off |
 | [testing-matrix.md](./testing-matrix.md) | Unit, integration, and E2E test coverage and commands |
 | [TESTING_MATRIX.md](./TESTING_MATRIX.md) | Cross-browser testing matrix: supported browsers, devices, and manual checklists |

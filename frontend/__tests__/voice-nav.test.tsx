@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { act, render, screen, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 const mockPush = vi.fn();
@@ -104,13 +104,17 @@ describe("VoiceNav", () => {
     render(<VoiceNav />);
     fireEvent.click(screen.getByRole("button", { name: /start voice navigation/i }));
 
-    mockRecognition.onresult?.({
-      resultIndex: 0,
-      results: {
-        length: 1,
-        item: () => ({ isFinal: true, 0: { transcript: "post job" } }),
-        0: { isFinal: true, 0: { transcript: "post job" } },
-      },
+    // State updates fire inside the raw SpeechRecognition callback, which is
+    // outside React's event system — wrap in act() so the render flushes.
+    act(() => {
+      mockRecognition.onresult?.({
+        resultIndex: 0,
+        results: {
+          length: 1,
+          item: () => ({ isFinal: true, 0: { transcript: "post job" } }),
+          0: { isFinal: true, 0: { transcript: "post job" } },
+        },
+      });
     });
 
     expect(screen.getByRole("status")).toBeInTheDocument();
@@ -120,7 +124,9 @@ describe("VoiceNav", () => {
     render(<VoiceNav />);
     fireEvent.click(screen.getByRole("button", { name: /start voice navigation/i }));
 
-    mockRecognition.onerror?.({ error: "not-allowed" });
+    act(() => {
+      mockRecognition.onerror?.({ error: "not-allowed" });
+    });
 
     expect(screen.getByRole("status")).toHaveTextContent("Microphone access denied");
   });

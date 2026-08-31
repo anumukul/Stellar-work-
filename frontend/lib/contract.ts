@@ -4,7 +4,7 @@ import { callContract, nativeToScVal, xdr } from "@/lib/stellar";
 import { requireContractId } from "@/lib/config";
 import { getContractIdForNetwork, getPersistedNetwork } from "@/lib/network-config";
 export { requireContractId };
-import type { Job, Milestone } from "@/lib/types";
+import type { Job, Milestone, JobStatusCounts } from "@/lib/types";
 
 function getActiveContractId(): string {
   if (typeof window !== "undefined") {
@@ -29,6 +29,15 @@ export function hexToBytes(hex: string): Uint8Array {
   return bytes;
 }
 
+/** Convert a title string to a 64-byte hex representation for BytesN<64>. */
+export function titleToBytesN64(title: string): Uint8Array {
+  const encoder = new TextEncoder();
+  const encoded = encoder.encode(title);
+  const padded = new Uint8Array(64);
+  padded.set(encoded.slice(0, 64));
+  return padded;
+}
+
 export async function postJob(
   client: string,
   amount: string,
@@ -36,6 +45,8 @@ export async function postJob(
   descriptionPayloadLen: number,
   deadline: string,
   tokenAddress: string,
+  title: string,
+  category: string,
 ) {
   return callContract(getActiveContractId(), "post_job", [
     nativeToScVal(client, { type: "address" }),
@@ -44,6 +55,8 @@ export async function postJob(
     nativeToScVal(descriptionPayloadLen, { type: "u32" }),
     nativeToScVal(deadline, { type: "u64" }),
     nativeToScVal(tokenAddress, { type: "address" }),
+    nativeToScVal(titleToBytesN64(title), { type: "bytes" }),
+    nativeToScVal(category, { type: "symbol" }),
   ]);
 }
 
@@ -127,9 +140,26 @@ export async function getSwapQuote(
 }
 
 export async function cancelJob(client: string, jobId: string) {
-  return callContract(getActiveContractId(), "cancel_job", [
+  const result = await callContract(getActiveContractId(), "cancel_job", [
     nativeToScVal(client, { type: "address" }),
     nativeToScVal(jobId, { type: "u64" }),
+  ]);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("stellarwork:job-cancelled", { detail: { jobId, status: "Cancelled" } }),
+    );
+    window.dispatchEvent(
+      new CustomEvent("stellarwork:job-status-changed", { detail: { jobId, status: "Cancelled" } }),
+    );
+  }
+  return result;
+}
+
+export async function topUpEscrow(client: string, jobId: string, additionalAmount: string) {
+  return callContract(getActiveContractId(), "top_up_escrow", [
+    nativeToScVal(client, { type: "address" }),
+    nativeToScVal(jobId, { type: "u64" }),
+    nativeToScVal(additionalAmount, { type: "i128" }),
   ]);
 }
 
@@ -255,10 +285,19 @@ export async function getJobCount(): Promise<number> {
 }
 
 export async function freelancerCancelJob(freelancer: string, jobId: string) {
-  return callContract(getActiveContractId(), "freelancer_cancel_job", [
+  const result = await callContract(getActiveContractId(), "freelancer_cancel_job", [
     nativeToScVal(freelancer, { type: "address" }),
     nativeToScVal(jobId, { type: "u64" }),
   ]);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("stellarwork:job-cancelled", { detail: { jobId, status: "Cancelled" } }),
+    );
+    window.dispatchEvent(
+      new CustomEvent("stellarwork:job-status-changed", { detail: { jobId, status: "Cancelled" } }),
+    );
+  }
+  return result;
 }
 
 export async function storeDescriptionCid(caller: string, descHashHex: string, cid: string) {
@@ -301,6 +340,8 @@ export async function createJobWithMilestones(
   descriptionPayloadLen: number,
   deadline: string,
   tokenAddress: string,
+  title: string,
+  category: string,
 ) {
   // Encode milestones as a Vec<MilestoneInput> — each element is a struct map.
   const encodedMilestones = xdr.ScVal.scvVec(
@@ -325,6 +366,8 @@ export async function createJobWithMilestones(
     nativeToScVal(descriptionPayloadLen, { type: "u32" }),
     nativeToScVal(deadline, { type: "u64" }),
     nativeToScVal(tokenAddress, { type: "address" }),
+    nativeToScVal(titleToBytesN64(title), { type: "bytes" }),
+    nativeToScVal(category, { type: "symbol" }),
   ]);
 }
 
@@ -341,6 +384,22 @@ export async function approveMilestone(
     nativeToScVal(client, { type: "address" }),
     nativeToScVal(jobId, { type: "u64" }),
     nativeToScVal(milestoneId, { type: "u32" }),
+  ]);
+}
+
+/**
+ * Complete a milestone by index, releasing payment to the freelancer
+ * with the platform fee deducted. Only the client may call this.
+ */
+export async function completeMilestone(
+  client: string,
+  jobId: string,
+  milestoneIndex: number,
+) {
+  return callContract(getActiveContractId(), "complete_milestone", [
+    nativeToScVal(client, { type: "address" }),
+    nativeToScVal(jobId, { type: "u64" }),
+    nativeToScVal(milestoneIndex, { type: "u32" }),
   ]);
 }
 
@@ -499,6 +558,24 @@ export async function isTrustedForwarder(forwarder: string): Promise<boolean> {
   return Boolean(response.data ?? false);
 }
 
+export async function getJobStatusCounts(): Promise<JobStatusCounts> {
+  const response = await callContract(
+    getActiveContractId(),
+    "get_job_status_counts",
+    [],
+    { readOnly: true },
+  );
+  return (response.data as JobStatusCounts) ?? {
+    open: 0,
+    in_progress: 0,
+    submitted_for_review: 0,
+    completed: 0,
+    cancelled: 0,
+    disputed: 0,
+    total: 0,
+  };
+}
+
 export async function relayCancelJob(relayer: string, client: string, jobId: string) {
   return callContract(getActiveContractId(), "relay_cancel_job", [
     nativeToScVal(relayer, { type: "address" }),
@@ -507,3 +584,95 @@ export async function relayCancelJob(relayer: string, client: string, jobId: str
   ]);
 }
 
+// ─── SC-106: Job Versioning ───────────────────────────────────────────────────
+
+/**
+ * Returns the schema version number for a given job.
+ * All jobs created from this schema version onwards will have version = 1.
+ */
+export async function getJobVersion(jobId: string): Promise<number> {
+  const response = await callContract(
+    getActiveContractId(),
+    "get_job_version",
+    [nativeToScVal(jobId, { type: "u64" })],
+    { readOnly: true },
+  );
+  return Number(response.data ?? 1);
+}
+
+/**
+ * Migrate a job's schema version to a target version.
+ * Only the job's client or the platform admin may call this.
+ * The targetVersion must be >= the current version (no downgrades allowed).
+ * Returns the new version number.
+ */
+export async function migrateJobVersion(
+  caller: string,
+  jobId: string,
+  targetVersion: number,
+): Promise<number> {
+  const response = await callContract(getActiveContractId(), "migrate_job_version", [
+    nativeToScVal(caller, { type: "address" }),
+    nativeToScVal(jobId, { type: "u64" }),
+    nativeToScVal(targetVersion, { type: "u32" }),
+  ]);
+  return Number(response.data ?? targetVersion);
+}
+
+// ─── Job View Counter ────────────────────────────────────────────────────────
+
+export async function recordJobView(viewer: string, jobId: string) {
+  return callContract(getActiveContractId(), "record_job_view", [
+    nativeToScVal(viewer, { type: "address" }),
+    nativeToScVal(jobId, { type: "u64" }),
+  ]);
+}
+
+export async function getJobViews(jobId: string): Promise<number> {
+  const response = await callContract(
+    getActiveContractId(),
+    "get_job_views",
+    [nativeToScVal(jobId, { type: "u64" })],
+    { readOnly: true },
+  );
+  return Number(response.data ?? 0);
+}
+
+// ─── Completion Certificates ─────────────────────────────────────────────────
+
+export interface CompletionCertificate {
+  job_id: number;
+  client: string;
+  freelancer: string;
+  amount: string;
+  completed_at: string;
+  metadata_uri: string;
+}
+
+export async function getCertificates(
+  freelancer: string,
+  start: number,
+  limit: number,
+): Promise<CompletionCertificate[]> {
+  const response = await callContract(
+    getActiveContractId(),
+    "get_certificates",
+    [
+      nativeToScVal(freelancer, { type: "address" }),
+      nativeToScVal(start, { type: "u64" }),
+      nativeToScVal(limit, { type: "u64" }),
+    ],
+    { readOnly: true },
+  );
+  return (response.data as CompletionCertificate[]) ?? [];
+}
+
+export async function getCertificateCount(freelancer: string): Promise<number> {
+  const response = await callContract(
+    getActiveContractId(),
+    "get_certificate_count",
+    [nativeToScVal(freelancer, { type: "address" })],
+    { readOnly: true },
+  );
+  return Number(response.data ?? 0);
+}

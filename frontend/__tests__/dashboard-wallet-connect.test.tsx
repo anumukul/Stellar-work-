@@ -190,6 +190,7 @@ describe("Dashboard wallet connect flow", () => {
       deadline: "0",
       token: "GTOKEN",
       revision_count: 0,
+      submitted_at: "0",
     });
 
     mockUseWallet.mockReturnValue({

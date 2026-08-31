@@ -1,0 +1,105 @@
+name: Dependency Security Audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/package.json'
+      - 'frontend/package-lock.json'
+      - 'contracts/**/Cargo.toml'
+      - 'contracts/**/Cargo.lock'
+      - 'deny.toml'
+      - '.github/npm-audit-allowlist.json'
+      - '.github/scripts/check-npm-audit.mjs'
+      - '.github/workflows/dependency-audit.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'frontend/package.json'
+      - 'frontend/package-lock.json'
+      - 'contracts/**/Cargo.toml'
+      - 'contracts/**/Cargo.lock'
+      - 'deny.toml'
+      - '.github/npm-audit-allowlist.json'
+      - '.github/scripts/check-npm-audit.mjs'
+      - '.github/workflows/dependency-audit.yml'
+  schedule:
+    - cron: '0 3 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  npm:
+    name: npm audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Gate production dependencies (no high or critical)
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Audit full dependency tree
+        id: npm_audit
+        run: npm audit --json > "$RUNNER_TEMP/npm-audit.json" || true
+
+      - name: Enforce advisory allowlist
+        run: |
+          node "$GITHUB_WORKSPACE/.github/scripts/check-npm-audit.mjs" \
+            --input "$RUNNER_TEMP/npm-audit.json" \
+            --allowlist "$GITHUB_WORKSPACE/.github/npm-audit-allowlist.json"
+
+  cargo:
+    name: cargo deny (${{ matrix.crate }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        crate:
+          - escrow
+          - retainer
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            contracts/${{ matrix.crate }}/target/
+          key: ${{ runner.os }}-cargo-deny-${{ format('contracts/{0}/Cargo.lock', matrix.crate) }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-deny-
+
+      - name: Check Rust advisories (RUSTSEC)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: contracts/${{ matrix.crate }}/Cargo.toml
+          command-arguments: advisories

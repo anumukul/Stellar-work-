@@ -16,10 +16,9 @@ yarn-error.log*
 pnpm-debug.log*
 
 # Env
-.env
-.env.local
 .env.*.local
 
 # Cursor and editor
 .cursor/
 .vscode/
+config.bat
