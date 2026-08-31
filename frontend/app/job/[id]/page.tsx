@@ -3,6 +3,7 @@
 import CancelJobConfirmModal from "@/components/CancelJobConfirmModal";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import AvailabilityIndicator from "@/components/AvailabilityIndicator";
+import ContractRetryBanner from "@/components/ContractRetryBanner";
 import DeadlineCountdown from "@/components/DeadlineCountdown";
 import InfoTooltip from "@/components/InfoTooltip";
 import { useToast } from "@/components/ToastProvider";
@@ -44,7 +45,7 @@ import {
   type FiatCurrency,
   type XlmFiatRateCache,
 } from "@/lib/format";
-import { getExplorerTxUrl, parseContractError, getNativeBalance } from "@/lib/stellar";
+import { getExplorerTxUrl, parseContractError, getNativeBalance, retryQueuedWrites } from "@/lib/stellar";
 import { isConfirmSuppressed, CONFIRM_KEYS } from "@/lib/confirm-prefs";
 import type { Job } from "@/lib/types";
 import { useWallet } from "@/lib/wallet-context";
@@ -155,6 +156,14 @@ function JobDetailPageContent() {
   const [showTopUpForm, setShowTopUpForm] = useState(false);
   const [topUpAmountXlm, setTopUpAmountXlm] = useState("");
   const [topUpStroops, setTopUpStroops] = useState<string | null>(null);
+  const lastActionRef = useRef<{
+    action: () => Promise<{ hash?: string }>;
+    successMessage: string;
+    notification?: {
+      event: import("@/lib/types").NotificationEvent;
+      message: string;
+    };
+  } | null>(null);
 
   const numericId = Number(id);
   const isIdValid =
@@ -333,6 +342,7 @@ function JobDetailPageContent() {
     }
 
     setLoading(true);
+    lastActionRef.current = { action, successMessage, notification };
 
     try {
       const result = await action();
@@ -670,6 +680,25 @@ function JobDetailPageContent() {
           </span>
         )}
       </div>
+
+      <ContractRetryBanner
+        onManualRetry={() => {
+          const last = lastActionRef.current;
+          if (last) {
+            void handleAction(last.action, last.successMessage, last.notification);
+          }
+        }}
+        onRetryQueue={async () => {
+          const { succeeded, failed } = await retryQueuedWrites();
+          if (succeeded > 0) {
+            showSuccess(`Retried ${succeeded} queued write${succeeded === 1 ? "" : "s"}.`);
+            await load();
+          }
+          if (failed > 0) {
+            showError(`${failed} queued write${failed === 1 ? "" : "s"} still failed.`);
+          }
+        }}
+      />
 
       {error && (
         <p

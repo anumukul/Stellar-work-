@@ -3,8 +3,9 @@
 import { getDescPayloadMax, postJob, storeDescriptionCid } from "@/lib/contract";
 import { uploadToIpfs } from "@/lib/ipfs-service";
 import ErrorBanner from "@/components/ErrorBanner";
+import ContractRetryBanner from "@/components/ContractRetryBanner";
 import dynamic from "next/dynamic";
-import { getExplorerTxUrl, isValidStellarAddress, parseContractError, getNativeBalance } from "@/lib/stellar";
+import { getExplorerTxUrl, isValidStellarAddress, parseContractError, getNativeBalance, retryQueuedWrites } from "@/lib/stellar";
 import { useWallet } from "@/lib/wallet-context";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState } from "react";
@@ -355,6 +356,18 @@ export default function PostJobPage() {
   return (
     <section className="mx-auto max-w-2xl space-y-6">
       <h1 className="text-2xl font-semibold">Post Job</h1>
+
+      <ContractRetryBanner
+        onRetryQueue={async () => {
+          const { succeeded, failed } = await retryQueuedWrites();
+          if (succeeded > 0) {
+            setSuccess(`Retried ${succeeded} queued write${succeeded === 1 ? "" : "s"}.`);
+          }
+          if (failed > 0) {
+            setError(`${failed} queued write${failed === 1 ? "" : "s"} still failed.`);
+          }
+        }}
+      />
 
       {hasDraft && draftSavedAt && (
         <div className="flex items-center justify-between rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
