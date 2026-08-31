@@ -3,8 +3,9 @@
 import { getDescPayloadMax, postJob, storeDescriptionCid } from "@/lib/contract";
 import { uploadToIpfs } from "@/lib/ipfs-service";
 import ErrorBanner from "@/components/ErrorBanner";
+import ContractRetryBanner from "@/components/ContractRetryBanner";
 import dynamic from "next/dynamic";
-import { getExplorerTxUrl, isValidStellarAddress, parseContractError, getNativeBalance } from "@/lib/stellar";
+import { getExplorerTxUrl, isValidStellarAddress, parseContractError, getNativeBalance, retryQueuedWrites } from "@/lib/stellar";
 import { useWallet } from "@/lib/wallet-context";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState } from "react";
@@ -356,6 +357,18 @@ export default function PostJobPage() {
     <section className="mx-auto max-w-2xl space-y-6">
       <h1 className="text-2xl font-semibold">Post Job</h1>
 
+      <ContractRetryBanner
+        onRetryQueue={async () => {
+          const { succeeded, failed } = await retryQueuedWrites();
+          if (succeeded > 0) {
+            setSuccess(`Retried ${succeeded} queued write${succeeded === 1 ? "" : "s"}.`);
+          }
+          if (failed > 0) {
+            setError(`${failed} queued write${failed === 1 ? "" : "s"} still failed.`);
+          }
+        }}
+      />
+
       {hasDraft && draftSavedAt && (
         <div className="flex items-center justify-between rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
           <span>
@@ -436,15 +449,17 @@ export default function PostJobPage() {
               nextFieldErrors.tokenAddress = "Token address is required.";
             } else {
               const tokenError = validateTokenAddress(tokenAddress);
-              if (tokenError) nextFieldErrors.tokenAddress = tokenError;
-            } else if (
-              !StrKey.isValidContract(tokenAddress.trim()) &&
-              !StrKey.isValidEd25519PublicKey(tokenAddress.trim())
-            ) {
-              nextFieldErrors.tokenAddress = "Invalid Stellar address or contract ID.";
-            } else if (!isValidStellarAddress(tokenAddress)) {
-              nextFieldErrors.tokenAddress =
-                "Enter a valid Stellar address (G... or C..., 56 characters).";
+              if (tokenError) {
+                nextFieldErrors.tokenAddress = tokenError;
+              } else if (
+                !StrKey.isValidContract(tokenAddress.trim()) &&
+                !StrKey.isValidEd25519PublicKey(tokenAddress.trim())
+              ) {
+                nextFieldErrors.tokenAddress = "Invalid Stellar address or contract ID.";
+              } else if (!isValidStellarAddress(tokenAddress)) {
+                nextFieldErrors.tokenAddress =
+                  "Enter a valid Stellar address (G... or C..., 56 characters).";
+              }
             }
             if (!title.trim()) {
               nextFieldErrors.title = "Job title is required.";
@@ -474,28 +489,10 @@ export default function PostJobPage() {
                   descriptionPayloadLen,
                   deadlineUnix,
                   tokenAddress.trim(),
+                  title.trim(),
+                  category,
                 ),
               "Could not post the job to the contract. Please check your wallet and try again.",
-            );
-            if (cid && !cid.startsWith("fallback:")) {
-              try {
-                await withContractErrorHandling(
-                  () => storeDescriptionCid(wallet, hashHex, cid),
-                  "Job posted, but the description CID could not be saved on-chain.",
-                );
-              } catch (cidError) {
-                setWarning(getErrorMessage(cidError));
-              }
-            }
-            const result = await postJob(
-              wallet,
-              amountStroops!,
-              hashHex,
-              descriptionPayloadLen,
-              deadlineUnix,
-              tokenAddress.trim(),
-              title.trim(),
-              category,
             );
             if (result.status !== "SUCCESS") {
               throw new Error(result.errorResult ?? "Job transaction failed.");
@@ -511,9 +508,12 @@ export default function PostJobPage() {
             const jobId = String(rawJobId);
             if (cid && !cid.startsWith("fallback:")) {
               try {
-                await storeDescriptionCid(wallet, hashHex, cid);
-              } catch {
-                // CID storage is best-effort.
+                await withContractErrorHandling(
+                  () => storeDescriptionCid(wallet, hashHex, cid),
+                  "Job posted, but the description CID could not be saved on-chain.",
+                );
+              } catch (cidError) {
+                setWarning(getErrorMessage(cidError));
               }
             }
             if (result.hash) {
@@ -541,15 +541,6 @@ export default function PostJobPage() {
               router.push(`/job/${encodeURIComponent(jobId)}`);
             }, REDIRECT_DELAY_MS);
           } catch (e) {
-            setError(
-              formatContractError(
-                e,
-                "Failed to post job. Please review the form and try again.",
-              ),
-            );
-          } finally {
-          } catch (e) {
-            // Fetch current balance to include in insufficient-balance messages (#620)
             let balance: string | undefined;
             if (wallet) {
               try {
