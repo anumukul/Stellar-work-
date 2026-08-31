@@ -3,6 +3,13 @@ import { describe, expect, it } from "vitest";
 import RichTextRenderer from "@/components/RichTextRenderer";
 
 describe("RichTextRenderer images", () => {
+  it("normalizes embedded headings so descriptions cannot add page h1s", () => {
+    render(<RichTextRenderer html="<h1>Overview</h1><h3>Details</h3>" />);
+
+    expect(screen.queryByRole("heading", { level: 1 })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 2 })).toHaveLength(2);
+  });
+
   it("renders sanitized rich text images with lazy loading attributes", async () => {
     const { container } = render(
       <RichTextRenderer

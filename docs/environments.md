@@ -15,7 +15,7 @@ Create `frontend/.env.local` from `frontend/.env.example` for local development.
 | `NEXT_PUBLIC_ADMIN_ADDRESS` | No | Empty string | `frontend/app/navigation.tsx`, `frontend/app/admin/page.tsx` | Admin Stellar address. When set, the Admin link is shown only to that connected wallet. |
 
 ## Local Development
-# Environments Reference
+## Environment Overview
 
 This page summarizes the environment variables and target environments for StellarWork.
 

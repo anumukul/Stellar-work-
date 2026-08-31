@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Spinner from "@/components/Spinner";
 import { useModalFocusTrap } from "@/lib/modal";
 import type { GalleryImage } from "./ImageGallery";
 
@@ -169,7 +170,7 @@ export default function Lightbox({
         >
           {showLoading && (
             <div className="absolute inset-0 flex items-center justify-center">
-              <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/30 border-t-white" role="status" aria-label="Loading image" />
+              <Spinner size="lg" color="rgba(255,255,255,0.9)" label="Loading image" />
             </div>
           )}
           {current.type === "video" ? (

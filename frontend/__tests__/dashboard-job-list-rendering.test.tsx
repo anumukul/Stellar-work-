@@ -73,6 +73,7 @@ describe("Dashboard job list rendering", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       })
       .mockResolvedValueOnce({
         client: "GTESTWALLET",
@@ -85,6 +86,7 @@ describe("Dashboard job list rendering", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       });
 
     render(<DashboardPage />);

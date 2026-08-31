@@ -3,6 +3,10 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import PostJobPage from "@/app/post-job/page";
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
 const mockPostJob = vi.fn();
 const mockGetDescPayloadMax = vi.fn();
 
@@ -28,6 +32,8 @@ vi.mock("@/lib/wallet-context", () => ({
 
 vi.mock("@/lib/stellar", () => ({
   getExplorerTxUrl: (hash: string) => `https://example.test/tx/${hash}`,
+  isValidStellarAddress: (address: string) =>
+    /^[GC][A-Z2-7]{55}$/.test(address.trim()),
 }));
 
 describe("Post-job form: draft saving (FE-71)", () => {

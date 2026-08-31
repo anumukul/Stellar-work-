@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { JOB_CATEGORIES } from "@/lib/job-categories";
 
 interface AccordionItem {
   title: string;
@@ -75,7 +76,7 @@ export default function HelpClient() {
             Your 12-word recovery phrase is the master key to your entire Stellar account. If you lose it, you lose access to your funds.
           </p>
           <div className="rounded-lg bg-amber-50 p-4 border border-amber-200 dark:bg-amber-950/30 dark:border-amber-900/50">
-            <h4 className="font-semibold text-amber-900 dark:text-amber-400 text-sm">Backup Checklist:</h4>
+            <h3 className="font-semibold text-amber-900 dark:text-amber-400 text-sm">Backup Checklist:</h3>
             <ul className="list-disc pl-5 mt-2 space-y-1 text-xs text-amber-800 dark:text-amber-300">
               <li>Write it down on paper with a pen. Do not take a screenshot or save it digitally.</li>
               <li>Store it in a physical safe, lockbox, or a secure location protected from fire and water.</li>
@@ -132,6 +133,27 @@ export default function HelpClient() {
             </li>
             <li>
               <strong>No Online Inputs:</strong> Never enter your recovery phrase or secret key into any website, form, or popup other than the official Freighter extension itself.
+            </li>
+          </ul>
+        </div>
+      ),
+    },
+    {
+      title: "Installing StellarWork App (PWA)",
+      content: (
+        <div className="space-y-3 text-slate-600 dark:text-slate-400">
+          <p>
+            You can install StellarWork as a Progressive Web App (PWA) for a faster, native-like experience on your device.
+          </p>
+          <ul className="list-disc pl-5 space-y-2">
+            <li>
+              <strong>Chrome / Edge (Desktop & Android):</strong> Click the install icon in the right side of the address bar, or click &quot;Install App&quot; in the banner that appears at the bottom of the screen.
+            </li>
+            <li>
+              <strong>Safari (iOS):</strong> Tap the <strong>Share</strong> button at the bottom of the screen, scroll down, and tap <strong>Add to Home Screen</strong>.
+            </li>
+            <li>
+              <strong>Standalone App:</strong> Once installed, you can launch StellarWork directly from your home screen or application menu without opening a browser.
             </li>
           </ul>
         </div>
@@ -247,11 +269,45 @@ export default function HelpClient() {
         </div>
       </div>
 
+      {/* Job Category Icon Legend */}
+      <div className="space-y-4">
+        <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100">
+          Job Category Icons
+        </h2>
+        <p className="text-sm text-slate-600 dark:text-slate-400">
+          Each job on StellarWork is tagged with a category. The colored icon badge on each job card helps you quickly identify the type of work at a glance.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+          {JOB_CATEGORIES.map((cat) => {
+            const Icon = cat.icon;
+            return (
+              <div
+                key={cat.id}
+                className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950"
+              >
+                <div className={`flex items-center justify-center rounded-md p-2 ${cat.colorClass}`}>
+                  <Icon className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{cat.label}</p>
+                  {cat.tags.length > 0 && (
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      {cat.tags.slice(0, 3).join(", ")}
+                      {cat.tags.length > 3 && "…"}
+                    </p>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Full Guide Link Callout */}
       <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-6 text-center dark:border-blue-900/30 dark:bg-blue-950/10">
-        <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+        <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
           Need the full technical guide?
-        </h3>
+        </h2>
         <p className="mt-2 text-sm text-slate-600 dark:text-slate-400 max-w-xl mx-auto">
           For detailed information on hardware wallets (like Ledger), advanced key management practices, and technical recovery paths, read the official repository guide.
         </p>

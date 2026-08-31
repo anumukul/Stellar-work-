@@ -5,18 +5,27 @@ import { useModalFocusTrap } from "@/lib/modal";
 import { useWallet } from "@/lib/wallet-context";
 import { useToast } from "@/components/ToastProvider";
 import ConfirmDialog from "@/components/ConfirmDialog";
+import ContractRetryBanner from "@/components/ContractRetryBanner";
 import EmptyState from "@/components/EmptyState";
 import NoResultsState from "@/components/NoResultsState";
 import SectionCard from "@/components/SectionCard";
+import Spinner from "@/components/Spinner";
 import { toXlm } from "@/lib/format";
 import { isConfirmSuppressed, CONFIRM_KEYS } from "@/lib/confirm-prefs";
 import { raiseDispute as contractRaiseDispute, resolveDispute as contractResolveDispute } from "@/lib/contract";
+import { retryQueuedWrites } from "@/lib/stellar";
 import {
   loadDisputesPageData,
   type Dispute,
   type DisputeStatus,
   type EligibleJob,
 } from "@/lib/disputes-loader";
+import {
+  sanitizePlainText,
+  MAX_DISPUTE_REASON_LEN,
+  MAX_DISPUTE_EVIDENCE_LEN,
+  MAX_RESOLUTION_NOTE_LEN,
+} from "@/lib/sanitize";
 
 type Role = "client" | "freelancer" | "admin";
 
@@ -50,14 +59,10 @@ function StatusBadge({ status }: { status: DisputeStatus }) {
   );
 }
 
-function Spinner() {
+function DisputesLoading() {
   return (
-    <div
-      role="status"
-      aria-label="Loading disputes"
-      className="flex items-center justify-center py-16"
-    >
-      <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-200 border-t-slate-700" />
+    <div className="flex items-center justify-center py-16">
+      <Spinner size="lg" color="#334155" label="Loading disputes" />
     </div>
   );
 }
@@ -88,11 +93,13 @@ function RaiseDisputeModal({
 
   async function handleSubmit() {
     if (loading) return;
-    if (!reason.trim()) { setError("Please describe the dispute reason."); return; }
+    const cleanReason = sanitizePlainText(reason, MAX_DISPUTE_REASON_LEN);
+    const cleanEvidence = sanitizePlainText(evidence, MAX_DISPUTE_EVIDENCE_LEN);
+    if (!cleanReason) { setError("Please describe the dispute reason."); return; }
     setError("");
     setLoading(true);
     try {
-      await onSubmit(jobId, reason, evidence);
+      await onSubmit(jobId, cleanReason, cleanEvidence);
       onClose();
     } catch {
       setError("Failed to raise dispute. Please try again.");
@@ -194,7 +201,7 @@ function RaiseDisputeModal({
               disabled={loading}
               className="flex items-center gap-2 rounded-lg bg-slate-900 px-5 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60 transition-colors"
             >
-              {loading && <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />}
+              {loading && <Spinner size={14} color="currentColor" label="Submitting dispute" />}
               Submit Dispute
             </button>
           </div>
@@ -231,11 +238,12 @@ function ResolveModal({
 
   async function handleResolve() {
     if (loading) return;
-    if (!note.trim()) { setError("Resolution note is required."); return; }
+    const cleanNote = sanitizePlainText(note, MAX_RESOLUTION_NOTE_LEN);
+    if (!cleanNote) { setError("Resolution note is required."); return; }
     setError("");
     setLoading(true);
     try {
-      await onResolve(dispute.id, clientShare, note);
+      await onResolve(dispute.id, clientShare, cleanNote);
       onClose();
     } catch {
       setError("Failed to resolve dispute. Please try again.");
@@ -358,7 +366,7 @@ function ResolveModal({
               disabled={loading}
               className="flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60 transition-colors"
             >
-              {loading && <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />}
+              {loading && <Spinner size={14} color="currentColor" label="Resolving dispute" />}
               Confirm Resolution
             </button>
           </div>
@@ -393,7 +401,7 @@ function DisputeCard({
             <span className="text-xs text-slate-400">·</span>
             <span className="text-xs text-slate-500">Raised by {dispute.raisedBy}</span>
           </div>
-          <h3 className="text-sm font-semibold text-slate-900 truncate">{dispute.jobTitle}</h3>
+          <h2 className="text-sm font-semibold text-slate-900 truncate">{dispute.jobTitle}</h2>
           <div className="flex items-center gap-3 mt-1.5">
             <span className="text-xs text-slate-500">{dispute.client} <span className="text-slate-300">vs</span> {dispute.freelancer}</span>
           </div>
@@ -533,6 +541,8 @@ export default function DisputesPage() {
     try {
       await contractRaiseDispute(wallet, jobId);
       const job = eligibleJobs.find(j => j.id === jobId)!;
+      const cleanReason = sanitizePlainText(reason, MAX_DISPUTE_REASON_LEN);
+      const cleanEvidence = sanitizePlainText(evidence, MAX_DISPUTE_EVIDENCE_LEN);
       const newDispute: Dispute = {
         id: `D-${String(disputes.length + 1).padStart(3, "0")}`,
         jobId,
@@ -543,8 +553,8 @@ export default function DisputesPage() {
         raisedBy: role as "client" | "freelancer",
         raisedAt: new Date().toISOString(),
         status: "Active",
-        reason,
-        evidence,
+        reason: cleanReason,
+        evidence: cleanEvidence,
       };
       setDisputes(prev => [newDispute, ...prev]);
       showSuccess("Dispute raised. Funds held in escrow.");
@@ -558,6 +568,7 @@ export default function DisputesPage() {
       const jobId = disputes.find(d => d.id === id)?.jobId;
       if (!jobId) return;
       await contractResolveDispute(jobId, clientShare);
+      const cleanNote = sanitizePlainText(note, MAX_RESOLUTION_NOTE_LEN);
       setDisputes(prev =>
         prev.map(d =>
           d.id === id
@@ -568,7 +579,7 @@ export default function DisputesPage() {
                   resolvedAt: new Date().toISOString(),
                   clientShare,
                   freelancerShare: 100 - clientShare,
-                  note,
+                  note: cleanNote,
                 },
               }
             : d
@@ -650,6 +661,18 @@ export default function DisputesPage() {
           </div>
         </div>
 
+        <ContractRetryBanner
+          onRetryQueue={async () => {
+            const { succeeded, failed } = await retryQueuedWrites();
+            if (succeeded > 0) {
+              showSuccess(`Retried ${succeeded} queued write${succeeded === 1 ? "" : "s"}.`);
+            }
+            if (failed > 0) {
+              showError(`${failed} queued write${failed === 1 ? "" : "s"} still failed.`);
+            }
+          }}
+        />
+
         {/* Filter tabs */}
         <div className="mb-5 flex gap-1 rounded-xl border border-slate-200 bg-white p-1 w-fit">
           {(["all", "active", "resolved"] as const).map(f => (
@@ -677,7 +700,7 @@ export default function DisputesPage() {
 
         {/* Content */}
         {loading ? (
-          <Spinner />
+          <DisputesLoading />
         ) : error ? (
           <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             {error}{" "}

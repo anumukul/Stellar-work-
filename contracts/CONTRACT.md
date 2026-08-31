@@ -162,7 +162,9 @@ Values are estimates from local `soroban contract invoke` dry-runs against a sta
 
 4. **Fee tier lookups** iterate through all tiers on every fee calculation. When no tiers are configured, the function returns immediately using the default fee — this is already optimized.
 
-5. **Access control checks** (`require_active_access`) perform 2-3 storage reads per invocation (blacklist + whitelist mode + whitelist entry). These are called on every authenticated contract invocation and could be cached per-transaction.
+5. **Access control checks** (`require_active_access`) perform up to 2-3 storage reads per invocation (blacklist + whitelist mode + whitelist entry). PERF-01 short-circuits whitelist persistent reads when whitelist mode is off, and mutation helpers reuse a single job load for status checks.
+
+6. **PERF-01 batch reads.** Prefer `get_jobs_batch` for list views and `get_job_requiring_status` in write paths so job data and status are not fetched separately.
 
 ## Benchmarking
 
@@ -173,3 +175,14 @@ Run the benchmark script:
 ```
 
 This builds the contract in release mode and simulates each function, reporting storage bytes read/written and estimated CPU cost.
+
+## SC-82 Job Archive
+
+Admin-triggered archive moves old completed/cancelled jobs out of active storage:
+
+- `ARCHIVE_THRESHOLD` — 180 days (ledger timestamp seconds)
+- `archive_old_jobs(admin, cutoff_timestamp) -> u64` — archives eligible jobs, emits `job_archived`
+- `get_archived_job(admin, job_id) -> Option<Job>` — archived record (same schema as active jobs)
+- `get_archive_count(admin) -> u64` — monitoring helper
+
+Active listing APIs only read `DataKey::Job`; archived entries live under `DataKey::ArchivedJob` and are excluded automatically.

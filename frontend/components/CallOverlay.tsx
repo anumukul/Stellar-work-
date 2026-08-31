@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef } from "react";
+import TruncatedAddress from "@/components/TruncatedAddress";
 import { useModalFocusTrap } from "@/lib/modal";
 import { getDailyUrl, saveCallRecord, updateCallRecord, type CallType } from "@/lib/calling";
 
@@ -66,7 +67,8 @@ export default function CallOverlay({
         {/* Controls bar */}
         <div className="absolute -top-12 left-0 right-0 flex items-center justify-between z-10">
           <span className="text-sm text-white/70">
-            {callType === "video" ? "Video call" : "Voice call"} with {peerAddress.slice(0, 8)}...
+            {callType === "video" ? "Video call" : "Voice call"} with{" "}
+            <TruncatedAddress address={peerAddress} className="font-mono text-sm text-white/70" />
           </span>
           <div className="flex gap-2">
             <button

@@ -15,9 +15,8 @@
 export type DeploymentEnvironment = "production" | "preview" | "development" | "local";
 
 /**
- * Returns the current deployment environment.
- *
- * - "production"  — deployed from the main branch on Vercel
+
+
  * - "preview"     — PR or branch preview deployment on Vercel
  * - "development" — running locally via `vercel dev`
  * - "local"       — running locally via `npm run dev`

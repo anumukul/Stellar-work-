@@ -42,35 +42,60 @@ The setup script:
 
 ## Local Setup
 
-### Using Docker (Recommended)
+### Using Docker Compose (Recommended) ⭐
 
-You can spin up the full development environment with a single command (requires Docker installed):
+Spin up the complete development environment with one command:
 
 ```bash
-cp frontend/.env.example frontend/.env.local
-docker compose up -d
+docker compose up
 ```
 
 This starts:
-- **frontend** — Next.js dev server at [http://localhost:3000](http://localhost:3000) with hot-reload
+- **stellar** — Local Stellar testnet with Soroban RPC at [http://localhost:8000](http://localhost:8000)
+- **frontend** — Next.js dev server at [http://localhost:3000](http://localhost:3000) with hot-reload (files are live-synced)
 - **contract-builder** — Rust + Soroban CLI environment for building/testing contracts
-- **stellar-quickstart** — Local Stellar dev network with Soroban RPC at [http://localhost:8000](http://localhost:8000)
 
-File changes in `frontend/` will trigger hot-reload inside the container automatically.
+**First run?** The Stellar testnet takes 20–30 seconds to initialize. Once ready, the frontend automatically connects to it via the Docker internal network.
 
-To run contract tests inside the container:
+#### Common Docker Compose Tasks
 
 ```bash
+# View service status
+docker compose ps
+
+# View logs (all services or specific service)
+docker compose logs
+docker compose logs stellar
+docker compose logs frontend
+
+# Build and deploy contracts
+docker compose exec contract-builder bash -c "cd contracts/escrow && soroban contract build"
+
+# Run contract tests
 docker compose exec contract-builder cargo test --manifest-path contracts/escrow/Cargo.toml
+
+# Run frontend tests
+docker compose exec frontend npm run test
+
+# Stop services (preserve state)
+docker compose down
+
+# Stop and remove volumes (fresh start next time)
+docker compose down -v
 ```
 
-Common commands are also available via Makefile:
+For detailed setup/troubleshooting/advanced configuration, see [Docker Compose Setup Guide](docs/DOCKER_COMPOSE_SETUP.md).
+
+#### Quick Makefile Commands
+
+Common Docker Compose operations are available via Makefile:
 
 ```bash
-make up      # Start all services
-make down    # Stop all services
-make test-contract  # Run contract unit tests
-make test-frontend  # Run frontend unit tests
+make up      # docker compose up
+make down    # docker compose down
+make logs    # docker compose logs -f
+make test-contract   # docker compose exec contract-builder cargo test
+make test-frontend   # docker compose exec frontend npm run test
 ```
 
 ### Manual Setup
@@ -250,8 +275,9 @@ The frontend is deployed to Vercel automatically:
 - **Production** — every push to `main` that changes `frontend/**` triggers a production deployment.
 - **Preview** — every pull request gets a unique preview URL, posted as a comment by the GitHub Actions bot.
 
-See [docs/DEPLOY.md](docs/DEPLOY.md) for the full setup guide (creating the Vercel project, required GitHub secrets, environment variable configuration, and troubleshooting).
+See [docs/DEPLOY.md](docs/DEPLOY.md) for the Vercel CI/CD setup guide (creating the Vercel project, required GitHub secrets, environment variable configuration, and troubleshooting).
 
+For hosting the frontend on Vercel, Netlify, or Docker (plus production env configuration), see [docs/FRONTEND_DEPLOYMENT.md](docs/FRONTEND_DEPLOYMENT.md).
 For a command-only deployment reference, see `docs/testnet-deployment-guide.md`.
 For environment configuration, see `docs/environments.md`.
 For API reference, see `docs/CONTRACT.md`.

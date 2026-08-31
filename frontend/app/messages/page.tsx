@@ -2,8 +2,10 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import TruncatedAddress from "@/components/TruncatedAddress";
 import { useWallet } from "@/lib/wallet-context";
 import { useMessaging } from "@/lib/messaging-context";
+import PullToRefresh from "@/components/PullToRefresh";
 import {
   loadConversations,
   deleteConversation,
@@ -11,6 +13,7 @@ import {
   shortAddr,
   type ConversationMeta,
 } from "@/lib/messaging";
+import { sanitizePlainText } from "@/lib/sanitize";
 
 // ─── Empty state ──────────────────────────────────────────────────────────────
 
@@ -76,7 +79,11 @@ function ConversationRow({
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline justify-between gap-2">
             <span className={`truncate text-sm font-mono ${convo.unreadCount > 0 ? "font-semibold text-slate-900" : "font-medium text-slate-700"}`}>
-              {shortAddr(convo.peerAddress)}
+              <TruncatedAddress
+                address={convo.peerAddress}
+                className={`font-mono text-sm ${convo.unreadCount > 0 ? "font-semibold text-slate-900" : "font-medium text-slate-700"}`}
+                focusable={false}
+              />
             </span>
             <span className="shrink-0 text-xs text-slate-400">
               {formatMessageTime(convo.lastMessageAt)}
@@ -157,6 +164,11 @@ export default function MessagesPage() {
     load();
   }, [load]);
 
+  const handleRefresh = useCallback(() => {
+    load();
+    refreshUnread();
+  }, [load, refreshUnread]);
+
   function handleDelete(peerAddress: string) {
     if (!wallet) return;
     if (!confirm(`Delete conversation with ${shortAddr(peerAddress)}? This cannot be undone.`)) return;
@@ -165,9 +177,10 @@ export default function MessagesPage() {
     refreshUnread();
   }
 
-  const filtered = search.trim()
+  const cleanSearch = sanitizePlainText(search, 100);
+  const filtered = cleanSearch
     ? conversations.filter((c) =>
-        c.peerAddress.toLowerCase().includes(search.trim().toLowerCase()),
+        c.peerAddress.toLowerCase().includes(cleanSearch.toLowerCase()),
       )
     : conversations;
 
@@ -196,6 +209,8 @@ export default function MessagesPage() {
 
   return (
     <section className="mx-auto max-w-2xl space-y-5">
+      <PullToRefresh onRefresh={handleRefresh} label="Refresh conversations" />
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -238,7 +253,7 @@ export default function MessagesPage() {
           No conversations match &ldquo;{search}&rdquo;
         </p>
       ) : (
-        <ul className="space-y-2" aria-label="Conversations">
+        <ul className="space-y-2" aria-label="Conversations" aria-live="polite">
           {filtered.map((convo) => (
             <ConversationRow
               key={convo.peerAddress}

@@ -136,7 +136,7 @@ export const Navigation = memo(function Navigation() {
   };
 
   const adminAddress = process.env.NEXT_PUBLIC_ADMIN_ADDRESS;
-  const showAdmin = wallet && (adminAddress ? wallet === adminAddress : true);
+  const showAdmin = wallet && adminAddress && wallet === adminAddress;
 
   const links: Array<{ href: string; label: string; shortcut?: string }> = [
     { href: "/", label: "Jobs" },
@@ -189,7 +189,6 @@ export const Navigation = memo(function Navigation() {
                     ? "font-semibold text-slate-900 dark:text-slate-100"
                     : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
                 }
-                aria-label={shortcut ? `${label} (shortcut: ${shortcut})` : label}
                 aria-current={isActive(href) ? "page" : undefined}
               >
                 <span className="relative inline-flex items-center gap-1">
@@ -204,7 +203,10 @@ export const Navigation = memo(function Navigation() {
                   )}
                 </span>
                 {shortcut && (
-                  <kbd className="ml-1 rounded border border-slate-200 bg-slate-50 px-1 py-0.5 text-[10px] font-medium text-slate-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-500">
+                  <kbd
+                    aria-hidden="true"
+                    className="ml-1 rounded border border-slate-200 bg-slate-50 px-1 py-0.5 text-[10px] font-medium text-slate-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-500"
+                  >
                     {shortcut}
                   </kbd>
                 )}

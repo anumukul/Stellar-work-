@@ -3,6 +3,10 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import PostJobPage from "@/app/post-job/page";
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
 const mockPostJob = vi.fn();
 const mockGetDescPayloadMax = vi.fn();
 
@@ -19,6 +23,25 @@ vi.mock("@/lib/ipfs-service", () => ({
   fetchFromIpfs: vi.fn(),
 }));
 
+vi.mock("@/components/RichTextEditor", () => ({
+  default: ({
+    value,
+    onChange,
+    labelId,
+  }: {
+    value: string;
+    onChange: (value: string) => void;
+    labelId?: string;
+  }) => (
+    <textarea
+      aria-labelledby={labelId}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  ),
+  htmlToPlainText: (html: string) => html.replace(/<[^>]*>/g, "").trim(),
+}));
+
 vi.mock("@/lib/wallet-context", () => ({
   useWallet: () => ({
     wallet: "GCLIENT",
@@ -28,7 +51,34 @@ vi.mock("@/lib/wallet-context", () => ({
 
 vi.mock("@/lib/stellar", () => ({
   getExplorerTxUrl: (hash: string) => `https://stellar.expert/tx/${hash}`,
+  isValidStellarAddress: (address: string) =>
+    /^[GC][A-Z2-7]{55}$/.test(address.trim()),
 }));
+
+vi.mock("@/components/RichTextEditor", () => ({
+  __esModule: true,
+  default: ({
+    value,
+    onChange,
+    labelId,
+    required,
+  }: {
+    value: string;
+    onChange: (html: string) => void;
+    labelId?: string;
+    required?: boolean;
+  }) => (
+    <textarea
+      aria-labelledby={labelId}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      required={required}
+    />
+  ),
+  htmlToPlainText: (html: string) => html.replace(/<[^>]+>/g, "").trim(),
+}));
+
+const VALID_TOKEN = "GABC7DEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUV";
 
 describe("Post job form validation", () => {
   beforeEach(() => {
@@ -62,7 +112,7 @@ describe("Post job form validation", () => {
       target: { value: "Build escrow UI" },
     });
     fireEvent.change(screen.getByRole("textbox", { name: /Token Address/ }), {
-      target: { value: "GNATIVE" },
+      target: { value: VALID_TOKEN },
     });
     fireEvent.submit(screen.getByRole("button", { name: "Post Job" }).closest("form")!);
 
@@ -72,8 +122,41 @@ describe("Post job form validation", () => {
     expect(mockPostJob).not.toHaveBeenCalled();
   });
 
+  it("shows inline feedback for an invalid token address format", async () => {
+    render(<PostJobPage />);
+
+    const tokenInput = screen.getByLabelText(/Token Address/);
+    fireEvent.change(tokenInput, { target: { value: "not-a-stellar-address" } });
+    fireEvent.blur(tokenInput);
+
+    await waitFor(() => {
+      expect(tokenInput).toHaveAttribute("aria-invalid", "true");
+    });
+    expect(document.getElementById("post-job-token-address-error")).toHaveTextContent(
+      /valid Stellar address/i,
+    );
+  });
+
+  it("blocks submit when token address format is invalid", async () => {
+    render(<PostJobPage />);
+
+    fireEvent.change(screen.getByRole("spinbutton", { name: /Amount/ }), {
+      target: { value: "1.25" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: /Job Description/ }), {
+      target: { value: "Build escrow UI" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: /Token Address/ }), {
+      target: { value: "GNATIVE" },
+    });
+    fireEvent.submit(screen.getByRole("button", { name: "Post Job" }).closest("form")!);
+
+    expect(await screen.findAllByText(/Enter a valid Stellar address/)).toHaveLength(2);
+    expect(mockPostJob).not.toHaveBeenCalled();
+  });
+
   it("calls create handler with expected payload for a valid submission", async () => {
-    mockPostJob.mockResolvedValue(7);
+    mockPostJob.mockResolvedValue({ status: "SUCCESS", hash: "TX_OK", data: 7n });
     render(<PostJobPage />);
 
     fireEvent.change(screen.getByRole("spinbutton", { name: /Amount/ }), {
@@ -83,7 +166,7 @@ describe("Post job form validation", () => {
       target: { value: "  Build escrow UI  " },
     });
     fireEvent.change(screen.getByRole("textbox", { name: /Token Address/ }), {
-      target: { value: "  GNATIVE  " },
+      target: { value: `  ${VALID_TOKEN}  ` },
     });
     fireEvent.submit(screen.getByRole("button", { name: "Post Job" }).closest("form")!);
 
@@ -94,7 +177,30 @@ describe("Post job form validation", () => {
       "0000000000000000000000000000000000000000000000000000000000000000",
       15,
       "0",
-      "GNATIVE",
+      VALID_TOKEN,
     );
+  });
+
+  it("shows a friendly error when the contract transaction is rejected", async () => {
+    mockPostJob.mockRejectedValue(new Error("sendTransaction failed: tx_bad_auth"));
+    render(<PostJobPage />);
+
+    fireEvent.change(screen.getByRole("spinbutton", { name: /Amount/ }), {
+      target: { value: "1.25" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: /Job Description/ }), {
+      target: { value: "Build escrow UI" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: /Token Address/ }), {
+      target: { value: "GNATIVE" },
+    });
+    fireEvent.submit(screen.getByRole("button", { name: "Post Job" }).closest("form")!);
+
+    expect(
+      await screen.findByText(
+        "Stellar rejected the transaction. Check your wallet network, balance, and token address, then try again.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Job submitted to contract.")).not.toBeInTheDocument();
   });
 });

@@ -3,9 +3,11 @@
 import { getDescPayloadMax, postJob, storeDescriptionCid } from "@/lib/contract";
 import { uploadToIpfs } from "@/lib/ipfs-service";
 import ErrorBanner from "@/components/ErrorBanner";
-import RichTextEditor, { htmlToPlainText } from "@/components/RichTextEditor";
-import { getExplorerTxUrl } from "@/lib/stellar";
+import ContractRetryBanner from "@/components/ContractRetryBanner";
+import dynamic from "next/dynamic";
+import { getExplorerTxUrl, isValidStellarAddress, parseContractError, getNativeBalance, retryQueuedWrites } from "@/lib/stellar";
 import { useWallet } from "@/lib/wallet-context";
+import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState } from "react";
 import {
   getRateLimitStatus,
@@ -13,15 +15,100 @@ import {
   formatCooldown,
   type RateLimitStatus,
 } from "@/lib/rate-limiter";
+import {
+  validateAmount,
+  validateAmountMin,
+  validateDeadline,
+  validateTokenAddress,
+  MIN_JOB_AMOUNT_STROOPS,
+} from "@/lib/sanitize";
+import { JobCategorySelect } from "@/components/JobCategorySelect";
+import { StrKey } from "@stellar/stellar-sdk";
 
 const MIN_JOB_AMOUNT_XLM = 0.5;
 const DRAFT_STORAGE_KEY_PREFIX = "stellarwork:post-job-draft:";
+const REDIRECT_DELAY_MS = 1500;
 
 interface DraftData {
   amount: string;
   description: string;
   deadline: string;
   tokenAddress: string;
+  savedAt: number;
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  return "";
+}
+
+function formatContractError(error: unknown, fallback: string): string {
+  const message = getErrorMessage(error);
+  const normalized = message.toLowerCase();
+
+  if (
+    normalized.startsWith("stellar rejected the transaction") ||
+    normalized.startsWith("transaction was cancelled") ||
+    normalized.startsWith("freighter is locked") ||
+    normalized.startsWith("the transaction was submitted") ||
+    normalized.startsWith("connect freighter before")
+  ) {
+    return message;
+  }
+
+  if (normalized.includes("user rejected") || normalized.includes("cancelled")) {
+    return "Transaction was cancelled in Freighter.";
+  }
+
+  if (normalized.includes("wallet locked")) {
+    return "Freighter is locked. Unlock your wallet and try again.";
+  }
+
+  if (
+    normalized.includes("sendtransaction") ||
+    normalized.includes("contract invocation failed") ||
+    normalized.includes("transaction failed") ||
+    normalized.includes("tx_bad") ||
+    normalized.includes("op_")
+  ) {
+    return "Stellar rejected the transaction. Check your wallet network, balance, and token address, then try again.";
+  }
+
+  if (normalized.includes("timed out")) {
+    return "The transaction was submitted but confirmation timed out. Check your wallet activity or the Stellar explorer before retrying.";
+  }
+
+  if (normalized.includes("connect freighter")) {
+    return "Connect Freighter before posting a job.";
+  }
+
+  return fallback;
+}
+
+async function withContractErrorHandling<T>(
+  call: () => Promise<T>,
+  fallback: string,
+): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    throw new Error(formatContractError(error, fallback));
+  }
+}
+const RichTextEditor = dynamic(
+  () => import("@/components/RichTextEditor"),
+  { ssr: false, loading: () => <p className="text-sm text-slate-500">Loading editor…</p> },
+);
+
+
+interface DraftData {
+  amount: string;
+  description: string;
+  deadline: string;
+  tokenAddress: string;
+  title: string;
+  category: string;
   savedAt: number;
 }
 
@@ -55,25 +142,23 @@ function clearDraft(walletAddress: string | null): void {
   }
 }
 
-async function sha256Hex(input: string): Promise<string> {
-  const bytes = new TextEncoder().encode(input);
-  const hash = await crypto.subtle.digest("SHA-256", bytes);
-  return Array.from(new Uint8Array(hash))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
+import { sha256Hex, htmlToPlainText } from "@/lib/crypto";
 
 export default function PostJobPage() {
+  const router = useRouter();
   const { wallet, connectWallet } = useWallet();
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
   const [deadline, setDeadline] = useState("");
+  const [title, setTitle] = useState("");
+  const [category, setCategory] = useState("development");
   const descriptionLabelId = useId();
   const [tokenAddress, setTokenAddress] = useState(
     process.env.NEXT_PUBLIC_NATIVE_TOKEN ?? "",
   );
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [lastAnnouncedSuccess, setLastAnnouncedSuccess] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -83,27 +168,35 @@ export default function PostJobPage() {
     description?: string;
     deadline?: string;
     tokenAddress?: string;
+    title?: string;
   }>({});
   const [rateLimit, setRateLimit] = useState<RateLimitStatus>({
     remaining: 5,
     cooldownEndsAt: null,
     isLimited: false,
   });
+  const [tags, setTags] = useState<string[]>([]);
+  const [advancedOpen, setAdvancedOpen] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return sessionStorage.getItem("stellarwork:advanced-open") === "true";
+  });
 
   // Draft saving state
   const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
   const [hasDraft, setHasDraft] = useState(false);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const redirectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevWalletRef = useRef<string | null>(null);
 
+  useEffect(() => {
+    return () => {
+      if (redirectTimerRef.current) clearTimeout(redirectTimerRef.current);
+    };
+  }, []);
+
   const parseAmountToStroops = (value: string): string | null => {
-    const trimmed = value.trim();
-    const amountPattern = /^\d+(\.\d+)?$/;
-    if (!amountPattern.test(trimmed)) return null;
-    const [, fractional = ""] = trimmed.split(".");
-    if (fractional.length > 7) return null;
-    const [whole = "0"] = trimmed.split(".");
-    return `${whole}${fractional.padEnd(7, "0")}`;
+    const result = validateAmount(value);
+    return result.stroops;
   };
 
   // Restore draft on mount and on wallet change
@@ -117,6 +210,8 @@ export default function PostJobPage() {
       setTokenAddress(
         draft.tokenAddress || process.env.NEXT_PUBLIC_NATIVE_TOKEN || "",
       );
+      setTitle(draft.title || "");
+      setCategory(draft.category || "development");
       setDraftSavedAt(draft.savedAt);
       setHasDraft(true);
     } else {
@@ -135,6 +230,8 @@ export default function PostJobPage() {
     setDescription("");
     setDeadline("");
     setTokenAddress(process.env.NEXT_PUBLIC_NATIVE_TOKEN ?? "");
+    setTitle("");
+    setCategory("development");
     setDraftSavedAt(null);
     setHasDraft(false);
     const draft = loadDraft(wallet);
@@ -146,6 +243,8 @@ export default function PostJobPage() {
       setTokenAddress(
         draft.tokenAddress || process.env.NEXT_PUBLIC_NATIVE_TOKEN || "",
       );
+      setTitle(draft.title || "");
+      setCategory(draft.category || "development");
       setDraftSavedAt(draft.savedAt);
       setHasDraft(true);
     }
@@ -153,8 +252,10 @@ export default function PostJobPage() {
 
   useEffect(() => {
     if (!wallet) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setError(null);
       setSuccess(null);
+      setWarning(null);
       setTxHash(null);
     }
   }, [wallet]);
@@ -166,12 +267,18 @@ export default function PostJobPage() {
           setMaxDescPayloadBytes(maxBytes);
         }
       })
-      .catch(() => {
-        // Keep default when contract read is unavailable.
+      .catch((err) => {
+        setWarning(
+          formatContractError(
+            err,
+            "Could not verify the contract description limit. The default limit will be used.",
+          ),
+        );
       });
   }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setRateLimit(getRateLimitStatus());
     const interval = setInterval(() => {
       setRateLimit(getRateLimitStatus());
@@ -195,6 +302,8 @@ export default function PostJobPage() {
         description,
         deadline,
         tokenAddress,
+        title,
+        category,
         savedAt: now,
       });
       setDraftSavedAt(now);
@@ -206,7 +315,7 @@ export default function PostJobPage() {
         clearTimeout(debounceTimerRef.current);
       }
     };
-  }, [amount, description, deadline, tokenAddress, wallet]);
+  }, [amount, description, deadline, tokenAddress, title, category, wallet]);
 
   // Warn on navigation away when unsaved changes exist
   useEffect(() => {
@@ -228,6 +337,8 @@ export default function PostJobPage() {
     setDescription("");
     setDeadline("");
     setTokenAddress(process.env.NEXT_PUBLIC_NATIVE_TOKEN ?? "");
+    setTitle("");
+    setCategory("development");
     setDraftSavedAt(null);
     setHasDraft(false);
     setFieldErrors({});
@@ -236,6 +347,18 @@ export default function PostJobPage() {
   return (
     <section className="mx-auto max-w-2xl space-y-6">
       <h1 className="text-2xl font-semibold">Post Job</h1>
+
+      <ContractRetryBanner
+        onRetryQueue={async () => {
+          const { succeeded, failed } = await retryQueuedWrites();
+          if (succeeded > 0) {
+            setSuccess(`Retried ${succeeded} queued write${succeeded === 1 ? "" : "s"}.`);
+          }
+          if (failed > 0) {
+            setError(`${failed} queued write${failed === 1 ? "" : "s"} still failed.`);
+          }
+        }}
+      />
 
       {hasDraft && draftSavedAt && (
         <div className="flex items-center justify-between rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
@@ -263,6 +386,7 @@ export default function PostJobPage() {
           if (submitting) return;
           setError(null);
           setSuccess(null);
+          setWarning(null);
           setTxHash(null);
           setFieldErrors({});
 
@@ -282,15 +406,15 @@ export default function PostJobPage() {
               description?: string;
               deadline?: string;
               tokenAddress?: string;
+              title?: string;
             } = {};
-            const amountStroops = parseAmountToStroops(amount);
-            if (!amountStroops || BigInt(amountStroops) <= 0n) {
-              nextFieldErrors.amount = "Enter a valid amount with up to 7 decimal places.";
-            } else {
-              const amountXlm = parseFloat(amount);
-              if (amountXlm < MIN_JOB_AMOUNT_XLM) {
-                nextFieldErrors.amount = `Minimum job amount is ${MIN_JOB_AMOUNT_XLM} XLM to prevent dust spam.`;
-              }
+            const amountResult = validateAmount(amount);
+            const amountStroops = amountResult.stroops;
+            if (amountResult.error) {
+              nextFieldErrors.amount = amountResult.error;
+            } else if (amountStroops) {
+              const minError = validateAmountMin(amountStroops, MIN_JOB_AMOUNT_STROOPS, `${MIN_JOB_AMOUNT_XLM} XLM`);
+              if (minError) nextFieldErrors.amount = minError;
             }
 
             const limitStatus = getRateLimitStatus();
@@ -309,20 +433,29 @@ export default function PostJobPage() {
               nextFieldErrors.description = `Description must be at most ${maxDescPayloadBytes} bytes (currently ${descriptionBytes}).`;
             }
             if (deadline) {
-              const today = new Date();
-              const todayIsoDate = new Date(
-                today.getFullYear(),
-                today.getMonth(),
-                today.getDate(),
-              )
-                .toISOString()
-                .slice(0, 10);
-              if (deadline < todayIsoDate) {
-                nextFieldErrors.deadline = "Deadline cannot be in the past.";
-              }
+              const deadlineError = validateDeadline(deadline);
+              if (deadlineError) nextFieldErrors.deadline = deadlineError;
             }
             if (!tokenAddress.trim()) {
               nextFieldErrors.tokenAddress = "Token address is required.";
+            } else {
+              const tokenError = validateTokenAddress(tokenAddress);
+              if (tokenError) {
+                nextFieldErrors.tokenAddress = tokenError;
+              } else if (
+                !StrKey.isValidContract(tokenAddress.trim()) &&
+                !StrKey.isValidEd25519PublicKey(tokenAddress.trim())
+              ) {
+                nextFieldErrors.tokenAddress = "Invalid Stellar address or contract ID.";
+              } else if (!isValidStellarAddress(tokenAddress)) {
+                nextFieldErrors.tokenAddress =
+                  "Enter a valid Stellar address (G... or C..., 56 characters).";
+              }
+            }
+            if (!title.trim()) {
+              nextFieldErrors.title = "Job title is required.";
+            } else if (new TextEncoder().encode(title).length > 64) {
+              nextFieldErrors.title = `Title must be at most 64 bytes (currently ${new TextEncoder().encode(title).length}).`;
             }
             if (Object.keys(nextFieldErrors).length > 0) {
               setFieldErrors(nextFieldErrors);
@@ -338,19 +471,40 @@ export default function PostJobPage() {
 
             localStorage.setItem(`job-desc:${hashHex}`, htmlContent);
             const cid = await uploadToIpfs(htmlContent);
-            const result = await postJob(
-              wallet,
-              amountStroops!,
-              hashHex,
-              descriptionPayloadLen,
-              deadlineUnix,
-              tokenAddress.trim(),
+            const result = await withContractErrorHandling(
+              () =>
+                postJob(
+                  wallet,
+                  amountStroops!,
+                  hashHex,
+                  descriptionPayloadLen,
+                  deadlineUnix,
+                  tokenAddress.trim(),
+                  title.trim(),
+                  category,
+                ),
+              "Could not post the job to the contract. Please check your wallet and try again.",
             );
+            if (result.status !== "SUCCESS") {
+              throw new Error(result.errorResult ?? "Job transaction failed.");
+            }
+            const rawJobId = result.data;
+            if (
+              typeof rawJobId !== "bigint" &&
+              typeof rawJobId !== "number" &&
+              typeof rawJobId !== "string"
+            ) {
+              throw new Error("The job was posted, but its ID was not returned.");
+            }
+            const jobId = String(rawJobId);
             if (cid && !cid.startsWith("fallback:")) {
               try {
-                await storeDescriptionCid(wallet, hashHex, cid);
-              } catch {
-                // CID storage is best-effort.
+                await withContractErrorHandling(
+                  () => storeDescriptionCid(wallet, hashHex, cid),
+                  "Job posted, but the description CID could not be saved on-chain.",
+                );
+              } catch (cidError) {
+                setWarning(getErrorMessage(cidError));
               }
             }
             if (result.hash) {
@@ -358,9 +512,7 @@ export default function PostJobPage() {
             }
             recordPostJob();
             setRateLimit(getRateLimitStatus());
-            const jobId = typeof result === "number" || typeof result === "string" ? result : null;
-            const successMessage =
-              jobId != null ? `Job #${jobId} created successfully.` : "Job submitted to contract.";
+            const successMessage = `Job #${jobId} created successfully. Redirecting...`;
             setSuccess(successMessage);
             if (successMessage !== lastAnnouncedSuccess) {
               setLastAnnouncedSuccess(successMessage);
@@ -371,10 +523,24 @@ export default function PostJobPage() {
             setAmount("");
             setDescription("");
             setDeadline("");
+            setTitle("");
+            setCategory("development");
             setDraftSavedAt(null);
             setHasDraft(false);
+
+            redirectTimerRef.current = setTimeout(() => {
+              router.push(`/job/${encodeURIComponent(jobId)}`);
+            }, REDIRECT_DELAY_MS);
           } catch (e) {
-            setError(e instanceof Error ? e.message : "Failed to post job. Please try again.");
+            let balance: string | undefined;
+            if (wallet) {
+              try {
+                balance = await getNativeBalance(wallet);
+              } catch {
+                // Balance fetch failed — parseContractError will omit the balance detail
+              }
+            }
+            setError(parseContractError(e, balance));
           } finally {
             setSubmitting(false);
           }
@@ -383,7 +549,8 @@ export default function PostJobPage() {
         {(fieldErrors.amount ||
           fieldErrors.description ||
           fieldErrors.deadline ||
-          fieldErrors.tokenAddress) && (
+          fieldErrors.tokenAddress ||
+          fieldErrors.title) && (
           <div
             id="post-job-errors"
             role="alert"
@@ -397,6 +564,7 @@ export default function PostJobPage() {
               {fieldErrors.description && <li>{fieldErrors.description}</li>}
               {fieldErrors.deadline && <li>{fieldErrors.deadline}</li>}
               {fieldErrors.tokenAddress && <li>{fieldErrors.tokenAddress}</li>}
+              {fieldErrors.title && <li>{fieldErrors.title}</li>}
             </ul>
           </div>
         )}
@@ -427,6 +595,38 @@ export default function PostJobPage() {
           )}
         </label>
 
+        <label className="block text-sm font-medium">
+          Job Title
+          <input
+            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2"
+            type="text"
+            maxLength={64}
+            value={title}
+            onChange={(e) => {
+              setTitle(e.target.value);
+              setFieldErrors((current) => ({ ...current, title: undefined }));
+            }}
+            aria-invalid={Boolean(fieldErrors.title)}
+            aria-describedby={fieldErrors.title ? "post-job-title-error" : undefined}
+            placeholder="e.g. Build a landing page"
+            required
+          />
+          {fieldErrors.title && (
+            <p id="post-job-title-error" className="mt-1 text-xs text-red-600">
+              {fieldErrors.title}
+            </p>
+          )}
+        </label>
+
+        <div className="block text-sm font-medium">
+          <JobCategorySelect
+            category={category}
+            tags={tags}
+            onCategoryChange={setCategory}
+            onTagsChange={setTags}
+          />
+        </div>
+
         <div className="block text-sm font-medium">
           <span id={descriptionLabelId}>Job Description</span>
           <div className="mt-1">
@@ -450,48 +650,104 @@ export default function PostJobPage() {
           )}
         </div>
 
-        <label className="block text-sm font-medium">
-          Deadline (optional)
-          <input
-            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2"
-            type="date"
-            value={deadline}
-            onChange={(e) => {
-              setDeadline(e.target.value);
-              setFieldErrors((current) => ({ ...current, deadline: undefined }));
-            }}
-            aria-invalid={Boolean(fieldErrors.deadline)}
-            aria-describedby={fieldErrors.deadline ? "post-job-deadline-error" : undefined}
-          />
-          {fieldErrors.deadline && (
-            <p id="post-job-deadline-error" className="mt-1 text-xs text-red-600">
-              {fieldErrors.deadline}
-            </p>
-          )}
-        </label>
-
-        <label className="block text-sm font-medium">
-          Token Address
-          <input
-            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 font-mono text-xs"
-            type="text"
-            value={tokenAddress}
-            onChange={(e) => {
-              setTokenAddress(e.target.value);
-              setFieldErrors((current) => ({ ...current, tokenAddress: undefined }));
-            }}
-            aria-invalid={Boolean(fieldErrors.tokenAddress)}
-            aria-describedby={
-              fieldErrors.tokenAddress ? "post-job-token-address-error" : undefined
+        <details
+          open={advancedOpen}
+          onToggle={(e) => {
+            const open = (e.currentTarget as HTMLDetailsElement).open;
+            setAdvancedOpen(open);
+            try {
+              sessionStorage.setItem(
+                "stellarwork:advanced-open",
+                String(open),
+              );
+            } catch {
+              // ignore
             }
-            required
-          />
-          {fieldErrors.tokenAddress && (
-            <p id="post-job-token-address-error" className="mt-1 text-xs text-red-600">
-              {fieldErrors.tokenAddress}
-            </p>
-          )}
-        </label>
+          }}
+          className="rounded-md border border-slate-200 bg-slate-50"
+        >
+          <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium text-slate-700 hover:bg-slate-100">
+            Advanced options
+          </summary>
+          <div className="space-y-4 px-4 pb-4">
+            <label className="block text-sm font-medium">
+              Deadline (optional)
+              <input
+                className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2"
+                type="date"
+                value={deadline}
+                onChange={(e) => {
+                  setDeadline(e.target.value);
+                  setFieldErrors((current) => ({
+                    ...current,
+                    deadline: undefined,
+                  }));
+                }}
+                aria-invalid={Boolean(fieldErrors.deadline)}
+                aria-describedby={
+                  fieldErrors.deadline ? "post-job-deadline-error" : undefined
+                }
+              />
+              {fieldErrors.deadline && (
+                <p
+                  id="post-job-deadline-error"
+                  className="mt-1 text-xs text-red-600"
+                >
+                  {fieldErrors.deadline}
+                </p>
+              )}
+            </label>
+
+            <label className="block text-sm font-medium">
+              Token Address
+              <input
+                className={`mt-1 w-full rounded-md border px-3 py-2 font-mono text-xs ${
+                  fieldErrors.tokenAddress
+                    ? "border-red-400 focus:border-red-500 focus:outline-red-500"
+                    : "border-slate-300"
+                }`}
+                type="text"
+                value={tokenAddress}
+                onChange={(e) => {
+                  setTokenAddress(e.target.value);
+                  setFieldErrors((current) => ({
+                    ...current,
+                    tokenAddress: undefined,
+                  }));
+                }}
+                onBlur={(e) => {
+                  const trimmed = e.currentTarget.value.trim();
+                  if (!trimmed) return;
+                  if (!isValidStellarAddress(trimmed)) {
+                    setFieldErrors((current) => ({
+                      ...current,
+                      tokenAddress:
+                        "Enter a valid Stellar address (G... or C..., 56 characters).",
+                    }));
+                  }
+                }}
+                placeholder="G... or C... (56 characters)"
+                spellCheck={false}
+                autoComplete="off"
+                aria-invalid={Boolean(fieldErrors.tokenAddress)}
+                aria-describedby={
+                  fieldErrors.tokenAddress
+                    ? "post-job-token-address-error"
+                    : undefined
+                }
+                required
+              />
+              {fieldErrors.tokenAddress && (
+                <p
+                  id="post-job-token-address-error"
+                  className="mt-1 text-xs text-red-600"
+                >
+                  {fieldErrors.tokenAddress}
+                </p>
+              )}
+            </label>
+          </div>
+        </details>
 
         {rateLimit.cooldownEndsAt && (
           <div
@@ -513,9 +769,21 @@ export default function PostJobPage() {
         >
           {submitting ? "Posting..." : "Post Job"}
         </button>
+        <p className="mt-2 text-xs text-slate-500">
+          A 2.5% platform fee applies on job completion.{" "}
+          <a
+            href="https://github.com/anoncon/Stellar-work-/blob/main/docs/TOKENOMICS.md"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 hover:underline"
+          >
+            Learn more about fees
+          </a>
+        </p>
       </form>
 
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+      {warning && <ErrorBanner message={warning} onDismiss={() => setWarning(null)} />}
       {success && (
         <p role="status" aria-live="polite" aria-atomic="true" className="rounded-md bg-green-100 p-3 text-sm text-green-700">
           {success}

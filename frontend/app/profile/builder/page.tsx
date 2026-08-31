@@ -1,6 +1,21 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import {
+  sanitizePlainText,
+  MAX_NAME_LEN,
+  MAX_TAGLINE_LEN,
+  MAX_LOCATION_LEN,
+  MAX_LANGUAGES_LEN,
+  MAX_BIO_LENGTH,
+  MAX_EXPERIENCE_TITLE_LEN,
+  MAX_EXPERIENCE_COMPANY_LEN,
+  MAX_EXPERIENCE_DESC_LEN,
+  MAX_EDUCATION_DEGREE_LEN,
+  MAX_EDUCATION_INSTITUTION_LEN,
+  MAX_SKILL_NAME_LEN,
+  sanitizeUrl,
+} from "@/lib/sanitize";
 
 interface Experience {
   id: string;
@@ -109,6 +124,24 @@ export default function ProfileBuilderPage() {
   const completion = calculateCompletion(resume);
 
   function updateField<K extends keyof ResumeData>(key: K, value: ResumeData[K]) {
+    if (typeof value === "string") {
+      const limits: Partial<Record<keyof ResumeData, number>> = {
+        name: MAX_NAME_LEN,
+        tagline: MAX_TAGLINE_LEN,
+        location: MAX_LOCATION_LEN,
+        languages: MAX_LANGUAGES_LEN,
+        bio: MAX_BIO_LENGTH,
+        github: 200,
+        linkedin: 200,
+        website: 200,
+      };
+      const maxLen = limits[key] ?? 200;
+      if (key === "github" || key === "linkedin" || key === "website") {
+        value = sanitizeUrl(value) as ResumeData[K];
+      } else {
+        value = sanitizePlainText(value, maxLen) as ResumeData[K];
+      }
+    }
     setResume((prev) => ({ ...prev, [key]: value }));
   }
 
@@ -123,9 +156,17 @@ export default function ProfileBuilderPage() {
   }
 
   function updateExperience(id: string, field: keyof Experience, value: string) {
+    const limits: Record<string, number> = {
+      title: MAX_EXPERIENCE_TITLE_LEN,
+      company: MAX_EXPERIENCE_COMPANY_LEN,
+      startDate: 50,
+      endDate: 50,
+      description: MAX_EXPERIENCE_DESC_LEN,
+    };
+    const clean = sanitizePlainText(value, limits[field] ?? 200);
     setResume((prev) => ({
       ...prev,
-      experiences: prev.experiences.map((e) => (e.id === id ? { ...e, [field]: value } : e)),
+      experiences: prev.experiences.map((e) => (e.id === id ? { ...e, [field]: clean } : e)),
     }));
   }
 
@@ -147,9 +188,15 @@ export default function ProfileBuilderPage() {
   }
 
   function updateEducation(id: string, field: keyof Education, value: string) {
+    const limits: Record<string, number> = {
+      degree: MAX_EDUCATION_DEGREE_LEN,
+      institution: MAX_EDUCATION_INSTITUTION_LEN,
+      year: 10,
+    };
+    const clean = sanitizePlainText(value, limits[field] ?? 200);
     setResume((prev) => ({
       ...prev,
-      education: prev.education.map((e) => (e.id === id ? { ...e, [field]: value } : e)),
+      education: prev.education.map((e) => (e.id === id ? { ...e, [field]: clean } : e)),
     }));
   }
 
@@ -168,10 +215,11 @@ export default function ProfileBuilderPage() {
   }
 
   function updateSkill(index: number, field: keyof Skill, value: string) {
+    const clean = field === "name" ? sanitizePlainText(value, MAX_SKILL_NAME_LEN) : value;
     setResume((prev) => ({
       ...prev,
       skills: prev.skills.map((s, i) =>
-        i === index ? { ...s, [field]: field === "level" ? (value as Skill["level"]) : value } : s
+        i === index ? { ...s, [field]: field === "level" ? (clean as Skill["level"]) : clean } : s
       ),
     }));
   }
@@ -198,17 +246,17 @@ export default function ProfileBuilderPage() {
             </button>
           </div>
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-8">
-            {resume.name && <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-1">{resume.name}</h2>}
+            {resume.name && <p className="text-3xl font-bold text-gray-900 dark:text-white mb-1">{resume.name}</p>}
             {resume.tagline && <p className="text-lg text-gray-600 dark:text-gray-400 mb-2">{resume.tagline}</p>}
             {resume.location && <p className="text-sm text-gray-500 dark:text-gray-500 mb-4">{resume.location}</p>}
             {resume.bio && <p className="text-gray-700 dark:text-gray-300 mb-6">{resume.bio}</p>}
 
             {resume.experiences.length > 0 && (
               <div className="mb-6">
-                <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-3">Experience</h3>
+                <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-3">Experience</h2>
                 {resume.experiences.map((exp) => (
                   <div key={exp.id} className="mb-4">
-                    <h4 className="font-medium text-gray-900 dark:text-white">{exp.title}</h4>
+                    <h3 className="font-medium text-gray-900 dark:text-white">{exp.title}</h3>
                     <p className="text-sm text-gray-600 dark:text-gray-400">{exp.company} | {exp.startDate} - {exp.endDate || "Present"}</p>
                     {exp.description && <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{exp.description}</p>}
                   </div>
@@ -218,7 +266,7 @@ export default function ProfileBuilderPage() {
 
             {resume.education.length > 0 && (
               <div className="mb-6">
-                <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-3">Education</h3>
+                <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-3">Education</h2>
                 {resume.education.map((edu) => (
                   <div key={edu.id} className="mb-2">
                     <p className="font-medium text-gray-900 dark:text-white">{edu.degree}</p>
@@ -230,7 +278,7 @@ export default function ProfileBuilderPage() {
 
             {resume.skills.length > 0 && (
               <div className="mb-6">
-                <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-3">Skills</h3>
+                <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-3">Skills</h2>
                 <div className="flex flex-wrap gap-2">
                   {resume.skills.map((skill, i) => (
                     <span key={i} className="px-3 py-1 text-sm rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">
@@ -243,7 +291,7 @@ export default function ProfileBuilderPage() {
 
             {(resume.github || resume.linkedin || resume.website) && (
               <div>
-                <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-3">Links</h3>
+                <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-3">Links</h2>
                 <div className="space-y-1 text-sm">
                   {resume.github && <p>GitHub: {resume.github}</p>}
                   {resume.linkedin && <p>LinkedIn: {resume.linkedin}</p>}
@@ -282,13 +330,13 @@ export default function ProfileBuilderPage() {
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Full Name</label>
               <input type="text" value={resume.name} onChange={(e) => updateField("name", e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                placeholder="Jane Doe" />
+                placeholder="Jane Doe" maxLength={MAX_NAME_LEN} />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Tagline</label>
               <input type="text" value={resume.tagline} onChange={(e) => updateField("tagline", e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                placeholder="Full-stack developer & blockchain engineer" />
+                placeholder="Full-stack developer & blockchain engineer" maxLength={MAX_TAGLINE_LEN} />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Location</label>
@@ -305,9 +353,9 @@ export default function ProfileBuilderPage() {
           </div>
           <div className="mt-4">
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Bio</label>
-            <textarea value={resume.bio} onChange={(e) => updateField("bio", e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-              rows={3} placeholder="Tell clients about yourself..." />
+              <textarea value={resume.bio} onChange={(e) => updateField("bio", e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                rows={3} placeholder="Tell clients about yourself..." maxLength={MAX_BIO_LENGTH} />
           </div>
         </div>
 

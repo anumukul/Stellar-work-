@@ -2,6 +2,8 @@ import React from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import CommandPalette from "@/components/CommandPalette";
+import ConfirmDialog from "@/components/ConfirmDialog";
+import ShortcutCheatSheet from "@/components/ShortcutCheatSheet";
 
 const mockPush = vi.fn();
 const mockConnectWallet = vi.fn();
@@ -69,5 +71,37 @@ describe("Command palette interactions", () => {
 
     expect(mockConnectWallet).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument();
+  });
+
+  it("closes confirmation dialogs with Escape and confirms with Enter", () => {
+    const onConfirm = vi.fn();
+    const onCancel = vi.fn();
+
+    render(
+      <ConfirmDialog
+        open
+        title="Delete job"
+        description="This action cannot be undone."
+        confirmLabel="Delete"
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+      />,
+    );
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onCancel).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(document, { key: "Enter" });
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the keyboard shortcut sheet with an accessible list", () => {
+    render(<ShortcutCheatSheet />);
+
+    fireEvent.keyDown(window, { key: "?" });
+
+    expect(screen.getByRole("dialog", { name: /keyboard shortcuts/i })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: /keyboard shortcut overview/i })).toBeInTheDocument();
+    expect(screen.getByText("Submit form or confirm action")).toBeInTheDocument();
   });
 });

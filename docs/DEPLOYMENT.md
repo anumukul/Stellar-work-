@@ -4,6 +4,7 @@ End-to-end guide for deploying StellarWork to production: Soroban contract deplo
 
 > For Testnet-only deployment see [testnet-deployment-guide.md](./testnet-deployment-guide.md).
 > For Vercel-specific CI/CD setup see [DEPLOY.md](./DEPLOY.md).
+> For frontend hosting across Vercel, Netlify, and Docker see [FRONTEND_DEPLOYMENT.md](./FRONTEND_DEPLOYMENT.md).
 > For environment variables reference see [environments.md](./environments.md).
 
 ---

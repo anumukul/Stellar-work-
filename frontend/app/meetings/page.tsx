@@ -1,4 +1,5 @@
 "use client";
+import TruncatedAddress from "@/components/TruncatedAddress";
 import { useMeetings, type Meeting, type MeetingStatus } from "@/lib/meetings-context";
 import { useWallet } from "@/lib/wallet-context";
 import Link from "next/link";
@@ -158,14 +159,18 @@ function MeetingCard({
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <h3 className="font-medium text-slate-900">{meeting.title}</h3>
+            <h2 className="font-medium text-slate-900">{meeting.title}</h2>
             <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${STATUS_COLORS[meeting.status]}`}>
               {STATUS_LABELS[meeting.status]}
             </span>
           </div>
           <p className="mt-0.5 text-xs text-slate-500">
             Job <Link href={`/job/${meeting.jobId}`} className="text-blue-600 hover:underline">#{meeting.jobId}</Link>
-            {" "}· {meeting.proposer === wallet ? "You proposed" : `Proposed by ${meeting.proposer.slice(0, 8)}...`}
+            {" "}· {meeting.proposer === wallet ? "You proposed" : (
+              <>
+                Proposed by <TruncatedAddress address={meeting.proposer} />
+              </>
+            )}
           </p>
           {meeting.selectedSlot && (
             <p className="mt-1 text-xs text-slate-700">

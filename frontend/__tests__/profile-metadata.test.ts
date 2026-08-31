@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { generateMetadata } from "@/app/profile/[address]/page";
+
+vi.mock("@/components/StatusPill", () => ({
+  default: ({ status }: { status: string }) => status,
+}));
 
 describe("profile route metadata", () => {
   it("includes valid route address in title", async () => {

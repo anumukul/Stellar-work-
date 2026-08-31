@@ -1,43 +1,111 @@
 services:
+  # Stellar Quickstart: Provides local Stellar testnet with Soroban RPC support
+  stellar:
+    image: ${STELLAR_QUICKSTART_IMAGE:-stellar/quickstart:soroban-dev}
+    container_name: ${STELLAR_CONTAINER_NAME:-stellarwork-stellar}
+    platform: linux/amd64
+    ports:
+      # Horizon API (legacy REST API)
+      - "${STELLAR_HORIZON_PORT:-8000}:8000"
+      # Soroban RPC
+      - "${STELLAR_RPC_PORT:-8000}:8000"
+    environment:
+      - LOG_LEVEL=${STELLAR_LOG_LEVEL:-info}
+    volumes:
+      # Named volume for persisting testnet state across restarts
+      - stellar-data:/opt/stellar
+    # Start with testnet mode - you can change --local to --testnet or --futurenet as needed
+    command: >
+      ${STELLAR_NETWORK_FLAG:---local}
+      --enable-soroban-rpc
+      --enable-soroban-diagnostic-events
+    # Health check ensures dependent services wait for Stellar RPC to be ready
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+    networks:
+      - stellarwork-network
+
+  # Frontend: Next.js development server with hot reload
   frontend:
     build:
       context: ./frontend
+      dockerfile: Dockerfile
       target: deps
-    container_name: stellarwork-frontend
+    container_name: ${FRONTEND_CONTAINER_NAME:-stellarwork-frontend}
+    working_dir: /app
     ports:
-      - "3000:3000"
+      - "${FRONTEND_PORT:-3000}:3000"
     volumes:
+      # Mount source directory for hot reload
       - ./frontend:/app
+      # Exclude node_modules from host mount to avoid shadowing container-installed deps
       - /app/node_modules
+      # Exclude .next from host mount to avoid cache conflicts
       - /app/.next
-    command: npm run dev
     environment:
+      # Development settings
       - NODE_ENV=development
-      - WATCHPACK_POLLING=true
-      - CHOKIDAR_USEPOLLING=true
+      - WATCHPACK_POLLING=${WATCHPACK_POLLING:-true}
+      - CHOKIDAR_USEPOLLING=${CHOKIDAR_USEPOLLING:-true}
+      # Frontend will connect to Stellar via Docker service name on compose network
+      - NEXT_PUBLIC_SOROBAN_RPC=${NEXT_PUBLIC_SOROBAN_RPC:-http://stellar:8000}
+      - NEXT_PUBLIC_NETWORK=${NEXT_PUBLIC_NETWORK:-standalone}
+      # Pass through any other NEXT_PUBLIC_ environment variables from .env.local
+      - NEXT_PUBLIC_CONTRACT_ID=${NEXT_PUBLIC_CONTRACT_ID:-}
+      - NEXT_PUBLIC_NETWORK_PASSPHRASE=${NEXT_PUBLIC_NETWORK_PASSPHRASE:-Standalone Network ; February 2017}
+      - NEXT_PUBLIC_ADMIN_ADDRESS=${NEXT_PUBLIC_ADMIN_ADDRESS:-}
+    command: npm run dev
+    # Wait for Stellar to be healthy before starting frontend
     depends_on:
-      - contract-builder
+      stellar:
+        condition: service_healthy
+    networks:
+      - stellarwork-network
 
+  # Contract Builder: Rust/Soroban build environment
+  # This service provides the build toolchain for compiling Soroban contracts to WebAssembly
   contract-builder:
-    image: rust:1.81-slim-bookworm
-    container_name: stellarwork-contract-builder
+    image: ${RUST_IMAGE:-rust:latest}
+    container_name: ${CONTRACT_BUILDER_CONTAINER_NAME:-stellarwork-contract-builder}
     working_dir: /workspace
     volumes:
+      # Mount contracts directory for building
       - ./contracts:/workspace/contracts
+      # Use named volume for Cargo registry cache to speed up builds
       - cargo-cache:/usr/local/cargo/registry
-    command: tail -f /dev/null
+      # Cache compiled artifacts across builds
+      - cargo-build-cache:/workspace/contracts/escrow/target
     environment:
-      - CARGO_NET_GIT_FETCH_WITH_CLI=true
+      - CARGO_NET_GIT_FETCH_WITH_CLI=${CARGO_NET_GIT_FETCH_WITH_CLI:-true}
+      - RUST_BACKTRACE=${RUST_BACKTRACE:-1}
+    # Start a dummy process to keep container alive; users run builds via docker compose exec
+    # To build: docker compose exec contract-builder bash -c "cd contracts/escrow && cargo build --target wasm32-unknown-unknown"
+    # Or:      docker compose exec contract-builder bash -c "cd contracts/escrow && soroban contract build"
+    command: tail -f /dev/null
+    networks:
+      - stellarwork-network
+    profiles:
+      # Use 'profiles: [builder]' to make this an optional service
+      # Run with: docker compose --profile builder up
+      # Or run builds ad-hoc: docker compose exec contract-builder <command>
+      - builder
 
-  stellar-quickstart:
-    image: stellar/quickstart:soroban-dev@sha256:6c1438d2e8e59c763bb6d7609e25e0f2cb1e7ff02d7cff7de9be5ca1bb6c3f43
-    container_name: stellarwork-quickstart
-    ports:
-      - "8000:8000"
-    command: ["--local", "--enable-soroban-rpc"]
-    volumes:
-      - stellar-data:/opt/stellar
+networks:
+  stellarwork-network:
+    driver: bridge
+    name: ${COMPOSE_NETWORK_NAME:-stellarwork-network}
 
 volumes:
-  cargo-cache:
+  # Stellar testnet state persistence
   stellar-data:
+    name: ${STELLAR_VOLUME_NAME:-stellarwork-stellar-data}
+  # Cargo registry cache for dependency downloads
+  cargo-cache:
+    name: ${CARGO_CACHE_VOLUME_NAME:-stellarwork-cargo-cache}
+  # Cargo build artifacts cache
+  cargo-build-cache:
+    name: ${CARGO_BUILD_CACHE_VOLUME_NAME:-stellarwork-cargo-build-cache}
