@@ -18,11 +18,11 @@ const MAX_FEE_TIERS: u32 = 10;
 #[allow(dead_code)]
 const XLM_STROOP: i128 = 10_000_000;
 const UPGRADE_TIMELOCK_SECS: u64 = 86_400;
-/// Default dispute deposit: 5 XLM in stroops.
+
 const DEFAULT_DISPUTE_FEE: i128 = 50_000_000;
 /// Maximum number of milestones allowed per job.
 const MAX_MILESTONES: u32 = 20;
-/// Maximum number of disputes that can be resolved in a single batch call.
+
 const MAX_BATCH_DISPUTES: u32 = 20;
 /// Default burn percentage in basis points (0% = disabled by default).
 const DEFAULT_BURN_BPS: i128 = 0;
@@ -31,10 +31,9 @@ const DEFAULT_ORACLE_FEE: i128 = 20_000_000;
 /// SC-123: largest page an indexer may request in one `get_events` call.
 /// Bounded so a single call cannot exceed the contract's read budget.
 const MAX_EVENT_PAGE_LIMIT: u32 = 100;
-/// SC-121: largest number of attachment hashes committable in one call.
-/// A Merkle build is O(n) reads and writes, so the ceiling keeps the call
-/// inside a single transaction's budget.
+
 const MAX_ATTACHMENT_LEAVES: u32 = 256;
+const MAX_CATEGORIES: u32 = 5;
 
 const INSTANCE_LIFETIME_THRESHOLD: u32 = 17_280;
 const INSTANCE_BUMP_AMOUNT: u32 = 518_400;
@@ -66,6 +65,17 @@ pub enum JobVisibility {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum JobCategory {
+    Development,
+    Design,
+    Writing,
+    Marketing,
+    DevOps,
+    Other,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Job {
     pub client: Address,
     pub freelancer: Option<Address>,
@@ -80,6 +90,8 @@ pub struct Job {
     /// attachments, making deliverables tamper-evident without storing them
     /// on-chain. All-zero bytes means no attachments have been committed.
     pub attachments_root: BytesN<32>,
+    /// Categories for the job. Multiple allowed.
+    pub categories: Vec<JobCategory>,
 }
 
 /// SC-123: one lifecycle event, recorded in a sequence an indexer can page.
@@ -382,6 +394,7 @@ pub enum Error {
     UnsupportedToken = 47,
     BelowMinimumRating = 48,
     InvalidRating = 49,
+    InvalidCategory = 50,
 }
 
 #[contract]
@@ -743,7 +756,7 @@ impl EscrowContract {
             panic_with_error!(&e, Error::DuplicateNonce);
         }
 
-        let job_id = Self::post_job(
+        let job_id = Self::post_job_with_categories(
             e.clone(),
             client.clone(),
             amount,
@@ -751,6 +764,7 @@ impl EscrowContract {
             description_payload_len,
             deadline,
             token,
+            Vec::new(&e),
         );
 
         e.storage()
@@ -920,7 +934,7 @@ impl EscrowContract {
         bump_instance_ttl(&e);
     }
 
-    pub fn post_job(
+    pub fn post_job_with_categories(
         e: Env,
         client: Address,
         amount: i128,
@@ -928,6 +942,7 @@ impl EscrowContract {
         description_payload_len: u32,
         deadline: u64,
         token: Address,
+        categories: Vec<JobCategory>,
     ) -> u64 {
         if amount <= 0 {
             panic_with_error!(&e, Error::InvalidAmount);
@@ -949,6 +964,9 @@ impl EscrowContract {
         if !Self::is_token_allowed(e.clone(), token.clone()) {
             panic_with_error!(&e, Error::UnsupportedToken);
         }
+        if categories.len() == 0 || categories.len() > MAX_CATEGORIES {
+            panic_with_error!(&e, Error::InvalidCategory);
+        }
         enforce_client_active_job_limit(&e, &client);
 
         let token_client = token::Client::new(&e, &token);
@@ -969,6 +987,7 @@ impl EscrowContract {
             revision_count: 0,
             // SC-121: no attachments committed at creation.
             attachments_root: BytesN::from_array(&e, &[0u8; 32]),
+            categories: categories.clone(),
         };
 
         set_job(&e, job_id, &job);
@@ -998,6 +1017,28 @@ impl EscrowContract {
         Self::write_audit(&e, client, "post_job", Some(job_id), "Posted a job");
 
         job_id
+    }
+
+    /// Backwards-compatible wrapper for callers that don't provide categories.
+    pub fn post_job(
+        e: Env,
+        client: Address,
+        amount: i128,
+        desc_hash: BytesN<32>,
+        description_payload_len: u32,
+        deadline: u64,
+        token: Address,
+    ) -> u64 {
+        Self::post_job_with_categories(
+            e,
+            client,
+            amount,
+            desc_hash,
+            description_payload_len,
+            deadline,
+            token,
+            Vec::new(&e),
+        )
     }
 
     pub fn accept_job(e: Env, freelancer: Address, job_id: u64) {
@@ -2033,6 +2074,35 @@ impl EscrowContract {
         jobs
     }
 
+    /// Return job ids whose categories include `category`.
+    pub fn get_jobs_by_category(e: Env, category: JobCategory) -> Vec<u64> {
+        let mut matches: Vec<u64> = Vec::new(&e);
+        let all_ids: Vec<u64> = e
+            .storage()
+            .persistent()
+            .get(&DataKey::AllJobIds)
+            .unwrap_or(Vec::new(&e));
+
+        for i in 0..all_ids.len() {
+            let id = all_ids.get(i).unwrap();
+            if let Some(job) = e.storage().persistent().get::<DataKey, Job>(&DataKey::Job(id)) {
+                // Scan categories for a match.
+                let mut found = false;
+                for j in 0..job.categories.len() {
+                    if job.categories.get(j).unwrap() == category {
+                        found = true;
+                        break;
+                    }
+                }
+                if found {
+                    matches.push_back(id);
+                }
+            }
+        }
+
+        matches
+    }
+
     pub fn get_admin(e: Env) -> Address {
         load_admin(&e)
     }
@@ -2803,7 +2873,7 @@ impl EscrowContract {
         }
 
         // Delegate to the standard post_job logic.
-        Self::post_job(
+        Self::post_job_with_categories(
             e,
             client,
             amount,
@@ -2811,6 +2881,7 @@ impl EscrowContract {
             description_payload_len,
             deadline,
             token,
+            Vec::new(&e),
         )
     }
 
@@ -3199,6 +3270,58 @@ impl EscrowContract {
         e.storage()
             .persistent()
             .get::<DataKey, Job>(&DataKey::ArchivedJob(job_id))
+    }
+
+    /// SC-82: restore a job from archive storage back into active storage (admin only).
+    /// This moves the archived `Job` back to the live `Job` slot, re-inserts the
+    /// job id into `AllJobIds`, decrements `ArchiveCount`, and emits
+    /// a `job_unarchived` event. Any per-job closed timestamps are not
+    /// restored by this operation.
+    pub fn unarchive_job(e: Env, admin: Address, job_id: u64) {
+        admin.require_auth();
+        let current_admin = load_admin(&e);
+        if admin != current_admin {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+
+        // Ensure archived record exists
+        let archived: Option<Job> = e
+            .storage()
+            .persistent()
+            .get(&DataKey::ArchivedJob(job_id));
+        if archived.is_none() {
+            panic_with_error!(&e, Error::JobNotFound);
+        }
+        let job = archived.unwrap();
+
+        // Ensure there's no active job occupying the slot
+        if e.storage().persistent().has(&DataKey::Job(job_id)) {
+            panic_with_error!(&e, Error::InvalidStatus);
+        }
+
+        // Move archived job back into active storage
+        e.storage().persistent().set(&DataKey::Job(job_id), &job);
+        e.storage().persistent().extend_ttl(&DataKey::Job(job_id), ACTIVE_JOB_LIFETIME_THRESHOLD, ACTIVE_JOB_BUMP_AMOUNT);
+
+        // Re-insert into AllJobIds
+        let mut all_ids: Vec<u64> = e
+            .storage()
+            .persistent()
+            .get(&DataKey::AllJobIds)
+            .unwrap_or(Vec::new(&e));
+        all_ids.push_back(job_id);
+        e.storage().persistent().set(&DataKey::AllJobIds, &all_ids);
+        e.storage().persistent().extend_ttl(&DataKey::AllJobIds, INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        // Remove archived record and update counters
+        e.storage().persistent().remove(&DataKey::ArchivedJob(job_id));
+        let mut count: u64 = e.storage().instance().get(&DataKey::ArchiveCount).unwrap_or(0);
+        count = count.saturating_sub(1);
+        e.storage().instance().set(&DataKey::ArchiveCount, &count);
+
+        e.events().publish((Symbol::new(&e, "job_unarchived"),), (job_id,));
+
+        bump_instance_ttl(&e);
     }
 
     /// SC-82: number of jobs currently in archive storage (admin only).
@@ -8269,6 +8392,7 @@ mod test {
             revision_count: 0,
             // SC-121: a freshly posted job has no attachment commitment.
             attachments_root: BytesN::from_array(&env, &[0u8; 32]),
+            categories: Vec::new(&env),
         };
 
         assert_eq!(client.get_job(&job_id), expected);
@@ -8305,6 +8429,7 @@ mod test {
             token: native_token.clone(),
             revision_count: 0,
             attachments_root: BytesN::from_array(&env, &[0u8; 32]),
+            categories: Vec::new(&env),
         };
         assert_eq!(after_accept, expected_accept);
 

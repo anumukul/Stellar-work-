@@ -23,7 +23,11 @@ import EmptyState from "@/components/EmptyState";
 import ErrorBanner from "@/components/ErrorBanner";
 import ExportButton from "@/components/ExportButton";
 import InfoTooltip from "@/components/InfoTooltip";
-import JobCardSkeleton from "@/components/JobCardSkeleton";
+import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
+import { SortableContext, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable';
+import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
+import JobCard from '@/components/JobCard';
+import { useJobOrder } from '@/lib/hooks/useJobOrder';
 import NoResultsState from "@/components/NoResultsState";
 import PullToRefresh from "@/components/PullToRefresh";
 import SectionCard from "@/components/SectionCard";
@@ -39,8 +43,12 @@ import { isConfirmSuppressed, CONFIRM_KEYS } from "@/lib/confirm-prefs";
 import { useWallet } from "@/lib/wallet-context";
 import type { Job, JobStatus, NotificationEvent, JobStatusCounts } from "@/lib/types";
 import { STATUS_TO_COUNTS_KEY } from "@/lib/types";
-import { useEffect, useState, useCallback, useRef, type KeyboardEvent } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo, type KeyboardEvent } from "react";
+import { buildActiveFreelancerJobCountMap } from "@/lib/availability";
+import AvailabilityIndicator from "@/components/AvailabilityIndicator";
 
+export type PendingDashAction = {
+  type: "cancelJob" | "approveWork" | "submitWork" | "freelancerCancelJob";
 type PendingDashAction = {
   type: "cancelJob" | "approveWork" | "submitWork" | "freelancerCancelJob" | "enforceDeadline";
   jobId: number;
@@ -460,6 +468,18 @@ export default function DashboardPage() {
 
   const filteredPosted = filterJobs(postedJobs);
   const filteredAccepted = filterJobs(acceptedJobs);
+  const activeFreelancerJobCounts = useMemo(
+    () => buildActiveFreelancerJobCountMap(allJobs),
+    [allJobs],
+  );
+
+  const { orderedJobs: orderedPosted, setOrder: setPostedOrder, resetOrder: resetPostedOrder } = useJobOrder(filteredPosted, wallet, "posted");
+  const { orderedJobs: orderedAccepted, setOrder: setAcceptedOrder, resetOrder: resetAcceptedOrder } = useJobOrder(filteredAccepted, wallet, "accepted");
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
 
   const handleFilterKeyDown = (
     event: KeyboardEvent<HTMLButtonElement>,
@@ -503,8 +523,15 @@ export default function DashboardPage() {
 
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Dashboard</h1>
-        {/* Allow exporting selected jobs when available */}
-        <ExportButton jobs={allJobs} wallet={wallet} selectedIds={Array.from(new Set([...Array.from(selectedJobs), ...Array.from(selectedJobIds)]))} />
+        <div className="flex gap-2 items-center">
+          <button
+            onClick={() => { resetPostedOrder(); resetAcceptedOrder(); }}
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+          >
+            Reset order
+          </button>
+          <ExportButton jobs={allJobs} wallet={wallet} />
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-4 sm:max-w-md">
@@ -624,6 +651,60 @@ export default function DashboardPage() {
 
       {!loading && (
         <>
+          <DndContext sensors={sensors} collisionDetection={closestCenter}>
+            <JobSection
+              title="Posted Jobs"
+              subtitle="Jobs you created as a client"
+              allJobs={postedJobs}
+              jobs={orderedPosted}
+              filterActive={statusFilter !== "All"}
+              wallet={wallet}
+              role="client"
+              actionLoading={actionLoading}
+              onAction={handleAction}
+              onRequestAction={requestDashAction}
+              onClearFilter={() => setStatusFilter("All")}
+              selectedJobs={selectedJobs}
+              onToggleSelect={(id: number) => {
+                const job = postedJobs.find(j => j.id === id);
+                if (!job) return;
+                if (job.job.status === "SubmittedForReview") {
+                  setSelectedJobs((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(id)) next.delete(id);
+                    else next.add(id);
+                    return next;
+                  });
+                } else if (job.job.status === "Open") {
+                  handleToggleSelect(id);
+                }
+              }}
+              onBatchApprove={handleBatchApprove}
+              batchLoading={batchLoading}
+              selectedJobIds={selectedJobIds}
+              onSelectAll={handleSelectAllOpen}
+              onDeselectAll={handleDeselectAll}
+              onBulkCancel={() => setShowBulkConfirm(true)}
+              bulkCancelProgress={bulkCancelProgress}
+              orderedIds={orderedPosted.map((j) => j.id)}
+              setOrder={setPostedOrder}
+            />
+            <JobSection
+              title="Accepted Jobs"
+              subtitle="Jobs you accepted as a freelancer"
+              allJobs={acceptedJobs}
+              jobs={orderedAccepted}
+              filterActive={statusFilter !== "All"}
+              wallet={wallet}
+              role="freelancer"
+              actionLoading={actionLoading}
+              onAction={handleAction}
+              onRequestAction={requestDashAction}
+              onClearFilter={() => setStatusFilter("All")}
+              orderedIds={orderedAccepted.map((j) => j.id)}
+              setOrder={setAcceptedOrder}
+            />
+          </DndContext>
           <JobSection
             title="Posted Jobs"
             subtitle="Jobs you created as a client"
@@ -636,6 +717,7 @@ export default function DashboardPage() {
             onAction={handleAction}
             onRequestAction={requestDashAction}
             onClearFilter={() => setStatusFilter("All")}
+            activeFreelancerJobCounts={activeFreelancerJobCounts}
             selectedJobs={selectedJobs}
             onToggleBatchSelect={(id) => {
               setSelectedJobs((prev) => {
@@ -886,7 +968,7 @@ export default function DashboardPage() {
   );
 }
 
-function JobSection({
+export function JobSection({
   title,
   subtitle,
   allJobs,
@@ -908,6 +990,9 @@ function JobSection({
   onDeselectAll,
   onBulkCancel,
   bulkCancelProgress,
+  orderedIds,
+  setOrder,
+  activeFreelancerJobCounts,
 }: {
   title: string;
   subtitle: string;
@@ -932,7 +1017,9 @@ function JobSection({
   onBulkCancel?: () => void;
   onBulkExtend?: () => void;
   bulkCancelProgress?: { done: number; total: number; failed: number[] } | null;
-  bulkExtendProgress?: { done: number; total: number; failed: number[] } | null;
+  orderedIds?: number[];
+  setOrder?: (ids: number[]) => void;
+  activeFreelancerJobCounts?: Map<string, number>;
 }) {
   const pendingReviewIds = allJobs
     .filter((j) => j.job.status === "SubmittedForReview")
@@ -942,6 +1029,36 @@ function JobSection({
   const selectionCount = openClientJobs.filter((j) => selectedJobIds.has(j.id)).length;
   const allOpenSelected =
     openClientJobs.length > 0 && openClientJobs.every((j) => selectedJobIds.has(j.id));
+
+  const handleDragEnd = (event: any) => {
+    const { active, over } = event;
+    if (!over || !orderedIds || !setOrder) return;
+    if (active.id !== over.id) {
+      const oldIndex = orderedIds.indexOf(active.id);
+      const newIndex = orderedIds.indexOf(over.id);
+      setOrder(arrayMove(orderedIds, oldIndex, newIndex));
+    }
+  };
+
+  const renderList = (items: Array<{ id: number; job: Job }>) => (
+    <ul className="grid list-none gap-4 sm:grid-cols-2" aria-label={title}>
+      {items.map(({ id, job }) => (
+        <li key={id}>
+          <JobCard
+            id={id}
+            job={job}
+            wallet={wallet}
+            role={role}
+            isLoading={actionLoading === id}
+            onAction={onAction}
+            onRequestAction={onRequestAction}
+            isSelected={role === "client" && job.status === "Open" ? selectedJobIds.has(id) : selectedJobs?.has(id) ?? false}
+            onToggleSelect={role === "client" ? onToggleSelect : undefined}
+          />
+        </li>
+      ))}
+    </ul>
+  );
 
   return (
     <div>
@@ -1018,6 +1135,15 @@ function JobSection({
           <EmptyState title="No jobs yet" description="No jobs match this filter yet." />
         )
       ) : (
+        orderedIds && setOrder ? (
+          <DndContext collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <SortableContext items={orderedIds} strategy={verticalListSortingStrategy}>
+              {renderList(jobs)}
+            </SortableContext>
+          </DndContext>
+        ) : (
+          renderList(jobs)
+        )
         <ul className="grid list-none gap-4 sm:grid-cols-2" aria-label={title}>
           {jobs.map(({ id, job }) => {
             const canBulkCancel = job.status === "Open" && role === "client";
@@ -1047,6 +1173,11 @@ function JobSection({
                   isSelected={isSelected}
                   onToggleSelect={toggle}
                   selectMode={canBulkCancel ? "cancel" : canBatchApprove ? "approve" : undefined}
+                  freelancerActiveJobCount={
+                    job.freelancer
+                      ? activeFreelancerJobCounts?.get(job.freelancer) ?? 0
+                      : 0
+                  }
                 />
               </li>
             );
@@ -1068,6 +1199,7 @@ function JobCard({
   isSelected = false,
   onToggleSelect,
   selectMode,
+  freelancerActiveJobCount = 0,
 }: {
   id: number;
   job: Job;
@@ -1079,6 +1211,7 @@ function JobCard({
   isSelected?: boolean;
   onToggleSelect?: (id: number) => void;
   selectMode?: "cancel" | "approve";
+  freelancerActiveJobCount?: number;
 }) {
   const actions = getActions(id, job, wallet, role);
   const amountXlm = `${toXlm(job.amount)} XLM`;
@@ -1142,8 +1275,14 @@ function JobCard({
           })()}
         </p>
         {role === "client" && job.freelancer && (
-          <p className="truncate">
-            Freelancer: <TruncatedAddress address={job.freelancer} />
+          <p className="flex flex-wrap items-center gap-2 truncate">
+            <span>Freelancer:</span>
+            <TruncatedAddress address={job.freelancer} />
+            <AvailabilityIndicator
+              address={job.freelancer}
+              activeJobCount={freelancerActiveJobCount}
+              showLabel={true}
+            />
           </p>
         )}
         {role === "freelancer" && (
@@ -1199,7 +1338,7 @@ type Action = {
   notification?: { event: NotificationEvent; message: string };
 };
 
-function getActions(
+export function getActions(
   id: number,
   job: Job,
   wallet: string,
