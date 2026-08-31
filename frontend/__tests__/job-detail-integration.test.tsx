@@ -23,7 +23,20 @@ vi.mock("@/lib/contract", () => ({
   freelancerCancelJob: vi.fn(),
   getDescriptionCid: vi.fn(),
   storeDescriptionCid: vi.fn(),
+  getJobViews: vi.fn().mockResolvedValue(0),
+  recordJobView: vi.fn().mockResolvedValue(undefined),
+  rateJob: vi.fn(),
+  topUpEscrow: vi.fn(),
+  getJobCount: vi.fn().mockResolvedValue(0),
 }));
+
+vi.mock("@/lib/stellar", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/stellar")>();
+  return {
+    ...actual,
+    getNativeBalance: vi.fn().mockResolvedValue("100.00"),
+  };
+});
 
 vi.mock("@/lib/ipfs-service", () => ({
   uploadToIpfs: vi.fn(),
@@ -74,8 +87,6 @@ function renderJobPage() {
 }
 
 describe("Job detail page integration", () => {
-  const user = userEvent.setup();
-
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseWallet.mockReturnValue({
@@ -91,11 +102,14 @@ describe("Job detail page integration", () => {
     renderJobPage();
 
     const acceptButton = await screen.findByRole("button", { name: "Accept Job" });
-    await user.click(acceptButton);
+    fireEvent.click(acceptButton);
+
+    const modalAcceptButton = screen.getAllByRole("button", { name: "Accept Job" })[1];
+    fireEvent.click(modalAcceptButton);
 
     expect(contract.acceptJob).toHaveBeenCalledWith("GWALLET", "1");
     await waitFor(() => {
-      expect(screen.getByText("Job accepted successfully.")).toBeInTheDocument();
+      expect(screen.getAllByText("Job accepted successfully.").length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -106,11 +120,14 @@ describe("Job detail page integration", () => {
     renderJobPage();
 
     const acceptButton = await screen.findByRole("button", { name: "Accept Job" });
-    await user.click(acceptButton);
+    fireEvent.click(acceptButton);
+
+    const modalAcceptButton = screen.getAllByRole("button", { name: "Accept Job" })[1];
+    fireEvent.click(modalAcceptButton);
 
     expect(contract.acceptJob).toHaveBeenCalledWith("GWALLET", "1");
     await waitFor(() => {
-      expect(screen.getByText("Accept failed")).toBeInTheDocument();
+      expect(screen.getAllByText("Accept failed").length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -127,18 +144,18 @@ describe("Job detail page integration", () => {
     renderJobPage();
 
     const submitButton = await screen.findByRole("button", { name: "Submit Work" });
-    await user.click(submitButton);
+    fireEvent.click(submitButton);
 
     const confirmButton = await screen.findByRole("button", { name: "Yes, submit work" });
-    await user.click(confirmButton);
+    fireEvent.click(confirmButton);
 
     expect(contract.submitWork).toHaveBeenCalledWith("GFREELANCER", "1");
     await waitFor(() => {
-      expect(screen.getByText("Work submitted for review.")).toBeInTheDocument();
+      expect(screen.getAllByText("Work submitted for review.").length).toBeGreaterThanOrEqual(1);
     });
   });
 
-  it("calls approveWork with correct arguments via confirm dialog", async () => {
+  it("calls approveWork with correct arguments via confirm dialog and opens celebration", async () => {
     mockUseWallet.mockReturnValue({
       wallet: "GCLIENT",
       connectWallet: vi.fn(),
@@ -151,14 +168,17 @@ describe("Job detail page integration", () => {
     renderJobPage();
 
     const approveButton = await screen.findByRole("button", { name: "Approve Work" });
-    await user.click(approveButton);
+    fireEvent.click(approveButton);
 
     const confirmButton = await screen.findByRole("button", { name: "Yes, approve & pay" });
-    await user.click(confirmButton);
+    fireEvent.click(confirmButton);
 
     expect(contract.approveWork).toHaveBeenCalledWith("GCLIENT", "1");
     await waitFor(() => {
-      expect(screen.getByText("Work approved and payment released.")).toBeInTheDocument();
+      expect(screen.getAllByText("Work approved and payment released.").length).toBeGreaterThanOrEqual(1);
+    });
+    await waitFor(() => {
+      expect(screen.getByText("Celebration Time!")).toBeInTheDocument();
     });
   });
 
@@ -173,14 +193,14 @@ describe("Job detail page integration", () => {
     renderJobPage();
 
     const cancelButton = await screen.findByRole("button", { name: "Cancel Job" });
-    await user.click(cancelButton);
+    fireEvent.click(cancelButton);
 
-    const confirmButton = await screen.findByRole("button", { name: "Yes, cancel job" });
-    await user.click(confirmButton);
+    const confirmButton = await screen.findByRole("button", { name: "Confirm cancel" });
+    fireEvent.click(confirmButton);
 
     expect(contract.cancelJob).toHaveBeenCalledWith("GCLIENT", "1");
     await waitFor(() => {
-      expect(screen.getByText("Job cancelled and funds refunded.")).toBeInTheDocument();
+      expect(screen.getAllByText("Job cancelled and funds refunded.").length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -195,14 +215,14 @@ describe("Job detail page integration", () => {
     renderJobPage();
 
     const cancelButton = await screen.findByRole("button", { name: "Cancel Job" });
-    await user.click(cancelButton);
+    fireEvent.click(cancelButton);
 
-    const confirmButton = await screen.findByRole("button", { name: "Yes, cancel job" });
-    await user.click(confirmButton);
+    const confirmButton = await screen.findByRole("button", { name: "Confirm cancel" });
+    fireEvent.click(confirmButton);
 
     expect(contract.cancelJob).toHaveBeenCalledWith("GCLIENT", "1");
     await waitFor(() => {
-      expect(screen.getByText("Cancel failed")).toBeInTheDocument();
+      expect(screen.getAllByText("Cancel failed").length).toBeGreaterThanOrEqual(1);
     });
   });
 });

@@ -8,6 +8,7 @@ export function toXlm(stroops: string | number | bigint): string {
   const whole = roundedCents / 100n;
   const fraction = roundedCents % 100n;
   const formatter = new Intl.NumberFormat(undefined, {
+    useGrouping: true,
     maximumFractionDigits: 0,
   });
   const wholeFormatted = formatter.format(whole);
@@ -180,6 +181,21 @@ export interface DeadlineCountdown {
   urgency: "low" | "medium" | "high" | "expired";
 }
 
+/**
+ * Format a Date with timezone abbreviation using Intl.DateTimeFormat.
+ * Shows the user's local timezone so UTC timestamps are not ambiguous.
+ */
+function formatDateWithTimezone(date: Date): string {
+  return new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).format(date);
+}
+
 export function formatDeadline(deadline: string): DeadlineDisplay | null {
   if (deadline === "0") return null;
 
@@ -188,7 +204,7 @@ export function formatDeadline(deadline: string): DeadlineDisplay | null {
 
   const deltaMs = deadlineDate.getTime() - Date.now();
   return {
-    exact: deadlineDate.toLocaleString(),
+    exact: formatDateWithTimezone(deadlineDate),
     relative: formatRelativeInterval(deltaMs),
     isPast: deltaMs < 0,
   };
@@ -208,7 +224,7 @@ export function getDeadlineCountdown(deadline: string, now = Date.now()): Deadli
 
   if (diffMs <= 0) {
     return {
-      exact: deadlineDate.toLocaleString(),
+      exact: formatDateWithTimezone(deadlineDate),
       days: 0,
       hours: 0,
       minutes: 0,
@@ -233,7 +249,7 @@ export function getDeadlineCountdown(deadline: string, now = Date.now()): Deadli
       : "low";
 
   return {
-    exact: deadlineDate.toLocaleString(),
+    exact: formatDateWithTimezone(deadlineDate),
     days,
     hours,
     minutes,
@@ -243,3 +259,40 @@ export function getDeadlineCountdown(deadline: string, now = Date.now()): Deadli
     urgency,
   };
 }
+
+/** Formats elapsed duration between job creation and completion. */
+export function formatJobDuration(
+  createdAt?: string | number | null,
+  completedAt: string | number = Date.now() / 1000,
+): string {
+  if (!createdAt) return "N/A";
+  const startSec = typeof createdAt === "string" ? Number(createdAt) : createdAt;
+  const endSec = typeof completedAt === "string" ? Number(completedAt) : completedAt;
+
+  if (!startSec || Number.isNaN(startSec) || Number.isNaN(endSec)) {
+    return "N/A";
+  }
+
+  // Normalize seconds to ms if under 1e11 (Stellar ledger timestamps are in seconds)
+  const startMs = startSec > 1e11 ? startSec : startSec * 1000;
+  const endMs = endSec > 1e11 ? endSec : endSec * 1000;
+
+  const diffMs = Math.max(0, endMs - startMs);
+  const totalMinutes = Math.floor(diffMs / 60000);
+  const totalHours = Math.floor(totalMinutes / 60);
+  const days = Math.floor(totalHours / 24);
+  const hours = totalHours % 24;
+  const minutes = totalMinutes % 60;
+
+  if (days > 0) {
+    return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+  }
+  if (hours > 0) {
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m`;
+  }
+  return "< 1m";
+}
+

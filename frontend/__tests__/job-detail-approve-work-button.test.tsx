@@ -23,6 +23,11 @@ vi.mock("@/lib/contract", () => ({
   freelancerCancelJob: vi.fn(),
   getDescriptionCid: vi.fn(),
   storeDescriptionCid: vi.fn(),
+  getJobViews: vi.fn().mockResolvedValue(0),
+  recordJobView: vi.fn().mockResolvedValue(undefined),
+  rateJob: vi.fn(),
+  topUpEscrow: vi.fn(),
+  getJobCount: vi.fn().mockResolvedValue(0),
 }));
 
 vi.mock("@/lib/ipfs-service", () => ({

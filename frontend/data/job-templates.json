@@ -1,0 +1,26 @@
+[
+  {
+    "id": "web-dev-frontend",
+    "title": "Frontend Web Developer (React/Next.js)",
+    "category": "development",
+    "amountMin": "200",
+    "amountMax": "1200",
+    "description": "Build responsive React/Next.js pages from Figma designs. Deliver pixel-perfect components, accessibility, and tests. Familiarity with TailwindCSS and TypeScript preferred. Estimate: 1-3 weeks depending on scope."
+  },
+  {
+    "id": "uiux-design",
+    "title": "UI/UX Designer",
+    "category": "design",
+    "amountMin": "150",
+    "amountMax": "800",
+    "description": "Design high-fidelity UI mockups and interactive prototypes. Deliver Figma files, style guide, and design handoff. Experience with responsive and accessible design required."
+  },
+  {
+    "id": "smart-contract-audit",
+    "title": "Smart Contract Audit (Stellar/Smart-Contract)",
+    "category": "security",
+    "amountMin": "500",
+    "amountMax": "3000",
+    "description": "Perform a security audit of a Stellar smart contract, including threat modeling, automated analysis, and manual review. Provide a written report with severity-ranked findings and remediation guidance."
+  }
+]
