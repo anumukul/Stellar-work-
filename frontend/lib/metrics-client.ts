@@ -1,10 +1,6 @@
 "use client";
 
-/**
- * Browser-side buffer that ships samples to /api/metrics, where they are turned
- * into Prometheus series. Failures are swallowed: telemetry must never break a
- * user flow.
- */
+
 
 const ENDPOINT = "/api/metrics";
 /** Samples are batched to avoid a request per web vital. */
