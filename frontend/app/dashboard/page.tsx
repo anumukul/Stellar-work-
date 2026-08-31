@@ -16,13 +16,20 @@ import {
   getJobStatusCounts,
   submitWork,
   enforceDeadline,
+  rateJob,
+  extendDeadline,
 } from "@/lib/contract";
 import ConfirmDialog from "@/components/ConfirmDialog";
+import JobCelebrationModal from "@/components/JobCelebrationModal";
 import EmptyState from "@/components/EmptyState";
 import ErrorBanner from "@/components/ErrorBanner";
 import ExportButton from "@/components/ExportButton";
 import InfoTooltip from "@/components/InfoTooltip";
-import JobCardSkeleton from "@/components/JobCardSkeleton";
+import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
+import { SortableContext, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable';
+import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
+import JobCard from '@/components/JobCard';
+import { useJobOrder } from '@/lib/hooks/useJobOrder';
 import NoResultsState from "@/components/NoResultsState";
 import PullToRefresh from "@/components/PullToRefresh";
 import SectionCard from "@/components/SectionCard";
@@ -38,8 +45,12 @@ import { isConfirmSuppressed, CONFIRM_KEYS } from "@/lib/confirm-prefs";
 import { useWallet } from "@/lib/wallet-context";
 import type { Job, JobStatus, NotificationEvent, JobStatusCounts } from "@/lib/types";
 import { STATUS_TO_COUNTS_KEY } from "@/lib/types";
-import { useEffect, useState, useCallback, useRef, type KeyboardEvent } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo, type KeyboardEvent } from "react";
+import { buildActiveFreelancerJobCountMap } from "@/lib/availability";
+import AvailabilityIndicator from "@/components/AvailabilityIndicator";
 
+export type PendingDashAction = {
+  type: "cancelJob" | "approveWork" | "submitWork" | "freelancerCancelJob";
 type PendingDashAction = {
   type: "cancelJob" | "approveWork" | "submitWork" | "freelancerCancelJob" | "enforceDeadline";
   jobId: number;
@@ -120,6 +131,11 @@ export default function DashboardPage() {
   const [selectedJobIds, setSelectedJobIds] = useState<Set<number>>(new Set());
   const [showBulkConfirm, setShowBulkConfirm] = useState(false);
   const [bulkCancelProgress, setBulkCancelProgress] = useState<{ done: number; total: number; failed: number[] } | null>(null);
+  const [celebratingJob, setCelebratingJob] = useState<{ id: number; job?: Job } | null>(null);
+  const [showExtendModal, setShowExtendModal] = useState(false);
+  const [extendDate, setExtendDate] = useState("");
+  const [extendConsent, setExtendConsent] = useState("");
+  const [bulkExtendProgress, setBulkExtendProgress] = useState<{ done: number; total: number; failed: number[] } | null>(null);
   const bookmarkedIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const filterOptions: Array<JobStatus | "All" | "Active"> = ["All", ...STATUS_OPTIONS];
   const filterButtonRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -291,6 +307,7 @@ export default function DashboardPage() {
         jobId,
         { event: "work_approved", message: `Work for Job #${jobId} was approved and payment released.` },
       );
+      setCelebratingJob({ id: jobId, job: allJobs.find((j) => j.id === jobId)?.job });
     } else if (type === "submitWork") {
       await handleAction(
         () => submitWork(wallet, String(jobId)),
@@ -345,6 +362,7 @@ export default function DashboardPage() {
             jobId,
             { event: "work_approved", message: `Work for Job #${jobId} was approved and payment released.` },
           );
+          setCelebratingJob({ id: jobId, job: allJobs.find((j) => j.id === jobId)?.job });
         } else if (type === "submitWork") {
           await handleAction(
             () => submitWork(wallet, String(jobId)),
@@ -416,6 +434,30 @@ export default function DashboardPage() {
     }
   }, [wallet, selectedJobIds, fetchJobs, showSuccess, showError]);
 
+  const handleBulkExtend = useCallback(async (newDeadlineTimestamp: string, freelancerConsent?: string) => {
+    if (!wallet || selectedJobIds.size === 0) return;
+    setShowExtendModal(false);
+    const ids = Array.from(selectedJobIds);
+    setBulkExtendProgress({ done: 0, total: ids.length, failed: [] });
+    const failed: number[] = [];
+    for (const id of ids) {
+      try {
+        await extendDeadline(wallet, String(id), newDeadlineTimestamp, freelancerConsent || undefined);
+      } catch {
+        failed.push(id);
+      }
+      setBulkExtendProgress((prev) => (prev ? { ...prev, done: prev.done + 1, failed } : null));
+    }
+    setBulkExtendProgress(null);
+    setSelectedJobIds(new Set());
+    await fetchJobs();
+    if (failed.length === 0) {
+      showSuccess(`${ids.length} job${ids.length > 1 ? "s" : ""} updated with new deadline.`);
+    } else {
+      showError(`${ids.length - failed.length} updated; ${failed.length} failed (Job${failed.length > 1 ? "s" : ""} #${failed.join(", #")}).`);
+    }
+  }, [wallet, selectedJobIds, fetchJobs, showSuccess, showError]);
+
   const postedJobs = allJobs.filter((j) => j.job.client === wallet);
   const acceptedJobs = allJobs.filter((j) => j.job.freelancer === wallet);
 
@@ -431,6 +473,18 @@ export default function DashboardPage() {
 
   const filteredPosted = filterJobs(postedJobs);
   const filteredAccepted = filterJobs(acceptedJobs);
+  const activeFreelancerJobCounts = useMemo(
+    () => buildActiveFreelancerJobCountMap(allJobs),
+    [allJobs],
+  );
+
+  const { orderedJobs: orderedPosted, setOrder: setPostedOrder, resetOrder: resetPostedOrder } = useJobOrder(filteredPosted, wallet, "posted");
+  const { orderedJobs: orderedAccepted, setOrder: setAcceptedOrder, resetOrder: resetAcceptedOrder } = useJobOrder(filteredAccepted, wallet, "accepted");
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
 
   const handleFilterKeyDown = (
     event: KeyboardEvent<HTMLButtonElement>,
@@ -474,7 +528,15 @@ export default function DashboardPage() {
 
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Dashboard</h1>
-        <ExportButton jobs={allJobs} wallet={wallet} />
+        <div className="flex gap-2 items-center">
+          <button
+            onClick={() => { resetPostedOrder(); resetAcceptedOrder(); }}
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+          >
+            Reset order
+          </button>
+          <ExportButton jobs={allJobs} wallet={wallet} />
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-4 sm:max-w-md">
@@ -594,6 +656,60 @@ export default function DashboardPage() {
 
       {!loading && (
         <>
+          <DndContext sensors={sensors} collisionDetection={closestCenter}>
+            <JobSection
+              title="Posted Jobs"
+              subtitle="Jobs you created as a client"
+              allJobs={postedJobs}
+              jobs={orderedPosted}
+              filterActive={statusFilter !== "All"}
+              wallet={wallet}
+              role="client"
+              actionLoading={actionLoading}
+              onAction={handleAction}
+              onRequestAction={requestDashAction}
+              onClearFilter={() => setStatusFilter("All")}
+              selectedJobs={selectedJobs}
+              onToggleSelect={(id: number) => {
+                const job = postedJobs.find(j => j.id === id);
+                if (!job) return;
+                if (job.job.status === "SubmittedForReview") {
+                  setSelectedJobs((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(id)) next.delete(id);
+                    else next.add(id);
+                    return next;
+                  });
+                } else if (job.job.status === "Open") {
+                  handleToggleSelect(id);
+                }
+              }}
+              onBatchApprove={handleBatchApprove}
+              batchLoading={batchLoading}
+              selectedJobIds={selectedJobIds}
+              onSelectAll={handleSelectAllOpen}
+              onDeselectAll={handleDeselectAll}
+              onBulkCancel={() => setShowBulkConfirm(true)}
+              bulkCancelProgress={bulkCancelProgress}
+              orderedIds={orderedPosted.map((j) => j.id)}
+              setOrder={setPostedOrder}
+            />
+            <JobSection
+              title="Accepted Jobs"
+              subtitle="Jobs you accepted as a freelancer"
+              allJobs={acceptedJobs}
+              jobs={orderedAccepted}
+              filterActive={statusFilter !== "All"}
+              wallet={wallet}
+              role="freelancer"
+              actionLoading={actionLoading}
+              onAction={handleAction}
+              onRequestAction={requestDashAction}
+              onClearFilter={() => setStatusFilter("All")}
+              orderedIds={orderedAccepted.map((j) => j.id)}
+              setOrder={setAcceptedOrder}
+            />
+          </DndContext>
           <JobSection
             title="Posted Jobs"
             subtitle="Jobs you created as a client"
@@ -606,6 +722,7 @@ export default function DashboardPage() {
             onAction={handleAction}
             onRequestAction={requestDashAction}
             onClearFilter={() => setStatusFilter("All")}
+            activeFreelancerJobCounts={activeFreelancerJobCounts}
             selectedJobs={selectedJobs}
             onToggleBatchSelect={(id) => {
               setSelectedJobs((prev) => {
@@ -622,7 +739,9 @@ export default function DashboardPage() {
             onSelectAll={handleSelectAllOpen}
             onDeselectAll={handleDeselectAll}
             onBulkCancel={() => setShowBulkConfirm(true)}
+            onBulkExtend={() => setShowExtendModal(true)}
             bulkCancelProgress={bulkCancelProgress}
+            bulkExtendProgress={bulkExtendProgress}
           />
           <JobSection
             title="Accepted Jobs"
@@ -747,6 +866,50 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {showExtendModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl ring-1 ring-black/5">
+            <h2 className="text-base font-semibold text-slate-900">Extend deadline for {selectedJobIds.size} job(s)</h2>
+            <p className="mt-1 text-sm text-slate-600">Provide a new deadline for the selected jobs. Deadlines must be a future timestamp.</p>
+            <div className="mt-4 grid gap-2">
+              <label className="text-xs text-slate-600">New deadline</label>
+              <input
+                type="datetime-local"
+                value={extendDate}
+                onChange={(e) => setExtendDate(e.target.value)}
+                className="w-full rounded-md border border-slate-300 px-2 py-1 text-sm"
+              />
+              <label className="text-xs text-slate-600">Freelancer consent (optional)</label>
+              <input
+                type="text"
+                placeholder="Freelancer address (optional)"
+                value={extendConsent}
+                onChange={(e) => setExtendConsent(e.target.value)}
+                className="w-full rounded-md border border-slate-300 px-2 py-1 text-sm"
+              />
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                className="rounded-lg px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 transition-colors"
+                onClick={() => setShowExtendModal(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
+                onClick={() => {
+                  if (!extendDate) return;
+                  const ts = Math.floor(new Date(extendDate).getTime() / 1000);
+                  void handleBulkExtend(String(ts), extendConsent || undefined);
+                }}
+              >
+                Extend {selectedJobIds.size} jobs
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {pendingAction !== null && (() => {
         const { type, jobId, amountXlm } = pendingAction;
         const configs = {
@@ -805,12 +968,31 @@ export default function DashboardPage() {
           />
         );
       })()}
+
+      {/* Celebration modal on approval */}
+      {celebratingJob && (
+        <JobCelebrationModal
+          isOpen={celebratingJob !== null}
+          onClose={() => setCelebratingJob(null)}
+          jobId={celebratingJob.id}
+          jobTitle={celebratingJob.job?.title || `Job #${celebratingJob.id}`}
+          amount={celebratingJob.job?.amount}
+          createdAt={celebratingJob.job?.created_at}
+          completedAt={Date.now() / 1000}
+          isClient={true}
+          onRate={async (score) => {
+            if (wallet) {
+              await rateJob(wallet, String(celebratingJob.id), score);
+            }
+          }}
+        />
+      )}
     </section>
     </DashboardWidgets>
   );
 }
 
-function JobSection({
+export function JobSection({
   title,
   subtitle,
   allJobs,
@@ -832,6 +1014,9 @@ function JobSection({
   onDeselectAll,
   onBulkCancel,
   bulkCancelProgress,
+  orderedIds,
+  setOrder,
+  activeFreelancerJobCounts,
 }: {
   title: string;
   subtitle: string;
@@ -854,7 +1039,11 @@ function JobSection({
   onSelectAll?: () => void;
   onDeselectAll?: () => void;
   onBulkCancel?: () => void;
+  onBulkExtend?: () => void;
   bulkCancelProgress?: { done: number; total: number; failed: number[] } | null;
+  orderedIds?: number[];
+  setOrder?: (ids: number[]) => void;
+  activeFreelancerJobCounts?: Map<string, number>;
 }) {
   const pendingReviewIds = allJobs
     .filter((j) => j.job.status === "SubmittedForReview")
@@ -864,6 +1053,36 @@ function JobSection({
   const selectionCount = openClientJobs.filter((j) => selectedJobIds.has(j.id)).length;
   const allOpenSelected =
     openClientJobs.length > 0 && openClientJobs.every((j) => selectedJobIds.has(j.id));
+
+  const handleDragEnd = (event: any) => {
+    const { active, over } = event;
+    if (!over || !orderedIds || !setOrder) return;
+    if (active.id !== over.id) {
+      const oldIndex = orderedIds.indexOf(active.id);
+      const newIndex = orderedIds.indexOf(over.id);
+      setOrder(arrayMove(orderedIds, oldIndex, newIndex));
+    }
+  };
+
+  const renderList = (items: Array<{ id: number; job: Job }>) => (
+    <ul className="grid list-none gap-4 sm:grid-cols-2" aria-label={title}>
+      {items.map(({ id, job }) => (
+        <li key={id}>
+          <JobCard
+            id={id}
+            job={job}
+            wallet={wallet}
+            role={role}
+            isLoading={actionLoading === id}
+            onAction={onAction}
+            onRequestAction={onRequestAction}
+            isSelected={role === "client" && job.status === "Open" ? selectedJobIds.has(id) : selectedJobs?.has(id) ?? false}
+            onToggleSelect={role === "client" ? onToggleSelect : undefined}
+          />
+        </li>
+      ))}
+    </ul>
+  );
 
   return (
     <div>
@@ -897,6 +1116,19 @@ function JobSection({
               >
                 {allOpenSelected ? "Deselect all" : "Select all open"}
               </button>
+              {selectionCount >= 1 && (
+                <>
+                  <button
+                    type="button"
+                    disabled={!!bulkExtendProgress}
+                    className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-60 transition-colors"
+                    onClick={onBulkExtend}
+                  >
+                    {bulkExtendProgress ? `Extending... ${bulkExtendProgress.done}/${bulkExtendProgress.total}` : `Extend selected (${selectionCount})`}
+                  </button>
+                  
+                </>
+              )}
               {selectionCount >= 2 && (
                 <button
                   type="button"
@@ -927,6 +1159,15 @@ function JobSection({
           <EmptyState title="No jobs yet" description="No jobs match this filter yet." />
         )
       ) : (
+        orderedIds && setOrder ? (
+          <DndContext collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <SortableContext items={orderedIds} strategy={verticalListSortingStrategy}>
+              {renderList(jobs)}
+            </SortableContext>
+          </DndContext>
+        ) : (
+          renderList(jobs)
+        )
         <ul className="grid list-none gap-4 sm:grid-cols-2" aria-label={title}>
           {jobs.map(({ id, job }) => {
             const canBulkCancel = job.status === "Open" && role === "client";
@@ -956,6 +1197,11 @@ function JobSection({
                   isSelected={isSelected}
                   onToggleSelect={toggle}
                   selectMode={canBulkCancel ? "cancel" : canBatchApprove ? "approve" : undefined}
+                  freelancerActiveJobCount={
+                    job.freelancer
+                      ? activeFreelancerJobCounts?.get(job.freelancer) ?? 0
+                      : 0
+                  }
                 />
               </li>
             );
@@ -977,6 +1223,7 @@ function JobCard({
   isSelected = false,
   onToggleSelect,
   selectMode,
+  freelancerActiveJobCount = 0,
 }: {
   id: number;
   job: Job;
@@ -988,6 +1235,7 @@ function JobCard({
   isSelected?: boolean;
   onToggleSelect?: (id: number) => void;
   selectMode?: "cancel" | "approve";
+  freelancerActiveJobCount?: number;
 }) {
   const actions = getActions(id, job, wallet, role);
   const amountXlm = `${toXlm(job.amount)} XLM`;
@@ -1051,8 +1299,14 @@ function JobCard({
           })()}
         </p>
         {role === "client" && job.freelancer && (
-          <p className="truncate">
-            Freelancer: <TruncatedAddress address={job.freelancer} />
+          <p className="flex flex-wrap items-center gap-2 truncate">
+            <span>Freelancer:</span>
+            <TruncatedAddress address={job.freelancer} />
+            <AvailabilityIndicator
+              address={job.freelancer}
+              activeJobCount={freelancerActiveJobCount}
+              showLabel={true}
+            />
           </p>
         )}
         {role === "freelancer" && (
@@ -1108,7 +1362,7 @@ type Action = {
   notification?: { event: NotificationEvent; message: string };
 };
 
-function getActions(
+export function getActions(
   id: number,
   job: Job,
   wallet: string,

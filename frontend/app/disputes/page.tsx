@@ -5,6 +5,7 @@ import { useModalFocusTrap } from "@/lib/modal";
 import { useWallet } from "@/lib/wallet-context";
 import { useToast } from "@/components/ToastProvider";
 import ConfirmDialog from "@/components/ConfirmDialog";
+import ContractRetryBanner from "@/components/ContractRetryBanner";
 import EmptyState from "@/components/EmptyState";
 import NoResultsState from "@/components/NoResultsState";
 import SectionCard from "@/components/SectionCard";
@@ -12,6 +13,7 @@ import Spinner from "@/components/Spinner";
 import { toXlm } from "@/lib/format";
 import { isConfirmSuppressed, CONFIRM_KEYS } from "@/lib/confirm-prefs";
 import { raiseDispute as contractRaiseDispute, resolveDispute as contractResolveDispute } from "@/lib/contract";
+import { retryQueuedWrites } from "@/lib/stellar";
 import {
   loadDisputesPageData,
   type Dispute,
@@ -658,6 +660,18 @@ export default function DisputesPage() {
             )}
           </div>
         </div>
+
+        <ContractRetryBanner
+          onRetryQueue={async () => {
+            const { succeeded, failed } = await retryQueuedWrites();
+            if (succeeded > 0) {
+              showSuccess(`Retried ${succeeded} queued write${succeeded === 1 ? "" : "s"}.`);
+            }
+            if (failed > 0) {
+              showError(`${failed} queued write${failed === 1 ? "" : "s"} still failed.`);
+            }
+          }}
+        />
 
         {/* Filter tabs */}
         <div className="mb-5 flex gap-1 rounded-xl border border-slate-200 bg-white p-1 w-fit">

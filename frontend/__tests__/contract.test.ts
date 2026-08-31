@@ -31,6 +31,7 @@ import {
   acceptJob,
   submitWork,
   approveWork,
+  rateJob,
   cancelJob,
   enforceDeadline,
   extendJobTtl,
@@ -161,6 +162,16 @@ describe("contract interaction wrappers", () => {
       expect(mockCallContract).toHaveBeenCalledWith(
         CONTRACT_ID,
         "approve_work",
+        expect.any(Array),
+      );
+    });
+
+    it("rateJob calls rate_job", async () => {
+      mockCallContract.mockResolvedValue({ status: "SUCCESS" });
+      await rateJob("GCLIENT", "1", 5);
+      expect(mockCallContract).toHaveBeenCalledWith(
+        CONTRACT_ID,
+        "rate_job",
         expect.any(Array),
       );
     });
@@ -332,6 +343,7 @@ describe("contract interaction wrappers", () => {
       ["acceptJob", () => acceptJob("GFREELANCER", "1")],
       ["submitWork", () => submitWork("GFREELANCER", "1")],
       ["approveWork", () => approveWork("GCLIENT", "1")],
+      ["rateJob", () => rateJob("GCLIENT", "1", 5)],
       ["cancelJob", () => cancelJob("GCLIENT", "1")],
       ["enforceDeadline", () => enforceDeadline("GCLIENT", "1")],
       ["extendJobTtl", () => extendJobTtl("GCLIENT", "1")],
@@ -366,6 +378,7 @@ describe("contract calls without NEXT_PUBLIC_CONTRACT_ID", () => {
     ["acceptJob", () => acceptJob("GFREELANCER", "1")],
     ["submitWork", () => submitWork("GFREELANCER", "1")],
     ["approveWork", () => approveWork("GCLIENT", "1")],
+    ["rateJob", () => rateJob("GCLIENT", "1", 5)],
     ["cancelJob", () => cancelJob("GCLIENT", "1")],
     ["enforceDeadline", () => enforceDeadline("GCLIENT", "1")],
     ["extendJobTtl", () => extendJobTtl("GCLIENT", "1")],

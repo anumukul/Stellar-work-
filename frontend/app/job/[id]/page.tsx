@@ -2,28 +2,37 @@
 
 import CancelJobConfirmModal from "@/components/CancelJobConfirmModal";
 import ConfirmDialog from "@/components/ConfirmDialog";
+import JobCelebrationModal from "@/components/JobCelebrationModal";
+import AvailabilityIndicator from "@/components/AvailabilityIndicator";
+import ContractRetryBanner from "@/components/ContractRetryBanner";
 import DeadlineCountdown from "@/components/DeadlineCountdown";
 import InfoTooltip from "@/components/InfoTooltip";
 import { useToast } from "@/components/ToastProvider";
 import StatusPill from "@/components/StatusPill";
+import JobStatusTimeline from "@/components/JobStatusTimeline";
 import ShareButton from "@/components/ShareButton";
+import ClientReputationBadge from "@/components/ClientReputationBadge";
 import dynamic from "next/dynamic";
 import { isRichText, PlainTextRenderer } from "@/lib/rich-text";
 import TruncatedAddress from "@/components/TruncatedAddress";
-import { verifyHtmlMatchesHash } from "@/lib/crypto";
+ 
 import { useNotifications } from "@/lib/notifications-context";
 import {
   acceptJob,
   approveWork,
+  rateJob,
   cancelJob,
   freelancerCancelJob,
   getDescriptionCid,
   getJob,
   getJobViews,
   recordJobView,
+  storeDescriptionCid,
   submitWork,
   topUpEscrow,
 } from "@/lib/contract";
+import { uploadToIpfs } from "@/lib/ipfs-service";
+import { sha256Hex, htmlToPlainText, verifyHtmlMatchesHash } from "@/lib/crypto";
 import { fetchFromIpfs } from "@/lib/ipfs-service";
 import { sanitizeMeetingTitle } from "@/lib/sanitize";
 import {
@@ -43,15 +52,18 @@ import {
   type FiatCurrency,
   type XlmFiatRateCache,
 } from "@/lib/format";
-import { getExplorerTxUrl, parseContractError, getNativeBalance } from "@/lib/stellar";
+import { getExplorerTxUrl, parseContractError, getNativeBalance, retryQueuedWrites } from "@/lib/stellar";
 import { isConfirmSuppressed, CONFIRM_KEYS } from "@/lib/confirm-prefs";
 import type { Job } from "@/lib/types";
 import { useWallet } from "@/lib/wallet-context";
 import { useMeetings } from "@/lib/meetings-context";
+import CertificateDownloadButton from "@/components/CertificateDownloadButton";
+import { buildCertificateData } from "@/lib/certificate-pdf";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
 import JobDetailPageSkeleton from "@/components/JobDetailPageSkeleton";
+import { useJobSubscription } from "@/lib/useJobSubscription";
 
 const RichTextRenderer = dynamic(
   () => import("@/components/RichTextRenderer"),
@@ -142,6 +154,10 @@ function JobDetailPageContent() {
   const [fiatRates, setFiatRates] = useState<XlmFiatRateCache | null>(null);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isBookmarked, setIsBookmarked] = useState(false);
+  const [showAcceptModal, setShowAcceptModal] = useState(false);
+  const [coverText, setCoverText] = useState("");
+  const [coverPreview, setCoverPreview] = useState(false);
+  const COVER_CHAR_LIMIT = 2000;
   const [bookmarkAnimating, setBookmarkAnimating] = useState(false);
   const [statusAnnouncement, setStatusAnnouncement] = useState("");
   const [viewCount, setViewCount] = useState(0);
@@ -154,10 +170,28 @@ function JobDetailPageContent() {
   const [showTopUpForm, setShowTopUpForm] = useState(false);
   const [topUpAmountXlm, setTopUpAmountXlm] = useState("");
   const [topUpStroops, setTopUpStroops] = useState<string | null>(null);
+  const [showCelebrationModal, setShowCelebrationModal] = useState(false);
+  const lastActionRef = useRef<{
+    action: () => Promise<{ hash?: string }>;
+    successMessage: string;
+    notification?: {
+      event: import("@/lib/types").NotificationEvent;
+      message: string;
+    };
+  } | null>(null);
+
+  // Translation state
+  const [translatedDescription, setTranslatedDescription] = useState<string | null>(null);
+  const [translating, setTranslating] = useState(false);
+  const [translateTarget, setTranslateTarget] = useState("en");
 
   const numericId = Number(id);
   const isIdValid =
     !isNaN(numericId) && numericId > 0 && Number.isInteger(numericId);
+
+  const { status: streamStatus } = useJobSubscription(isIdValid ? id : undefined, () => {
+    void load();
+  });
 
   async function load() {
     if (!isIdValid) {
@@ -213,9 +247,22 @@ function JobDetailPageContent() {
     }
   }
 
-  useEffect(() => {
+useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  // Refetch job data when the page becomes visible (e.g., after using browser back button)
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        void load();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, [id]);
 
   useEffect(() => {
@@ -268,13 +315,20 @@ function JobDetailPageContent() {
     if (!id || !isIdValid) return;
     let cancelled = false;
 
-    getJobViews(id)
-      .then((count) => {
-        if (!cancelled) setViewCount(count);
-      })
-      .catch(() => {});
+    if (typeof getJobViews === "function") {
+      getJobViews(id)
+        .then((count) => {
+          if (!cancelled) setViewCount(count);
+        })
+        .catch(() => {});
+    }
 
-    if (wallet && !hasViewedToday(id, wallet) && !hasViewedThisSession(id)) {
+    if (
+      wallet &&
+      !hasViewedToday(id, wallet) &&
+      !hasViewedThisSession(id) &&
+      typeof recordJobView === "function"
+    ) {
       recordJobView(wallet, id)
         .then(() => {
           markViewed(id, wallet);
@@ -307,6 +361,8 @@ function JobDetailPageContent() {
         job.status === "InProgress" ||
         job.status === "SubmittedForReview"),
   );
+  /** Freelancer may download a certificate once the job is Completed. */
+  const canDownloadCertificate = Boolean(isFreelancer && job?.status === "Completed");
   const hasPrimaryActions = !wallet
     ? Boolean(job && ["Open", "InProgress", "SubmittedForReview"].includes(job.status))
     : canAccept ||
@@ -332,6 +388,7 @@ function JobDetailPageContent() {
     }
 
     setLoading(true);
+    lastActionRef.current = { action, successMessage, notification };
 
     try {
       const result = await action();
@@ -401,6 +458,7 @@ function JobDetailPageContent() {
             message: `Work for Job #${id} was approved and payment released.`,
           },
         );
+        setShowCelebrationModal(true);
         break;
       case "submitWork":
         await handleAction(
@@ -668,7 +726,39 @@ function JobDetailPageContent() {
             {job.category}
           </span>
         )}
+        {(() => {
+          const descText = description ?? localStorage.getItem(`job-desc:${job.description_hash}`) ?? "";
+          const langMatch = descText.match(/<!--\s*stellarwork-language:\s*([a-z]{2})\s*-->/);
+          const lang = langMatch ? langMatch[1] : null;
+          return lang ? (
+            <span
+              className="rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700 uppercase"
+              title={`Language: ${lang}`}
+            >
+              {lang}
+            </span>
+          ) : null;
+        })()}
       </div>
+
+      <ContractRetryBanner
+        onManualRetry={() => {
+          const last = lastActionRef.current;
+          if (last) {
+            void handleAction(last.action, last.successMessage, last.notification);
+          }
+        }}
+        onRetryQueue={async () => {
+          const { succeeded, failed } = await retryQueuedWrites();
+          if (succeeded > 0) {
+            showSuccess(`Retried ${succeeded} queued write${succeeded === 1 ? "" : "s"}.`);
+            await load();
+          }
+          if (failed > 0) {
+            showError(`${failed} queued write${failed === 1 ? "" : "s"} still failed.`);
+          }
+        }}
+      />
 
       {error && (
         <p
@@ -733,11 +823,51 @@ function JobDetailPageContent() {
           );
         })()}
 
+      <div className="rounded-lg border border-slate-200 bg-white p-5 mb-6">
+        <h3 className="text-lg font-medium text-slate-800 mb-4">Job Progress</h3>
+        <JobStatusTimeline job={job} />
+      </div>
+
       <article className="space-y-2 rounded-lg border border-slate-200 bg-white p-5 text-sm">
         <div className="flex items-center justify-between gap-2">
           <p>
-            <strong>Status:</strong> <StatusPill status={job.status} />
+            <strong>Status:</strong> <StatusPill status={job.status} isLoading={loading} />
           </p>
+          <div className="flex items-center gap-3">
+            <p>
+              <strong>Status:</strong> <StatusPill status={job.status} />
+            </p>
+            <div className="flex items-center gap-1.5 text-xs font-medium">
+              <span className="relative flex h-2 w-2">
+                {streamStatus === "connected" && (
+                  <>
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </>
+                )}
+                {streamStatus === "connecting" && (
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-400"></span>
+                )}
+                {streamStatus === "fallback-polling" && (
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-400"></span>
+                )}
+                {streamStatus === "disconnected" && (
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-slate-400"></span>
+                )}
+              </span>
+              <span className={
+                streamStatus === "connected" ? "text-emerald-700" :
+                streamStatus === "connecting" ? "text-amber-700" :
+                streamStatus === "fallback-polling" ? "text-blue-700" :
+                "text-slate-500"
+              }>
+                {streamStatus === "connected" ? "Live" :
+                 streamStatus === "connecting" ? "Connecting..." :
+                 streamStatus === "fallback-polling" ? "Polling" :
+                 "Disconnected"}
+              </span>
+            </div>
+          </div>
           <span className="inline-flex items-center gap-1 text-slate-500" title={`${viewCount} people viewed this job`}>
             <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
@@ -755,6 +885,18 @@ function JobDetailPageContent() {
                 fiatRates?.rates,
               )}
             />
+            {job.status === "Completed" && (
+              <button
+                type="button"
+                onClick={() => setShowCelebrationModal(true)}
+                className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-sm font-medium text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-900/60"
+                title="Celebrate job completion"
+                aria-label="Celebrate job completion"
+                data-testid="celebrate-job-btn"
+              >
+                🎉 Celebrate
+              </button>
+            )}
             <button
               type="button"
               onClick={toggleBookmark}
@@ -770,18 +912,28 @@ function JobDetailPageContent() {
             </button>
           </div>
         </div>
-        <p>
-          <strong>Client:</strong> {job.client}
-        </p>
-        <p>
+        <div className="flex items-center gap-2">
+          <strong>Client:</strong> 
+          <span>{job.client}</span>
+          <ClientReputationBadge clientAddress={job.client} />
+        </div>
+        <p className="flex flex-wrap items-center gap-2">
           <strong>Freelancer:</strong>{" "}
           {job.freelancer ? (
-            <Link
-              href={`/profile/${job.freelancer}`}
-              className="font-mono text-blue-600 hover:underline text-sm"
-            >
-              {job.freelancer}
-            </Link>
+            <>
+              <Link
+                href={`/profile/${job.freelancer}`}
+                className="font-mono text-blue-600 hover:underline text-sm"
+              >
+                {job.freelancer}
+              </Link>
+              <AvailabilityIndicator
+                address={job.freelancer}
+                activeJobCount={
+                  job.status === "InProgress" || job.status === "SubmittedForReview" ? 1 : 0
+                }
+              />
+            </>
           ) : (
             "Not assigned"
           )}
@@ -814,13 +966,114 @@ function JobDetailPageContent() {
                 </span>
               );
             }
-            return isRichText(content) ? (
-              <RichTextRenderer html={content} className="mt-1" />
+            const displayContent = translatedDescription ?? content;
+            return isRichText(displayContent) ? (
+              <RichTextRenderer html={displayContent} className="mt-1" />
             ) : (
-              <PlainTextRenderer text={content} className="mt-1" />
+              <PlainTextRenderer text={displayContent} className="mt-1" />
             );
           })()}
+
+          {/* Translation controls */}
+          {(description ?? localStorage.getItem(`job-desc:${job.description_hash}`)) && (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <select
+                value={translateTarget}
+                onChange={(e) => {
+                  setTranslateTarget(e.target.value);
+                  setTranslatedDescription(null);
+                }}
+                className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700"
+                aria-label="Translate to language"
+              >
+                {Object.entries(SUPPORTED_LANGUAGES).map(([code, label]) => (
+                  <option key={code} value={code}>{label}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                disabled={translating}
+                onClick={async () => {
+                  const raw =
+                    description ??
+                    localStorage.getItem(`job-desc:${job.description_hash}`) ??
+                    "";
+                  const srcLang = extractLanguage(raw) ?? "en";
+                  setTranslating(true);
+                  try {
+                    const { htmlToPlainText } = await import("@/lib/crypto");
+                    const plain = htmlToPlainText(raw);
+                    const translated = await translateText(plain, translateTarget, srcLang);
+                    setTranslatedDescription(translated);
+                  } finally {
+                    setTranslating(false);
+                  }
+                }}
+                className="rounded-md border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+              >
+                {translating ? "Translating…" : "Translate"}
+              </button>
+              {translatedDescription && (
+                <button
+                  type="button"
+                  onClick={() => setTranslatedDescription(null)}
+                  className="text-xs text-slate-500 hover:text-slate-700 underline"
+                >
+                  Show original
+                </button>
+              )}
+            </div>
+          )}
         </div>
+        {/* Cover letter (if accepted with a cover letter and available locally) */}
+        {job.freelancer && (
+          (() => {
+            try {
+              const raw = localStorage.getItem(`job-cover:${id}`);
+              if (!raw) return null;
+              const parsed = JSON.parse(raw) as { hash: string; cid: string; author: string };
+              // Only show cover letter to the client (job owner)
+              if (!wallet || wallet !== job.client) return null;
+              const storedKey = `job-cover-content:${parsed.hash}`;
+              const cached = localStorage.getItem(storedKey);
+              if (cached) {
+                return (
+                  <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+                    <strong>Cover letter from freelancer:</strong>
+                    <div className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{cached}</div>
+                  </div>
+                );
+              }
+              // Fetch from IPFS (or fallback local storage) and verify
+              (async () => {
+                try {
+                  let text: string | null = null;
+                  if (parsed.cid.startsWith("fallback:")) {
+                    const fallbackHash = parsed.cid.replace("fallback:", "");
+                    const val = localStorage.getItem(`job-desc:${fallbackHash}`);
+                    if (val) text = val;
+                  } else {
+                    const fetched = await fetchFromIpfs(parsed.cid);
+                    text = fetched;
+                  }
+                  if (text) {
+                    const ok = await verifyHtmlMatchesHash(text, parsed.hash);
+                    if (ok) {
+                      try { localStorage.setItem(storedKey, text); } catch {}
+                      // trigger re-render
+                      setDescription((d) => d);
+                    }
+                  }
+                } catch (err) {
+                  // ignore
+                }
+              })();
+            } catch {
+              return null;
+            }
+            return null;
+          })()
+        )}
         <div className="flex flex-wrap items-center gap-2">
           <p className="flex items-center gap-2">
             <strong className="inline-flex items-center gap-2">
@@ -1003,15 +1256,15 @@ function JobDetailPageContent() {
                   </div>
                   <button
                     type="button"
-                    disabled={
-                      !meetingTitle || !slotDate || !slotStart || !slotEnd
-                    }
+                    disabled={!meetingTitle.trim() || !slotDate || !slotStart || !slotEnd}
                     onClick={() => {
                       const start = `${slotDate}T${slotStart}:00`;
                       const end = `${slotDate}T${slotEnd}:00`;
+                      const cleanTitle = sanitizeMeetingTitle(meetingTitle);
+                      if (!cleanTitle) return;
                       proposeMeeting(
                         numericId,
-                        meetingTitle,
+                        cleanTitle,
                         [{ start, end }],
                         wallet,
                         otherParty,
@@ -1027,31 +1280,6 @@ function JobDetailPageContent() {
                     Send Proposal
                   </button>
                 </div>
-                <button
-                  type="button"
-                  disabled={!meetingTitle.trim() || !slotDate || !slotStart || !slotEnd}
-                  onClick={() => {
-                    const start = `${slotDate}T${slotStart}:00`;
-                    const end = `${slotDate}T${slotEnd}:00`;
-                    const cleanTitle = sanitizeMeetingTitle(meetingTitle);
-                    if (!cleanTitle) return;
-                    proposeMeeting(
-                      numericId,
-                      cleanTitle,
-                      [{ start, end }],
-                      wallet,
-                      otherParty,
-                    );
-                    setMeetingTitle("");
-                    setSlotDate("");
-                    setSlotStart("");
-                    setSlotEnd("");
-                    setShowScheduleForm(false);
-                  }}
-                  className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Send Proposal
-                </button>
               </div>
             );
           })()}
@@ -1106,9 +1334,54 @@ function JobDetailPageContent() {
         )}
       </article>
 
+      {/* ── Completion Certificate (issue #818) ─────────────────────────────── */}
+      {canDownloadCertificate && (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 p-5 dark:border-emerald-800 dark:bg-emerald-950/40">
+          <div className="flex items-start gap-3">
+            <svg
+              className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600 dark:text-emerald-400"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+              aria-hidden="true"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z"
+              />
+            </svg>
+            <div className="min-w-0 flex-1">
+              <h2 className="text-sm font-semibold text-emerald-800 dark:text-emerald-300">
+                Job Completed — Your Certificate is Ready
+              </h2>
+              <p className="mt-0.5 text-xs text-emerald-700 dark:text-emerald-400">
+                Download a verifiable proof-of-work certificate or share it on
+                LinkedIn and your portfolio.
+              </p>
+              <div className="mt-3">
+                <CertificateDownloadButton
+                  certificateData={buildCertificateData(
+                    {
+                      job_id: numericId,
+                      client: job.client,
+                      freelancer: job.freelancer ?? wallet ?? "",
+                      amount: job.amount,
+                      completed_at: job.submitted_at ?? "0",
+                      metadata_uri: "",
+                    },
+                    { jobTitle: job.title || `Job #${id}` },
+                  )}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {hasPrimaryActions && (
         <>
-          {/* Spacer on mobile to prevent content hiding behind sticky footer */}
           <div className="h-20 sm:hidden" aria-hidden="true" />
 
           <div className="fixed inset-x-0 bottom-0 z-20 border-t border-slate-200 bg-white/95 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 shadow-[0_-6px_24px_rgba(15,23,42,0.08)] backdrop-blur-sm sm:static sm:border-0 sm:bg-transparent sm:px-0 sm:py-0 sm:pb-0 sm:shadow-none sm:backdrop-blur-none">
@@ -1129,14 +1402,7 @@ function JobDetailPageContent() {
                   className="min-w-0 flex-1 rounded-md border border-blue-600 bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-500 sm:flex-none sm:max-w-48 sm:py-2"
                   onClick={() => {
                     if (!wallet) return;
-                    void handleAction(
-                      () => acceptJob(wallet, id),
-                      "Job accepted successfully.",
-                      {
-                        event: "job_accepted",
-                        message: `You accepted Job #${id}.`,
-                      },
-                    );
+                    setShowAcceptModal(true);
                   }}
                   disabled={!wallet || loading}
                   title={
@@ -1151,6 +1417,86 @@ function JobDetailPageContent() {
                   </span>
                 </button>
               )}
+
+                {/* Accept Job modal with optional cover letter */}
+                {showAcceptModal && (
+                  <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40">
+                    <div className="max-w-xl w-full rounded-lg bg-white p-4 shadow-lg">
+                      <h3 className="text-lg font-medium">Accept Job</h3>
+                      <p className="text-sm text-slate-600">Optionally include a short cover letter to introduce yourself to the client. This is optional.</p>
+                      <label className="block text-sm text-slate-700 mt-3">
+                        Cover letter (optional)
+                      </label>
+                      <textarea
+                        value={coverText}
+                        onChange={(e) => setCoverText(e.target.value.slice(0, COVER_CHAR_LIMIT))}
+                        rows={6}
+                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                        placeholder="Write a brief note about why you're a good fit..."
+                      />
+                      <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+                        <div>
+                          <label className="inline-flex items-center gap-2">
+                            <input type="checkbox" checked={coverPreview} onChange={(e) => setCoverPreview(e.target.checked)} /> Preview
+                          </label>
+                        </div>
+                        <div>{coverText.length}/{COVER_CHAR_LIMIT}</div>
+                      </div>
+                      {coverPreview && coverText.trim() && (
+                        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+                          <strong className="text-sm">Preview</strong>
+                          <div className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{coverText}</div>
+                        </div>
+                      )}
+                      <div className="mt-4 flex justify-end gap-2">
+                        <button type="button" className="rounded-md border border-slate-300 px-4 py-2 text-sm" onClick={() => setShowAcceptModal(false)}>Cancel</button>
+                        <button
+                          type="button"
+                          className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                          disabled={loading}
+                          onClick={async () => {
+                            setShowAcceptModal(false);
+                            if (!wallet) return;
+                            setLoading(true);
+                            setError(null);
+                            try {
+                              // If cover text provided, upload to IPFS and store mapping on-chain
+                              if (coverText.trim()) {
+                                const html = coverText;
+                                const plain = htmlToPlainText(html);
+                                const hash = await sha256Hex(plain);
+                                const cid = await uploadToIpfs(html);
+                                try {
+                                  await storeDescriptionCid(wallet, hash, cid);
+                                } catch (err) {
+                                  // swallow mapping errors but continue
+                                  console.warn("storeDescriptionCid failed", err);
+                                }
+                                // Persist locally so the client can view the cover letter after accept
+                                try {
+                                  localStorage.setItem(`job-cover:${id}`, JSON.stringify({ hash, cid, author: wallet }));
+                                } catch {}
+                              }
+                              await handleAction(
+                                () => acceptJob(wallet, id),
+                                "Job accepted successfully.",
+                                {
+                                  event: "job_accepted",
+                                  message: `You accepted Job #${id}.`,
+                                },
+                              );
+                            } finally {
+                              setLoading(false);
+                              setCoverText("");
+                            }
+                          }}
+                        >
+                          {loading ? "Processing..." : "Accept Job"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
               {canSubmit && (
                 <button
@@ -1293,6 +1639,29 @@ function JobDetailPageContent() {
           onCancel={() => setPendingAction(null)}
         />
       ) : null}
+
+      {/* Celebration Animation Modal */}
+      {job && (
+        <JobCelebrationModal
+          isOpen={showCelebrationModal}
+          onClose={() => setShowCelebrationModal(false)}
+          jobId={id}
+          jobTitle={job.title || `Job #${id}`}
+          amount={job.amount}
+          createdAt={job.created_at}
+          completedAt={Date.now() / 1000}
+          isClient={Boolean(isClient)}
+          isFreelancer={Boolean(isFreelancer)}
+          onRate={async (score) => {
+            if (wallet) {
+              await rateJob(wallet, id, score);
+            }
+          }}
+          onDownloadCertificate={() => {
+            setShowCelebrationModal(false);
+          }}
+        />
+      )}
     </section>
   );
 }

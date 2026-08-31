@@ -6,7 +6,7 @@ import { getContractIdForNetwork, getPersistedNetwork } from "@/lib/network-conf
 export { requireContractId };
 import type { Job, Milestone, JobStatusCounts } from "@/lib/types";
 
-function getActiveContractId(): string {
+export function getActiveContractId(): string {
   if (typeof window !== "undefined") {
     const id = getContractIdForNetwork(getPersistedNetwork());
     if (id) return id;
@@ -105,6 +105,20 @@ export async function batchApproveJobs(client: string, jobIds: string[]) {
   return callContract(requireContractId(), "batch_approve_jobs", [
     nativeToScVal(client, { type: "address" }),
     nativeToScVal(jobIds.map((id) => nativeToScVal(id, { type: "u64" })), { type: "vec" }),
+  ]);
+}
+
+export async function rateJob(
+  caller: string,
+  jobId: string,
+  score: number,
+  commentHash = "0000000000000000000000000000000000000000000000000000000000000000",
+) {
+  return callContract(getActiveContractId(), "rate_job", [
+    nativeToScVal(caller, { type: "address" }),
+    nativeToScVal(jobId, { type: "u64" }),
+    nativeToScVal(score, { type: "u32" }),
+    nativeToScVal(hexToBytes(commentHash), { type: "bytes" }),
   ]);
 }
 
