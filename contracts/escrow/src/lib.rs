@@ -2942,6 +2942,58 @@ impl EscrowContract {
             .get::<DataKey, Job>(&DataKey::ArchivedJob(job_id))
     }
 
+    /// SC-82: restore a job from archive storage back into active storage (admin only).
+    /// This moves the archived `Job` back to the live `Job` slot, re-inserts the
+    /// job id into `AllJobIds`, decrements `ArchiveCount`, and emits
+    /// a `job_unarchived` event. Any per-job closed timestamps are not
+    /// restored by this operation.
+    pub fn unarchive_job(e: Env, admin: Address, job_id: u64) {
+        admin.require_auth();
+        let current_admin = load_admin(&e);
+        if admin != current_admin {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+
+        // Ensure archived record exists
+        let archived: Option<Job> = e
+            .storage()
+            .persistent()
+            .get(&DataKey::ArchivedJob(job_id));
+        if archived.is_none() {
+            panic_with_error!(&e, Error::JobNotFound);
+        }
+        let job = archived.unwrap();
+
+        // Ensure there's no active job occupying the slot
+        if e.storage().persistent().has(&DataKey::Job(job_id)) {
+            panic_with_error!(&e, Error::InvalidStatus);
+        }
+
+        // Move archived job back into active storage
+        e.storage().persistent().set(&DataKey::Job(job_id), &job);
+        e.storage().persistent().extend_ttl(&DataKey::Job(job_id), ACTIVE_JOB_LIFETIME_THRESHOLD, ACTIVE_JOB_BUMP_AMOUNT);
+
+        // Re-insert into AllJobIds
+        let mut all_ids: Vec<u64> = e
+            .storage()
+            .persistent()
+            .get(&DataKey::AllJobIds)
+            .unwrap_or(Vec::new(&e));
+        all_ids.push_back(job_id);
+        e.storage().persistent().set(&DataKey::AllJobIds, &all_ids);
+        e.storage().persistent().extend_ttl(&DataKey::AllJobIds, INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        // Remove archived record and update counters
+        e.storage().persistent().remove(&DataKey::ArchivedJob(job_id));
+        let mut count: u64 = e.storage().instance().get(&DataKey::ArchiveCount).unwrap_or(0);
+        count = count.saturating_sub(1);
+        e.storage().instance().set(&DataKey::ArchiveCount, &count);
+
+        e.events().publish((Symbol::new(&e, "job_unarchived"),), (job_id,));
+
+        bump_instance_ttl(&e);
+    }
+
     /// SC-82: number of jobs currently in archive storage (admin only).
     pub fn get_archive_count(e: Env, admin: Address) -> u64 {
         admin.require_auth();
