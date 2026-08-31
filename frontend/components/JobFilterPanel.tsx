@@ -10,6 +10,7 @@ export interface JobFilters {
   maxAmount: string;
   dateRange: DateRangeFilter;
   freelancerStatus: FreelancerFilter;
+  language: string;
 }
 
 export const DEFAULT_FILTERS: JobFilters = {
@@ -17,6 +18,7 @@ export const DEFAULT_FILTERS: JobFilters = {
   maxAmount: "",
   dateRange: "all",
   freelancerStatus: "all",
+  language: "all",
 };
 
 function isDefaultFilters(f: JobFilters): boolean {
@@ -24,7 +26,8 @@ function isDefaultFilters(f: JobFilters): boolean {
     f.minAmount === "" &&
     f.maxAmount === "" &&
     f.dateRange === "all" &&
-    f.freelancerStatus === "all"
+    f.freelancerStatus === "all" &&
+    f.language === "all"
   );
 }
 
@@ -123,6 +126,12 @@ export default function JobFilterPanel({ filters, onChange, resultCount }: JobFi
               onRemove={() => onChange({ ...filters, freelancerStatus: "all" })}
             />
           )}
+          {filters.language !== "all" && (
+            <FilterChip
+              label={`Language: ${filters.language}`}
+              onRemove={() => onChange({ ...filters, language: "all" })}
+            />
+          )}
         </div>
       )}
 
@@ -195,6 +204,31 @@ export default function JobFilterPanel({ filters, onChange, resultCount }: JobFi
               <option value="all">All jobs</option>
               <option value="unassigned">Unassigned</option>
               <option value="assigned">Assigned</option>
+            </select>
+          </div>
+
+          {/* Language filter */}
+          <div className="flex flex-col gap-1">
+            <label htmlFor="filter-language" className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Language
+            </label>
+            <select
+              id="filter-language"
+              value={filters.language}
+              onChange={(e) => onChange({ ...filters, language: e.target.value })}
+              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+            >
+              <option value="all">Any language</option>
+              <option value="en">English</option>
+              <option value="es">Spanish</option>
+              <option value="fr">French</option>
+              <option value="de">German</option>
+              <option value="it">Italian</option>
+              <option value="pt">Portuguese</option>
+              <option value="zh">Chinese</option>
+              <option value="ja">Japanese</option>
+              <option value="ko">Korean</option>
+              <option value="ru">Russian</option>
             </select>
           </div>
         </div>

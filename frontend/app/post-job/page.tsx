@@ -22,6 +22,7 @@ import {
   MIN_JOB_AMOUNT_STROOPS,
 } from "@/lib/sanitize";
 import { JobCategorySelect } from "@/components/JobCategorySelect";
+import { embedLanguage } from "@/lib/language";
 import { StrKey } from "@stellar/stellar-sdk";
 
 const MIN_JOB_AMOUNT_XLM = 0.5;
@@ -117,6 +118,7 @@ interface DraftData {
   tokenAddress: string;
   title: string;
   category: string;
+  language: string;
   savedAt: number;
 }
 
@@ -160,6 +162,7 @@ export default function PostJobPage() {
   const [deadline, setDeadline] = useState("");
   const [title, setTitle] = useState("");
   const [category, setCategory] = useState("development");
+  const [language, setLanguage] = useState("en");
   const descriptionLabelId = useId();
   const [tokenAddress, setTokenAddress] = useState(
     process.env.NEXT_PUBLIC_NATIVE_TOKEN ?? "",
@@ -220,6 +223,7 @@ export default function PostJobPage() {
       );
       setTitle(draft.title || "");
       setCategory(draft.category || "development");
+      setLanguage(draft.language || "en");
       setDraftSavedAt(draft.savedAt);
       setHasDraft(true);
     } else {
@@ -312,6 +316,7 @@ export default function PostJobPage() {
         tokenAddress,
         title,
         category,
+        language,
         savedAt: now,
       });
       setDraftSavedAt(now);
@@ -323,7 +328,7 @@ export default function PostJobPage() {
         clearTimeout(debounceTimerRef.current);
       }
     };
-  }, [amount, description, deadline, tokenAddress, title, category, wallet]);
+  }, [amount, description, deadline, tokenAddress, title, category, language, wallet]);
 
   // Warn on navigation away when unsaved changes exist
   useEffect(() => {
@@ -455,8 +460,9 @@ export default function PostJobPage() {
               setFieldErrors(nextFieldErrors);
               return;
             }
-            const htmlContent = description.trim();
-            const plainContent = htmlToPlainText(htmlContent);
+            const rawDescription = description.trim();
+            const htmlContent = embedLanguage(rawDescription, language);
+            const plainContent = htmlToPlainText(rawDescription);
             const hashHex = await sha256Hex(plainContent);
             const descriptionPayloadLen = new TextEncoder().encode(plainContent).length;
             const deadlineUnix = deadline
@@ -465,6 +471,7 @@ export default function PostJobPage() {
 
             localStorage.setItem(`job-desc:${hashHex}`, htmlContent);
             const cid = await uploadToIpfs(htmlContent);
+
             const result = await withContractErrorHandling(
               () =>
                 postJob(
@@ -474,29 +481,12 @@ export default function PostJobPage() {
                   descriptionPayloadLen,
                   deadlineUnix,
                   tokenAddress.trim(),
+                  title.trim(),
+                  category,
                 ),
               "Could not post the job to the contract. Please check your wallet and try again.",
             );
-            if (cid && !cid.startsWith("fallback:")) {
-              try {
-                await withContractErrorHandling(
-                  () => storeDescriptionCid(wallet, hashHex, cid),
-                  "Job posted, but the description CID could not be saved on-chain.",
-                );
-              } catch (cidError) {
-                setWarning(getErrorMessage(cidError));
-              }
-            }
-            const result = await postJob(
-              wallet,
-              amountStroops!,
-              hashHex,
-              descriptionPayloadLen,
-              deadlineUnix,
-              tokenAddress.trim(),
-              title.trim(),
-              category,
-            );
+
             if (result.status !== "SUCCESS") {
               throw new Error(result.errorResult ?? "Job transaction failed.");
             }
@@ -509,11 +499,15 @@ export default function PostJobPage() {
               throw new Error("The job was posted, but its ID was not returned.");
             }
             const jobId = String(rawJobId);
+
             if (cid && !cid.startsWith("fallback:")) {
               try {
-                await storeDescriptionCid(wallet, hashHex, cid);
-              } catch {
-                // CID storage is best-effort.
+                await withContractErrorHandling(
+                  () => storeDescriptionCid(wallet, hashHex, cid),
+                  "Job posted, but the description CID could not be saved on-chain.",
+                );
+              } catch (cidError) {
+                setWarning(getErrorMessage(cidError));
               }
             }
             if (result.hash) {
@@ -777,6 +771,28 @@ export default function PostJobPage() {
               onCategoryChange={setCategory}
               onTagsChange={setTags}
             />
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                Language
+              </label>
+              <select
+                value={language}
+                onChange={(e) => setLanguage(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+              >
+                <option value="en">English</option>
+                <option value="es">Spanish</option>
+                <option value="fr">French</option>
+                <option value="de">German</option>
+                <option value="it">Italian</option>
+                <option value="pt">Portuguese</option>
+                <option value="zh">Chinese</option>
+                <option value="ja">Japanese</option>
+                <option value="ko">Korean</option>
+                <option value="ru">Russian</option>
+              </select>
+            </div>
           </div>
         </details>
 
