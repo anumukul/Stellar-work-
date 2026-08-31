@@ -14,5 +14,89 @@
       { "metric": "cumulative-layout-shift", "budget": 0.1 },
       { "metric": "first-contentful-paint", "budget": 1500 }
     ]
+  },
+  {
+    "path": "/",
+    "resourceSizes": [
+      { "resourceType": "script", "budget": 250 },
+      { "resourceType": "total", "budget": 500 }
+    ]
+  },
+  {
+    "path": "/dashboard",
+    "resourceSizes": [
+      { "resourceType": "script", "budget": 350 },
+      { "resourceType": "total", "budget": 700 }
+    ]
+  },
+  {
+    "path": "/admin",
+    "resourceSizes": [
+      { "resourceType": "script", "budget": 400 },
+      { "resourceType": "total", "budget": 750 }
+    ]
+  },
+  {
+    "path": "/job/[id]",
+    "resourceSizes": [
+      { "resourceType": "script", "budget": 300 },
+      { "resourceType": "total", "budget": 600 }
+    ]
+  },
+  {
+    "path": "/post-job",
+    "resourceSizes": [
+      { "resourceType": "script", "budget": 350 },
+      { "resourceType": "total", "budget": 700 }
+    ]
+  },
+  {
+    "path": "/profile",
+    "resourceSizes": [
+      { "resourceType": "script", "budget": 300 },
+      { "resourceType": "total", "budget": 600 }
+    ]
+  },
+  {
+    "path": "/messages",
+    "resourceSizes": [
+      { "resourceType": "script", "budget": 350 },
+      { "resourceType": "total", "budget": 700 }
+    ]
+  },
+  {
+    "path": "/transactions",
+    "resourceSizes": [
+      { "resourceType": "script", "budget": 300 },
+      { "resourceType": "total", "budget": 600 }
+    ]
+  },
+  {
+    "path": "/settings",
+    "resourceSizes": [
+      { "resourceType": "script", "budget": 250 },
+      { "resourceType": "total", "budget": 500 }
+    ]
+  },
+  {
+    "path": "/disputes",
+    "resourceSizes": [
+      { "resourceType": "script", "budget": 300 },
+      { "resourceType": "total", "budget": 600 }
+    ]
+  },
+  {
+    "path": "/earnings-estimator",
+    "resourceSizes": [
+      { "resourceType": "script", "budget": 250 },
+      { "resourceType": "total", "budget": 500 }
+    ]
+  },
+  {
+    "path": "/fee-calculator",
+    "resourceSizes": [
+      { "resourceType": "script", "budget": 250 },
+      { "resourceType": "total", "budget": 500 }
+    ]
   }
 ]

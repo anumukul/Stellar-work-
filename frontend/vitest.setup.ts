@@ -1,5 +1,10 @@
 import '@testing-library/jest-dom/vitest'
 import { crypto } from 'node:crypto'
+import * as matchers from 'vitest-axe/matchers'
+import { expect } from 'vitest'
+
+// Register vitest-axe accessibility matchers (e.g. toHaveNoViolations)
+expect.extend(matchers)
 
 function createStorage(): Storage {
   const store = new Map<string, string>();
