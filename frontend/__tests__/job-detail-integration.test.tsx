@@ -27,6 +27,7 @@ vi.mock("@/lib/contract", () => ({
   recordJobView: vi.fn().mockResolvedValue(undefined),
   rateJob: vi.fn(),
   topUpEscrow: vi.fn(),
+  getJobCount: vi.fn().mockResolvedValue(0),
 }));
 
 vi.mock("@/lib/stellar", async (importOriginal) => {
@@ -103,6 +104,9 @@ describe("Job detail page integration", () => {
     const acceptButton = await screen.findByRole("button", { name: "Accept Job" });
     fireEvent.click(acceptButton);
 
+    const modalAcceptButton = screen.getAllByRole("button", { name: "Accept Job" })[1];
+    fireEvent.click(modalAcceptButton);
+
     expect(contract.acceptJob).toHaveBeenCalledWith("GWALLET", "1");
     await waitFor(() => {
       expect(screen.getAllByText("Job accepted successfully.").length).toBeGreaterThanOrEqual(1);
@@ -117,6 +121,9 @@ describe("Job detail page integration", () => {
 
     const acceptButton = await screen.findByRole("button", { name: "Accept Job" });
     fireEvent.click(acceptButton);
+
+    const modalAcceptButton = screen.getAllByRole("button", { name: "Accept Job" })[1];
+    fireEvent.click(modalAcceptButton);
 
     expect(contract.acceptJob).toHaveBeenCalledWith("GWALLET", "1");
     await waitFor(() => {

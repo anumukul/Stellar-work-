@@ -28,6 +28,7 @@ import {
 import { recordRecentContractInteraction } from "@/lib/recent-contract-interactions";
 import { classifyError, reportContractTx, reportRpcError } from "@/lib/metrics-client";
 import { describeContractError } from "./contract-errors";
+import { TransactionVerifier } from "@/lib/transaction-verifier";
 import {
   decodeQueuedArgs,
   DEFAULT_RETRY_CONFIG,
@@ -309,8 +310,41 @@ async function submitWriteContract(
 
     const assembled = rpc.assembleTransaction(tx, simulation).build();
     const prepared = await server.prepareTransaction(assembled);
+
+    // ── Transaction signature verification (Issue #855) ────────────────
+    // Capture the pre-sign state, then verify the wallet-signed XDR matches
+    // before allowing it to reach the network. Blocking mismatches throw here;
+    // the caller's existing error handling surfaces them to the user.
+    // Field access is defensive: a prepared Transaction always carries these,
+    // but we treat any missing field as "unknown" (skip) rather than crash.
+    const preparedOps = prepared.operations ?? [];
+    const intent = {
+      sourceAccount: prepared.source ?? "",
+      fee: prepared.fee ?? "0",
+      operationCount: preparedOps.length,
+      operationTypes: preparedOps.map((op) => op.type),
+      timebounds: prepared.timeBounds
+        ? {
+            minTime: String(prepared.timeBounds.minTime),
+            maxTime: String(prepared.timeBounds.maxTime),
+          }
+        : null,
+    };
+
     const signedXdr = await signTransaction(prepared.toXDR());
     const signedTx = TransactionBuilder.fromXDR(signedXdr, networkPassphrase);
+
+    const verifier = new TransactionVerifier(networkPassphrase);
+    const verification = verifier.verify(signedXdr, intent);
+
+    if (verification.errors.length > 0) {
+      throw new Error(
+        `Transaction verification failed: ${verification.errors.join("; ")}. ` +
+          "The signed transaction does not match what the app requested. " +
+          "If this is unexpected, you may be using a compromised wallet.",
+      );
+    }
+
     const sent = await server.sendTransaction(signedTx);
 
   if (sent.hash) {

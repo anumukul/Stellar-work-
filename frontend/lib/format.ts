@@ -8,6 +8,7 @@ export function toXlm(stroops: string | number | bigint): string {
   const whole = roundedCents / 100n;
   const fraction = roundedCents % 100n;
   const formatter = new Intl.NumberFormat(undefined, {
+    useGrouping: true,
     maximumFractionDigits: 0,
   });
   const wholeFormatted = formatter.format(whole);

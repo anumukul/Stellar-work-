@@ -24,6 +24,16 @@ describe("toXlm", () => {
     expect(/[eE][+-]?\d+/.test(formatted)).toBe(false);
     expect(/\d{2}$/.test(formatted)).toBe(true);
   });
+
+  it("adds locale-aware group separators for large values", () => {
+    const formatted = toXlm("100001234500");
+    const expected = `${new Intl.NumberFormat(undefined, {
+      useGrouping: true,
+      maximumFractionDigits: 0,
+    }).format(10000)}.12`;
+
+    expect(formatted).toBe(expected);
+  });
 });
 
 describe("formatXlmWithFiat", () => {

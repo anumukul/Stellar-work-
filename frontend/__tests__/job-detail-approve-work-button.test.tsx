@@ -27,6 +27,7 @@ vi.mock("@/lib/contract", () => ({
   recordJobView: vi.fn().mockResolvedValue(undefined),
   rateJob: vi.fn(),
   topUpEscrow: vi.fn(),
+  getJobCount: vi.fn().mockResolvedValue(0),
 }));
 
 vi.mock("@/lib/ipfs-service", () => ({
