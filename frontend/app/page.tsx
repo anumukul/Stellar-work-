@@ -12,6 +12,7 @@ import TruncatedAddress from "@/components/TruncatedAddress";
 import ComparisonBar from "@/components/ComparisonBar";
 import CancelJobConfirmModal from "@/components/CancelJobConfirmModal";
 import SwipeableJobCard from "@/components/SwipeableJobCard";
+import ClientReputationBadge from "@/components/ClientReputationBadge";
 import JobFilterPanel, { DEFAULT_FILTERS, type JobFilters } from "@/components/JobFilterPanel";
 import { acceptJob, cancelJob, getDescriptionCid, getJob, getJobCount } from "@/lib/contract";
 import { fetchFromIpfs } from "@/lib/ipfs-service";
@@ -1142,6 +1143,9 @@ export default function HomePage() {
                       ? `Deadline: ${deadline.isPast ? "Past due" : deadline.relative} • ${deadline.exact}`
                       : "Deadline: No deadline"}
                   </p>
+                  <div className="mt-2">
+                    <ClientReputationBadge clientAddress={job.client} />
+                  </div>
                 </div>
                 <div
                   className={`flex flex-wrap items-center gap-2 ${
