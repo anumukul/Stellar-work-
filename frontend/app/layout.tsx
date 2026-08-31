@@ -19,6 +19,7 @@ import AppFooter from "@/components/AppFooter";
 import OfflineIndicator from "@/components/OfflineIndicator";
 import WalletNetworkWarning from "@/components/WalletNetworkWarning";
 import DeferredClientFeatures from "@/components/DeferredClientFeatures";
+import { PWAInstallPrompt } from "@/components/pwa-install-prompt";
 import { ClientProviders } from "./client-providers";
 import "./globals.css";
 
@@ -171,6 +172,45 @@ export default async function RootLayout({
                                     </p>
                                   </div>
 
+        <ThemeProvider>
+        <TypographyProvider>
+        <NetworkProvider>
+        <WalletProvider>
+          <NotificationProvider>
+          <MessagingProvider>
+          <MeetingsProvider>
+          <ToastProvider>
+          <a
+            href="#main-content"
+            className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:rounded-md focus:bg-white focus:px-3 focus:py-2 focus:text-slate-900 focus:outline-none dark:focus:bg-slate-800 dark:focus:text-slate-100"
+          >
+            Skip to main content
+          </a>
+          <DeferredClientFeatures />
+          <ClientProviders>
+          <OfflineIndicator />
+          <PWAInstallPrompt />
+          <WalletNetworkWarning />
+          <Navigation />
+          <ScrollRestorer />
+          <main id="main-content" tabIndex={-1} className="mx-auto w-full max-w-5xl flex-1 px-3 py-6 sm:px-4 sm:py-8 lg:ml-[220px]">
+            <ErrorBoundary>{children}</ErrorBoundary>
+          </main>
+          <footer className="mt-auto border-t border-slate-200 bg-white py-8">
+            <div className="mx-auto max-w-5xl px-4">
+              <div className="flex flex-col items-center justify-between gap-6 md:flex-row">
+                <div className="flex flex-col items-center gap-2 md:items-start">
+                  <span className="text-lg font-bold text-slate-900">StellarWork</span>
+                  <p className="text-sm text-slate-500">Decentralized Escrow Marketplace</p>
+                </div>
+
+                <nav className="flex flex-wrap justify-center gap-8 text-sm font-medium text-slate-600">
+                  <a href="https://github.com/anumukul/Stellar-work-" target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 transition-colors">GitHub</a>
+                  <Link href="/docs" className="hover:text-blue-600 transition-colors">Documentation</Link>
+                  <a href="/LICENSE" target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 transition-colors">License</a>
+                  <Link href="/legal/terms" className="hover:text-blue-600 transition-colors">Terms</Link>
+                  <Link href="/legal/privacy" className="hover:text-blue-600 transition-colors">Privacy</Link>
+                </nav>
                                   <nav className="flex flex-wrap justify-center gap-8 text-sm font-medium text-slate-600 dark:text-slate-400">
                                     <a
                                       href="https://github.com/anumukul/Stellar-work-"

@@ -138,6 +138,27 @@ export default function HelpClient() {
         </div>
       ),
     },
+    {
+      title: "Installing StellarWork App (PWA)",
+      content: (
+        <div className="space-y-3 text-slate-600 dark:text-slate-400">
+          <p>
+            You can install StellarWork as a Progressive Web App (PWA) for a faster, native-like experience on your device.
+          </p>
+          <ul className="list-disc pl-5 space-y-2">
+            <li>
+              <strong>Chrome / Edge (Desktop & Android):</strong> Click the install icon in the right side of the address bar, or click &quot;Install App&quot; in the banner that appears at the bottom of the screen.
+            </li>
+            <li>
+              <strong>Safari (iOS):</strong> Tap the <strong>Share</strong> button at the bottom of the screen, scroll down, and tap <strong>Add to Home Screen</strong>.
+            </li>
+            <li>
+              <strong>Standalone App:</strong> Once installed, you can launch StellarWork directly from your home screen or application menu without opening a browser.
+            </li>
+          </ul>
+        </div>
+      ),
+    },
   ];
 
   return (
