@@ -48,8 +48,8 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Check main bundle budget
-        run: node scripts/check-main-bundle.mjs
+      - name: Check bundle size budgets
+        run: node scripts/check-bundle-size.mjs --ci
 
   unit-tests:
     name: Unit Tests

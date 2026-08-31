@@ -1,0 +1,117 @@
+name: Bundle Size Analysis
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/bundle-size.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+
+concurrency:
+  group: bundle-size-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  bundle-size:
+    name: Check Bundle Size
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # ── Build PR branch ─────────────────────────────────────────────────
+      - name: Build (PR branch)
+        run: npm run build
+
+      - name: Check bundle sizes against budgets
+        run: node scripts/check-bundle-size.mjs --ci
+        continue-on-error: true
+        id: budget_check
+
+      - name: Generate size report JSON
+        run: node scripts/check-bundle-size.mjs --json > .next/analyze/bundle-size-report.json 2>/dev/null || true
+
+      # ── Build base branch for comparison (PR only) ──────────────────────
+      - name: Checkout base branch
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          path: _base
+
+      - name: Install base dependencies
+        if: github.event_name == 'pull_request'
+        run: npm ci
+        working-directory: _base/frontend
+
+      - name: Build base branch
+        if: github.event_name == 'pull_request'
+        run: npm run build
+        working-directory: _base/frontend
+
+      - name: Generate base size report
+        if: github.event_name == 'pull_request'
+        run: node scripts/check-bundle-size.mjs --json > ../../frontend/.next/analyze/base-bundle-size-report.json 2>/dev/null || true
+        working-directory: _base/frontend
+
+      # ── Generate PR comment ─────────────────────────────────────────────
+      - name: Generate bundle size PR comment
+        if: github.event_name == 'pull_request'
+        run: node scripts/generate-bundle-report.mjs
+
+      - name: Post bundle size comment on PR
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: bundle-size
+          path: frontend/.next/analyze/bundle-size-comment.md
+
+      # ── Upload artifacts for trend tracking ─────────────────────────────
+      - name: Upload bundle size report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-size-report-${{ github.sha }}
+          path: |
+            frontend/.next/analyze/bundle-size-report.json
+            frontend/.next/analyze/bundle-size-comment.md
+          retention-days: 90
+
+      # ── Save baseline on main for future comparisons ────────────────────
+      - name: Store baseline report (main branch)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: frontend/.next/analyze/bundle-size-report.json
+          key: bundle-size-baseline-${{ github.sha }}
+
+      # ── Fail if budget exceeded ─────────────────────────────────────────
+      - name: Enforce budget check result
+        if: steps.budget_check.outcome == 'failure'
+        run: |
+          echo "❌ Bundle size budget exceeded. See the report above for details."
+          echo "Run 'npm run analyze' locally to inspect the bundle treemap."
+          exit 1

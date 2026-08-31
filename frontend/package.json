@@ -7,6 +7,8 @@
     "build": "next build",
     "start": "next start",
     "analyze": "ANALYZE=true npm run build",
+    "check-bundle-size": "node scripts/check-bundle-size.mjs",
+    "bundle-report": "node scripts/generate-bundle-report.mjs",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -54,13 +56,15 @@
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^6.0.1",
     "@vitest/coverage-v8": "^3.2.6",
+    "axe-core": "^4.13.0",
     "eslint": "^9",
     "eslint-config-next": "16.3.3",
     "jsdom": "^27.0.1",
     "storybook": "^10.4.6",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "vitest-axe": "^0.1.0"
   },
   "overrides": {
     "axios": "^1.18.0",
