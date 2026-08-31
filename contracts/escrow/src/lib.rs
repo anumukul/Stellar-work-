@@ -1,5 +1,7 @@
 #![no_std]
 
+extern crate alloc;
+
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, Bytes,
     BytesN, Env, String, Symbol, Vec,
@@ -87,6 +89,10 @@ pub struct Job {
     pub freelancer: Option<Address>,
     pub amount: i128,
     pub description_hash: BytesN<32>,
+    /// SC-138: SHA-256 hash of the job's extended metadata document stored
+    /// off-chain on IPFS. All-zero bytes means no extended metadata has been
+    /// committed yet.
+    pub metadata_hash: BytesN<32>,
     pub status: JobStatus,
     pub created_at: u64,
     pub deadline: u64,
@@ -363,6 +369,9 @@ pub enum ExtKey {
     FreelancerRatingSum(Address),
     /// Count of ratings received by a freelancer.
     FreelancerRatingCount(Address),
+    /// SC-138: maps a job metadata hash to the IPFS CID v1 string of the
+    /// off-chain metadata document it corresponds to.
+    MetadataCidMapping(BytesN<32>),
     // SC-137: emergency fund recovery for stuck escrows
     /// Recovery proposal by id.
     RecoveryProposal(u64),
@@ -438,6 +447,8 @@ pub enum Error {
     UnsupportedToken = 47,
     BelowMinimumRating = 48,
     InvalidRating = 49,
+    /// SC-138: a metadata hash must be non-zero to be stored on a job.
+    InvalidMetadataHash = 50,
     // SC-137: emergency fund recovery. A single error code covers the invalid
     // states of recovery proposals; details are surfaced via events + audit log.
     RecoveryError = 50,
@@ -1027,6 +1038,8 @@ impl EscrowContract {
             freelancer: Option::None,
             amount,
             description_hash: desc_hash,
+            // SC-138: no extended metadata committed at creation.
+            metadata_hash: BytesN::from_array(&e, &[0u8; 32]),
             status: JobStatus::Open,
             created_at: e.ledger().timestamp(),
             deadline,
@@ -2431,6 +2444,101 @@ impl EscrowContract {
         e.storage()
             .persistent()
             .get::<DataKey, String>(&DataKey::DescriptionCidMapping(desc_hash))
+            .unwrap_or(String::from_str(&e, ""))
+    }
+
+    // ── SC-138: job extended metadata IPFS hash storage ──────────────────────
+
+    /// Update the extended metadata hash for a job.
+    ///
+    /// Only the job's client may update it. The hash must be non-zero. When a
+    /// CID is provided it must be an IPFS CID v1; it is registered under the
+    /// new hash so the off-chain metadata stays resolvable. Committing a new
+    /// hash supersedes the previous metadata: the mapping for the old hash is
+    /// left intact (so a past CID remains retrievable by hash), while the new
+    /// mapping is written when a CID is supplied.
+    pub fn update_metadata(
+        e: Env,
+        caller: Address,
+        job_id: u64,
+        metadata_hash: BytesN<32>,
+        cid: String,
+    ) {
+        caller.require_auth();
+        let mut job = get_job_or_panic(&e, job_id);
+        if caller != job.client {
+            panic_with_error!(&e, Error::Unauthorized);
+        }
+        if metadata_hash == BytesN::from_array(&e, &[0u8; 32]) {
+            panic_with_error!(&e, Error::InvalidMetadataHash);
+        }
+        if !cid.is_empty() && !is_valid_cid_v1(&cid) {
+            panic_with_error!(&e, Error::InvalidMetadataHash);
+        }
+
+        job.metadata_hash = metadata_hash.clone();
+        set_job(&e, job_id, &job);
+
+        if !cid.is_empty() {
+            e.storage()
+                .persistent()
+                .set(&ExtKey::MetadataCidMapping(metadata_hash.clone()), &cid);
+            e.storage().persistent().extend_ttl(
+                &ExtKey::MetadataCidMapping(metadata_hash.clone()),
+                ACTIVE_JOB_LIFETIME_THRESHOLD,
+                INSTANCE_BUMP_AMOUNT,
+            );
+        }
+        bump_instance_ttl(&e);
+
+        e.events().publish(
+            (Symbol::new(&e, "metadata_updated"),),
+            (job_id, caller.clone(), metadata_hash.clone()),
+        );
+        Self::record_event(&e, "metadata_updated", job_id, &caller);
+
+        Self::write_audit(
+            &e,
+            caller,
+            "update_metadata",
+            Some(job_id),
+            "Updated job extended metadata hash",
+        );
+    }
+
+    /// The extended metadata hash for a job. All-zero bytes means none has
+    /// been committed yet.
+    pub fn get_metadata_hash(e: Env, job_id: u64) -> BytesN<32> {
+        get_job_or_panic(&e, job_id).metadata_hash
+    }
+
+    /// Register an IPFS CID v1 for a metadata hash.
+    ///
+    /// Any active caller may register a CID for a hash they hold. Mirrors
+    /// [`Self::store_description_cid`].
+    pub fn store_metadata_cid(e: Env, caller: Address, metadata_hash: BytesN<32>, cid: String) {
+        caller.require_auth();
+        require_active_access(&e, &caller);
+        if cid.is_empty() || !is_valid_cid_v1(&cid) {
+            panic_with_error!(&e, Error::InvalidMetadataHash);
+        }
+        e.storage()
+            .persistent()
+            .set(&ExtKey::MetadataCidMapping(metadata_hash.clone()), &cid);
+        e.storage().persistent().extend_ttl(
+            &ExtKey::MetadataCidMapping(metadata_hash),
+            ACTIVE_JOB_LIFETIME_THRESHOLD,
+            INSTANCE_BUMP_AMOUNT,
+        );
+        bump_instance_ttl(&e);
+    }
+
+    /// The IPFS CID v1 registered for a metadata hash, or an empty string if
+    /// none has been stored.
+    pub fn get_metadata_cid(e: Env, metadata_hash: BytesN<32>) -> String {
+        e.storage()
+            .persistent()
+            .get::<ExtKey, String>(&ExtKey::MetadataCidMapping(metadata_hash))
             .unwrap_or(String::from_str(&e, ""))
     }
 
@@ -4345,6 +4453,38 @@ fn set_escrow_balance(e: &Env, job_id: u64, amount: i128) {
         (Symbol::new(e, "escrow_balance_updated"),),
         (job_id, old, amount),
     );
+}
+
+/// SC-138: validate the wire-level shape of an IPFS CID v1 in base32.
+///
+/// A base32-encoded CID v1 always begins with the multibase prefix `b`
+/// (base32, lower) followed by `a` (version 1), i.e. `ba…`. The remaining
+/// characters must be the base32 lower alphabet (`a–z`, `2–7`) and long enough
+/// to hold a SHA-256 multihash. This guards against storing a malformed CID; it
+/// does not verify the content hash itself.
+fn is_valid_cid_v1(cid: &String) -> bool {
+    let len = cid.len();
+    if len < 3 {
+        return false;
+    }
+    let mut bytes: alloc::vec::Vec<u8> = alloc::vec![0u8; len as usize];
+    cid.copy_into_slice(&mut bytes);
+    if bytes[0] != b'b' || bytes[1] != b'a' {
+        return false;
+    }
+    // A SHA-256 CID v1 (version + codec + multihash) encodes to 58 base32
+    // chars plus the `b` multibase prefix = 59 total; require a plausible length.
+    let mut payload_len: u32 = 0;
+    let mut i: u32 = 2;
+    while i < len {
+        let c = bytes[i as usize];
+        if !((c >= b'a' && c <= b'z') || (c >= b'2' && c <= b'7')) {
+            return false;
+        }
+        payload_len += 1;
+        i += 1;
+    }
+    payload_len >= 55
 }
 
 fn get_job_or_panic(e: &Env, job_id: u64) -> Job {
@@ -8471,6 +8611,146 @@ mod test {
         assert_eq!(retrieved, cid2);
     }
 
+    // ── SC-138: job extended metadata IPFS hash storage ──────────────────────
+
+    fn metadata_cid(env: &Env) -> String {
+        String::from_str(
+            env,
+            "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+        )
+    }
+
+    fn has_event(env: &Env, topic: &str) -> bool {
+        let expected = Symbol::new(env, topic);
+        env.events().all().iter().any(|(_addr, topics, _data)| {
+            if let Some(topic_val) = topics.get(0) {
+                soroban_sdk::TryFromVal::<Env, soroban_sdk::Val>::try_from_val(env, &topic_val)
+                    .map(|sym: Symbol| sym == expected)
+                    .unwrap_or(false)
+            } else {
+                false
+            }
+        })
+    }
+
+    #[test]
+    fn get_metadata_hash_zero_for_fresh_job() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id =
+            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        assert_eq!(
+            client.get_metadata_hash(&job_id),
+            BytesN::from_array(&env, &[0u8; 32])
+        );
+    }
+
+    #[test]
+    fn update_metadata_sets_hash_and_cid_and_emits_event() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id =
+            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+
+        let metadata_hash = BytesN::from_array(&env, &[0x42; 32]);
+        let cid = metadata_cid(&env);
+
+        client.update_metadata(&user, &job_id, &metadata_hash, &cid);
+
+        assert_eq!(client.get_metadata_hash(&job_id), metadata_hash);
+        assert_eq!(client.get_metadata_cid(&metadata_hash), cid);
+        assert!(has_event(&env, "metadata_updated"));
+    }
+
+    #[test]
+    fn update_metadata_without_cid_sets_hash_only() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id =
+            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+
+        let metadata_hash = BytesN::from_array(&env, &[0x99; 32]);
+        client.update_metadata(&user, &job_id, &metadata_hash, &String::from_str(&env, ""));
+
+        assert_eq!(client.get_metadata_hash(&job_id), metadata_hash);
+        assert_eq!(
+            client.get_metadata_cid(&metadata_hash),
+            String::from_str(&env, "")
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #2)")]
+    fn update_metadata_rejects_non_client() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id =
+            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.update_metadata(
+            &freelancer,
+            &job_id,
+            &BytesN::from_array(&env, &[0x42; 32]),
+            &metadata_cid(&env),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #50)")]
+    fn update_metadata_rejects_zero_hash() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id =
+            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.update_metadata(
+            &user,
+            &job_id,
+            &BytesN::from_array(&env, &[0u8; 32]),
+            &metadata_cid(&env),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #50)")]
+    fn update_metadata_rejects_invalid_cid() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id =
+            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.update_metadata(
+            &user,
+            &job_id,
+            &BytesN::from_array(&env, &[0x42; 32]),
+            &String::from_str(&env, "QmNotACidV1"),
+        );
+    }
+
+    #[test]
+    fn metadata_cid_roundtrip_via_store() {
+        let (env, client, _, user, _, _) = setup();
+        let metadata_hash = BytesN::from_array(&env, &[0x7A; 32]);
+        let cid = metadata_cid(&env);
+
+        client.store_metadata_cid(&user, &metadata_hash, &cid);
+
+        assert_eq!(client.get_metadata_cid(&metadata_hash), cid);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #50)")]
+    fn store_metadata_cid_rejects_invalid_cid() {
+        let (env, client, _, user, _, _) = setup();
+        client.store_metadata_cid(
+            &user,
+            &BytesN::from_array(&env, &[0x7A; 32]),
+            &String::from_str(&env, "not-a-cid"),
+        );
+    }
+
+    #[test]
+    fn get_metadata_cid_empty_for_unstored_hash() {
+        let (env, client, _, _, _, _) = setup();
+        let metadata_hash = BytesN::from_array(&env, &[0x7B; 32]);
+        assert_eq!(
+            client.get_metadata_cid(&metadata_hash),
+            String::from_str(&env, "")
+        );
+    }
+
+
     /// After a failed raise_dispute call, the job state and escrow balance
     /// must remain exactly as they were before the call.
     #[test]
@@ -8837,6 +9117,8 @@ mod test {
             revision_count: 0,
             // SC-121: a freshly posted job has no attachment commitment.
             attachments_root: BytesN::from_array(&env, &[0u8; 32]),
+            // SC-138: a freshly posted job has no extended metadata committed.
+            metadata_hash: BytesN::from_array(&env, &[0u8; 32]),
             categories: Vec::new(&env),
         };
 
@@ -8874,6 +9156,8 @@ mod test {
             token: native_token.clone(),
             revision_count: 0,
             attachments_root: BytesN::from_array(&env, &[0u8; 32]),
+            // SC-138: no extended metadata committed.
+            metadata_hash: BytesN::from_array(&env, &[0u8; 32]),
             categories: Vec::new(&env),
         };
         assert_eq!(after_accept, expected_accept);
