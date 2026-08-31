@@ -3,12 +3,7 @@
 import { useState } from "react";
 import { JOB_CATEGORIES, getTagsForCategory } from "@/lib/job-categories";
 
-interface Props {
-  category: string;
-  tags: string[];
-  onCategoryChange: (category: string) => void;
-  onTagsChange: (tags: string[]) => void;
-}
+
 
 export function JobCategorySelect({ category, tags, onCategoryChange, onTagsChange }: Props) {
   const [customTag, setCustomTag] = useState("");
