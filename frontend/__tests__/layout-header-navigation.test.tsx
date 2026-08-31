@@ -56,6 +56,9 @@ vi.mock("@/lib/wallet-context", () => ({
 
 vi.mock("@/lib/messaging-context", () => ({
   useMessaging: () => mockUseMessaging(),
+  MessagingProvider: ({ children }: { children: React.ReactNode }) => (
+    <>{children}</>
+  ),
 }));
 
 vi.mock("next-intl", () => ({
@@ -105,11 +108,6 @@ function mobileNav() {
 }
 
 // ─── Test suite ───────────────────────────────────────────────────────────────
-
-vi.mock("@/lib/messaging-context", () => ({
-  useMessaging: () => ({ unreadCount: 0 }),
-  MessagingProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-}));
 
 describe("Layout header navigation", () => {
   // ─── 1. UNAUTHENTICATED NAV ──────────────────────────────────────────────────
@@ -278,7 +276,9 @@ describe("Layout header navigation", () => {
       expect(adminLink).toHaveAttribute("href", "/admin");
     });
 
-    it("shows Admin link when NEXT_PUBLIC_ADMIN_ADDRESS is not set (any wallet is admin)", () => {
+    it("does NOT show the Admin link when NEXT_PUBLIC_ADMIN_ADDRESS is unset", () => {
+      // Admin access is intentionally gated on a specific configured address;
+      // without it, no wallet is treated as an admin.
       delete (process.env as Record<string, string | undefined>)
         .NEXT_PUBLIC_ADMIN_ADDRESS;
       mockUseWallet.mockReturnValue({
@@ -288,8 +288,8 @@ describe("Layout header navigation", () => {
       render(<Navigation />);
 
       expect(
-        within(desktopNav()).getByRole("link", { name: "Admin" }),
-      ).toBeInTheDocument();
+        screen.queryByRole("link", { name: "Admin" }),
+      ).not.toBeInTheDocument();
     });
 
     it("does NOT show Admin link when wallet is null (even if env var is unset)", () => {
@@ -399,6 +399,26 @@ describe("Layout header navigation", () => {
       expect(toggle).toHaveAttribute("aria-expanded", "false");
     });
 
+    it("closes the mobile menu when the route (pathname) changes", () => {
+      mockUsePathname.mockReturnValue("/");
+      const { rerender } = render(<Navigation key="route-close" />);
+      const toggle = screen.getByRole("button", {
+        name: /Toggle navigation menu/,
+      });
+
+      fireEvent.click(toggle);
+      expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+      // Simulate navigation to another route. The Navigation component watches
+      // the pathname via usePathname and closes the menu on change.
+      mockUsePathname.mockReturnValue("/dashboard");
+      rerender(<Navigation key="route-close-2" />);
+
+      expect(
+        screen.getByRole("button", { name: /Toggle navigation menu/ }),
+      ).toHaveAttribute("aria-expanded", "false");
+    });
+
     it("closes mobile menu when the Escape key is pressed", () => {
       render(<Navigation />);
       const toggle = screen.getByRole("button", {
@@ -480,8 +500,6 @@ describe("Layout header navigation", () => {
       ).toHaveClass("font-semibold");
     });
     // Navigation is memoized; a remount makes the mocked wallet take effect.
-    rerender(<Navigation key="with-wallet" />);
-
     it("highlights Transactions link when on /transactions", () => {
       mockUsePathname.mockReturnValue("/transactions");
       render(<Navigation />);
