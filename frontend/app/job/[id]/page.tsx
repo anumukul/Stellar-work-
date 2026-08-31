@@ -142,9 +142,22 @@ export default function JobDetailPage() {
     }
   }
 
-  useEffect(() => {
+useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  // Refetch job data when the page becomes visible (e.g., after using browser back button)
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        void load();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, [id]);
 
   useEffect(() => {
