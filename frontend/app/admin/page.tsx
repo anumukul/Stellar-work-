@@ -299,13 +299,6 @@ export default function AdminPage() {
       else if (action === "removeWhitelist")
         await removeFromWhitelist(actualAdmin, validated);
       setSuccessMessage(`Successfully processed ${action} for ${validated}`);
-      const actualAdmin = process.env.NEXT_PUBLIC_ADMIN_ADDRESS;
-      if (!actualAdmin || actualAdmin !== wallet) throw new Error("Unauthorized");
-      if (action === "addBlacklist") await addToBlacklist(actualAdmin, accessTarget);
-      else if (action === "removeBlacklist") await removeFromBlacklist(actualAdmin, accessTarget);
-      else if (action === "addWhitelist") await addToWhitelist(actualAdmin, accessTarget);
-      else if (action === "removeWhitelist") await removeFromWhitelist(actualAdmin, accessTarget);
-      setSuccessMessage(`Successfully processed ${action} for ${accessTarget}`);
       setAccessTarget("");
     } catch (e) {
       setError(

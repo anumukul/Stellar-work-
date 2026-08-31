@@ -1,6 +1,7 @@
 "use client";
 
 import ErrorBanner from "@/components/ErrorBanner";
+import AvailabilityIndicator from "@/components/AvailabilityIndicator";
 import EmptyState from "@/components/EmptyState";
 import InfoTooltip from "@/components/InfoTooltip";
 import LoadingState from "@/components/LoadingState";
@@ -15,6 +16,7 @@ import SwipeableJobCard from "@/components/SwipeableJobCard";
 import JobFilterPanel, { DEFAULT_FILTERS, type JobFilters } from "@/components/JobFilterPanel";
 import { acceptJob, cancelJob, getDescriptionCid, getJob, getJobCount } from "@/lib/contract";
 import { fetchFromIpfs } from "@/lib/ipfs-service";
+import { JOB_CATEGORIES } from "@/lib/job-categories";
 import { useNotifications } from "@/lib/notifications-context";
 import {
   FIAT_CURRENCIES,
@@ -40,6 +42,7 @@ import { getExplorerTxUrl } from "@/lib/stellar";
 import { getRecentJobIds, getJobWindowBounds } from "@/lib/recent-ids";
 import Pagination from "@/components/Pagination";
 import type { Job, JobStatus } from "@/lib/types";
+import { buildActiveFreelancerJobCountMap } from "@/lib/availability";
 import { useWallet } from "@/lib/wallet-context";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
@@ -463,6 +466,11 @@ export default function HomePage() {
     if (stored) return stored;
     return "Description unavailable (posted from another device)";
   }, [descriptions]);
+
+  const activeFreelancerJobCounts = useMemo(
+    () => buildActiveFreelancerJobCountMap(jobs),
+    [jobs],
+  );
 
   const visibleJobs = useMemo(() => {
     const bookmarkedJobs = showBookmarkedOnly
@@ -1112,11 +1120,18 @@ export default function HomePage() {
                       )}
                     </h3>
                   </Link>
-                  {job.category && (
-                    <span className="mt-1 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
-                      {job.category}
-                    </span>
-                  )}
+                  {job.category && (() => {
+                    const cat = JOB_CATEGORIES.find(
+                      c => c.id === job.category?.toLowerCase() || c.label === job.category
+                    );
+                    const Icon = cat?.icon;
+                    return (
+                      <span className={`mt-1 inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${cat ? cat.colorClass : "bg-slate-100 text-slate-600"}`}>
+                        {Icon && <Icon className="w-3.5 h-3.5" />}
+                        {cat ? cat.label : job.category}
+                      </span>
+                    );
+                  })()}
                   <p
                     className="mt-2 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-sm font-bold tabular-nums text-slate-700"
                     title={fiatTooltip}
@@ -1137,6 +1152,16 @@ export default function HomePage() {
                   <p className="mt-1 text-xs text-slate-500">
                     Hash: {job.description_hash.slice(0, 12)}...
                   </p>
+                  {job.freelancer && (
+                    <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                      <span>Freelancer:</span>
+                      <TruncatedAddress address={job.freelancer} />
+                      <AvailabilityIndicator
+                        address={job.freelancer}
+                        activeJobCount={activeFreelancerJobCounts.get(job.freelancer) ?? 0}
+                      />
+                    </p>
+                  )}
                   <p className="mt-1 text-xs text-slate-600">
                     {deadline
                       ? `Deadline: ${deadline.isPast ? "Past due" : deadline.relative} • ${deadline.exact}`
