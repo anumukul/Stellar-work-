@@ -66,7 +66,16 @@
     "submittedForReview": "Enviado para Revisión",
     "completed": "Completado",
     "cancelled": "Cancelado",
-    "disputed": "Disputado"
+    "disputed": "Disputado",
+    "celebrationTitle": "¡Hora de Celebrar!",
+    "celebrationSubtitle": "El trabajo ha sido aprobado exitosamente y el pago liberado.",
+    "turnaroundTime": "Tiempo de Entrega",
+    "paymentReleased": "Pago Liberado",
+    "jobRating": "Calificación",
+    "rateFreelancerPrompt": "Califica tu experiencia con este profesional:",
+    "shareMilestone": "Compartir este logro",
+    "celebrateAgain": "Celebrar de Nuevo",
+    "done": "Listo"
   },
   "dashboard": {
     "title": "Panel",

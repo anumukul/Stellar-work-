@@ -100,6 +100,9 @@ export function validateAmount(raw: string): AmountValidationResult {
   if (!trimmed) {
     return { stroops: null, error: "Amount is required." };
   }
+  if (trimmed.startsWith("-")) {
+    return { stroops: null, error: "Amount must be greater than 0." };
+  }
   const amountPattern = /^\d+(\.\d+)?$/;
   if (!amountPattern.test(trimmed)) {
     return { stroops: null, error: "Enter a valid number with up to 7 decimal places." };

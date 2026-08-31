@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatFiatAmount, formatXlmWithFiat, toXlm } from "@/lib/format";
+import { formatFiatAmount, formatJobDuration, formatXlmWithFiat, toXlm } from "@/lib/format";
 
 describe("toXlm", () => {
   it("formats common stroop amounts", () => {
@@ -24,6 +24,16 @@ describe("toXlm", () => {
     expect(/[eE][+-]?\d+/.test(formatted)).toBe(false);
     expect(/\d{2}$/.test(formatted)).toBe(true);
   });
+
+  it("adds locale-aware group separators for large values", () => {
+    const formatted = toXlm("100001234500");
+    const expected = `${new Intl.NumberFormat(undefined, {
+      useGrouping: true,
+      maximumFractionDigits: 0,
+    }).format(10000)}.12`;
+
+    expect(formatted).toBe(expected);
+  });
 });
 
 describe("formatXlmWithFiat", () => {
@@ -41,5 +51,37 @@ describe("formatXlmWithFiat", () => {
 
   it("formats zero-decimal currencies", () => {
     expect(formatFiatAmount(125.4, "JPY")).toContain("125");
+  });
+});
+
+describe("formatJobDuration", () => {
+  it("formats duration in days and hours", () => {
+    const createdAt = 1700000000;
+    const completedAt = createdAt + 86400 * 2 + 3600 * 5; // 2d 5h
+    expect(formatJobDuration(createdAt, completedAt)).toBe("2d 5h");
+  });
+
+  it("formats duration in hours and minutes", () => {
+    const createdAt = 1700000000;
+    const completedAt = createdAt + 3600 * 3 + 60 * 15; // 3h 15m
+    expect(formatJobDuration(createdAt, completedAt)).toBe("3h 15m");
+  });
+
+  it("formats short duration in minutes", () => {
+    const createdAt = 1700000000;
+    const completedAt = createdAt + 60 * 25; // 25m
+    expect(formatJobDuration(createdAt, completedAt)).toBe("25m");
+  });
+
+  it("handles sub-minute duration", () => {
+    const createdAt = 1700000000;
+    const completedAt = createdAt + 30; // 30s
+    expect(formatJobDuration(createdAt, completedAt)).toBe("< 1m");
+  });
+
+  it("returns N/A for invalid timestamps", () => {
+    expect(formatJobDuration(null)).toBe("N/A");
+    expect(formatJobDuration(undefined)).toBe("N/A");
+    expect(formatJobDuration("invalid")).toBe("N/A");
   });
 });

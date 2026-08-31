@@ -17,7 +17,6 @@ import {
   watchWalletNetworkChanges,
 } from "@/lib/stellar";
 import type { StellarNetwork } from "@/lib/network-config";
-import LegalConsentModal, { hasAcceptedLegal } from "@/components/LegalConsentModal";
 import LegalConsentModal, { hasAcceptedLegal, acceptLegal } from "@/components/LegalConsentModal";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import { CONFIRM_KEYS } from "@/lib/confirm-prefs";
@@ -57,13 +56,27 @@ const WalletContext = createContext<WalletContextType>({
   isSwitching: false,
 });
 
-/** Remove all job description cache entries from localStorage. */
-function clearJobCache() {
+/** Remove all wallet-specific cache entries from localStorage. */
+function clearWalletData() {
   if (typeof window === "undefined") return;
   const keysToRemove: string[] = [];
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
-    if (key?.startsWith(JOB_CACHE_PREFIX)) {
+    if (!key) continue;
+    
+    if (
+      key.startsWith(JOB_CACHE_PREFIX) ||
+      key.startsWith("stellarwork:post-job-draft:") ||
+      key.startsWith("stellarwork:dashboard-widgets:") ||
+      [
+        "stellarwork:notifications",
+        "stellarwork:bookmarked-jobs",
+        "stellarwork:resume-builder",
+        "stellarwork:recent-contract-interactions",
+        "sw:call-history",
+        "stellarwork:meetings"
+      ].includes(key)
+    ) {
       keysToRemove.push(key);
     }
   }
@@ -129,7 +142,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       try {
         const currentKey = await getPublicKey();
         if (currentKey && wallet && currentKey !== wallet) {
-          clearJobCache();
+          clearWalletData();
           setWallet(currentKey);
           persistLastAccount(currentKey);
           if (typeof window !== "undefined") {
@@ -165,7 +178,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   }, [wallet]);
   const clearCachedData = useCallback(() => {
-    clearJobCache();
+    clearWalletData();
   }, []);
 
   const connectWallet = useCallback(async () => {
@@ -199,6 +212,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [wallet, refreshWalletNetwork]);
 
   const disconnectWallet = useCallback(() => {
+    clearWalletData();
     setWallet(null);
     setWalletNetwork(null);
     persistLastAccount(null);
@@ -225,7 +239,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       const newKey = await stellarConnectWallet();
       recordConnectionSuccess();
       if (newKey && newKey !== wallet) {
-        clearJobCache();
+        clearWalletData();
         setWallet(newKey);
         persistLastAccount(newKey);
       }
