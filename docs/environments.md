@@ -14,6 +14,23 @@ Create `frontend/.env.local` from `frontend/.env.example` for local development.
 | `NEXT_PUBLIC_NATIVE_TOKEN` | No | Empty string | `frontend/app/post-job/page.tsx` | Optional token contract address used to prefill the Post Job form. Users can still type a token address manually. |
 | `NEXT_PUBLIC_ADMIN_ADDRESS` | No | Empty string | `frontend/app/navigation.tsx`, `frontend/app/admin/page.tsx` | Admin Stellar address. When set, the Admin link is shown only to that connected wallet. |
 
+### Build-Time Validation (#645)
+
+`npm run build` runs `npm run prebuild` first, which invokes
+`frontend/scripts/validate-env.mjs`. It checks the same required variables as
+`frontend/lib/config.ts`'s `validateConfig()`, but fails the build (exit code
+1) rather than surfacing a runtime error to a user in the browser:
+
+- Missing `NEXT_PUBLIC_CONTRACT_ID` (and no per-network fallback set) — error
+- `NEXT_PUBLIC_CONTRACT_ID` that isn't a well-formed Soroban contract ID
+  (`C` + 55 base32 characters) — error
+- `NEXT_PUBLIC_NETWORK=mainnet` combined with a `NEXT_PUBLIC_SOROBAN_RPC`
+  that still points at a testnet endpoint — error
+- Unrecognized `NEXT_PUBLIC_NETWORK` value, missing `NEXT_PUBLIC_NATIVE_TOKEN`,
+  missing `NEXT_PUBLIC_ADMIN_ADDRESS` — warning only, build continues
+
+Run it standalone at any time with `npm run validate-env` from `frontend/`.
+
 ## Local Development
 ## Environment Overview
 
