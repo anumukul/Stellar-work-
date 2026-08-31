@@ -180,6 +180,21 @@ export interface DeadlineCountdown {
   urgency: "low" | "medium" | "high" | "expired";
 }
 
+/**
+ * Format a Date with timezone abbreviation using Intl.DateTimeFormat.
+ * Shows the user's local timezone so UTC timestamps are not ambiguous.
+ */
+function formatDateWithTimezone(date: Date): string {
+  return new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).format(date);
+}
+
 export function formatDeadline(deadline: string): DeadlineDisplay | null {
   if (deadline === "0") return null;
 
@@ -188,7 +203,7 @@ export function formatDeadline(deadline: string): DeadlineDisplay | null {
 
   const deltaMs = deadlineDate.getTime() - Date.now();
   return {
-    exact: deadlineDate.toLocaleString(),
+    exact: formatDateWithTimezone(deadlineDate),
     relative: formatRelativeInterval(deltaMs),
     isPast: deltaMs < 0,
   };
@@ -208,7 +223,7 @@ export function getDeadlineCountdown(deadline: string, now = Date.now()): Deadli
 
   if (diffMs <= 0) {
     return {
-      exact: deadlineDate.toLocaleString(),
+      exact: formatDateWithTimezone(deadlineDate),
       days: 0,
       hours: 0,
       minutes: 0,
@@ -233,7 +248,7 @@ export function getDeadlineCountdown(deadline: string, now = Date.now()): Deadli
       : "low";
 
   return {
-    exact: deadlineDate.toLocaleString(),
+    exact: formatDateWithTimezone(deadlineDate),
     days,
     hours,
     minutes,
