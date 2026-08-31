@@ -25,7 +25,7 @@ import { isConfirmSuppressed, CONFIRM_KEYS } from "@/lib/confirm-prefs";
 import { useWallet } from "@/lib/wallet-context";
 import type { Job, JobStatus, JobStatusCounts } from "@/lib/types";
 import { STATUS_TO_COUNTS_KEY } from "@/lib/types";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import {
   ANNOUNCEMENT_STORAGE_KEY,
   type AnnouncementConfig,
@@ -98,7 +98,7 @@ export default function AdminPage() {
   const [accessUpdating, setAccessUpdating] = useState(false);
 
   const [featureFlags, setFeatureFlags] = useState<Record<string, boolean>>({});
-  const flagNames = getAllFlagNames();
+  const flagNames = useMemo(() => getAllFlagNames(), []);
 
   useEffect(() => {
     initFeatureFlags();
@@ -299,13 +299,6 @@ export default function AdminPage() {
       else if (action === "removeWhitelist")
         await removeFromWhitelist(actualAdmin, validated);
       setSuccessMessage(`Successfully processed ${action} for ${validated}`);
-      const actualAdmin = process.env.NEXT_PUBLIC_ADMIN_ADDRESS;
-      if (!actualAdmin || actualAdmin !== wallet) throw new Error("Unauthorized");
-      if (action === "addBlacklist") await addToBlacklist(actualAdmin, accessTarget);
-      else if (action === "removeBlacklist") await removeFromBlacklist(actualAdmin, accessTarget);
-      else if (action === "addWhitelist") await addToWhitelist(actualAdmin, accessTarget);
-      else if (action === "removeWhitelist") await removeFromWhitelist(actualAdmin, accessTarget);
-      setSuccessMessage(`Successfully processed ${action} for ${accessTarget}`);
       setAccessTarget("");
     } catch (e) {
       setError(

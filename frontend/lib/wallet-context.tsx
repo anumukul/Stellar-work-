@@ -22,9 +22,11 @@ import LegalConsentModal, { hasAcceptedLegal, acceptLegal } from "@/components/L
 import ConfirmDialog from "@/components/ConfirmDialog";
 import { CONFIRM_KEYS } from "@/lib/confirm-prefs";
 import { toXlm } from "@/lib/format";
+import { checkConnectionRateLimit, recordConnectionSuccess, recordConnectionFailure } from "@/lib/connection-rate-limiter";
 
 // Storage keys
 const LAST_ACCOUNT_KEY = "stellarwork:last-connected-account";
+const WALLET_AUTO_RECONNECT_KEY = "stellarwork:wallet-auto-reconnect";
 const JOB_CACHE_PREFIX = "job-desc:";
 
 interface WalletContextType {
@@ -56,13 +58,27 @@ const WalletContext = createContext<WalletContextType>({
   isSwitching: false,
 });
 
-/** Remove all job description cache entries from localStorage. */
-function clearJobCache() {
+/** Remove all wallet-specific cache entries from localStorage. */
+function clearWalletData() {
   if (typeof window === "undefined") return;
   const keysToRemove: string[] = [];
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
-    if (key?.startsWith(JOB_CACHE_PREFIX)) {
+    if (!key) continue;
+    
+    if (
+      key.startsWith(JOB_CACHE_PREFIX) ||
+      key.startsWith("stellarwork:post-job-draft:") ||
+      key.startsWith("stellarwork:dashboard-widgets:") ||
+      [
+        "stellarwork:notifications",
+        "stellarwork:bookmarked-jobs",
+        "stellarwork:resume-builder",
+        "stellarwork:recent-contract-interactions",
+        "sw:call-history",
+        "stellarwork:meetings"
+      ].includes(key)
+    ) {
       keysToRemove.push(key);
     }
   }
@@ -81,6 +97,30 @@ function persistLastAccount(address: string | null) {
   }
 }
 
+function getLastConnectedAccount(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem(LAST_ACCOUNT_KEY);
+}
+
+function getAutoReconnectPreference(): boolean {
+  if (typeof window === "undefined") return false;
+  const stored = localStorage.getItem(WALLET_AUTO_RECONNECT_KEY);
+  if (stored === "true") return true;
+  if (stored === "false") return false;
+  // Migrate existing sessions that stored an address before the flag existed.
+  return getLastConnectedAccount() !== null;
+}
+
+function setAutoReconnectPreference(connected: boolean) {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(WALLET_AUTO_RECONNECT_KEY, connected ? "true" : "false");
+}
+
+function clearPersistedWalletSession() {
+  persistLastAccount(null);
+  setAutoReconnectPreference(false);
+}
+
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [wallet, setWallet] = useState<string | null>(null);
   const [walletNetwork, setWalletNetwork] = useState<StellarNetwork | null>(null);
@@ -93,14 +133,22 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setWalletNetwork(nextNetwork);
   }, []);
 
-  // On mount: restore last session via Freighter if still allowed.
+  // On mount: restore last session when the user opted in to auto-reconnect.
   useEffect(() => {
+    if (!getAutoReconnectPreference()) {
+      return;
+    }
+
     getPublicKey().then(async (key) => {
       if (key) {
         setWallet(key);
         persistLastAccount(key);
         await refreshWalletNetwork();
+        return;
       }
+
+      // Freighter permission was revoked or the extension is unavailable.
+      clearPersistedWalletSession();
     });
   }, [refreshWalletNetwork]);
 
@@ -128,7 +176,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       try {
         const currentKey = await getPublicKey();
         if (currentKey && wallet && currentKey !== wallet) {
-          clearJobCache();
+          clearWalletData();
           setWallet(currentKey);
           persistLastAccount(currentKey);
           if (typeof window !== "undefined") {
@@ -164,14 +212,29 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   }, [wallet]);
   const clearCachedData = useCallback(() => {
-    clearJobCache();
+    clearWalletData();
   }, []);
 
   const connectWallet = useCallback(async () => {
     if (wallet) return;
 
+    try {
+      checkConnectionRateLimit();
+    } catch (e) {
+      if (typeof window !== "undefined") {
+        alert(e instanceof Error ? e.message : String(e));
+      }
+      throw e;
+    }
+
     if (!connectPromiseRef.current) {
-      connectPromiseRef.current = stellarConnectWallet().finally(() => {
+      connectPromiseRef.current = stellarConnectWallet().then((res) => {
+        recordConnectionSuccess();
+        return res;
+      }).catch((err) => {
+        recordConnectionFailure();
+        throw err;
+      }).finally(() => {
         connectPromiseRef.current = null;
       });
     }
@@ -179,13 +242,15 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const key = await connectPromiseRef.current;
     setWallet(key);
     persistLastAccount(key);
+    setAutoReconnectPreference(true);
     await refreshWalletNetwork();
   }, [wallet, refreshWalletNetwork]);
 
   const disconnectWallet = useCallback(() => {
+    clearWalletData();
     setWallet(null);
     setWalletNetwork(null);
-    persistLastAccount(null);
+    clearPersistedWalletSession();
     // Clear session display preference
     if (typeof window !== "undefined") {
       sessionStorage.removeItem("wallet-display-mode");
@@ -204,14 +269,23 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const switchAccount = useCallback(async () => {
     setIsSwitching(true);
     try {
+      checkConnectionRateLimit();
       // Re-request access so Freighter shows the account picker.
       const newKey = await stellarConnectWallet();
+      recordConnectionSuccess();
       if (newKey && newKey !== wallet) {
-        clearJobCache();
+        clearWalletData();
         setWallet(newKey);
         persistLastAccount(newKey);
+        setAutoReconnectPreference(true);
       }
       await refreshWalletNetwork();
+    } catch (err) {
+      recordConnectionFailure();
+      if (typeof window !== "undefined" && err instanceof Error && err.message.includes("Too many")) {
+        alert(err.message);
+      }
+      throw err;
     } finally {
       setIsSwitching(false);
     }

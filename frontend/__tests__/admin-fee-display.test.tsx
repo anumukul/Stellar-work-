@@ -20,6 +20,10 @@ vi.mock("@/lib/contract", () => ({
   getJobCount: (...args: unknown[]) => mockGetJobCount(...args),
   getJob: (...args: unknown[]) => mockGetJob(...args),
   withdrawFees: (...args: unknown[]) => mockWithdrawFees(...args),
+  adminGetJobCount: vi.fn().mockResolvedValue(0),
+  adminGetAllJobs: vi.fn().mockResolvedValue([]),
+  getJobStatusCounts: vi.fn().mockResolvedValue({ open: 0, in_progress: 0, submitted_for_review: 0, completed: 0, cancelled: 0, disputed: 0, total: 0 }),
+  isWhitelistModeEnabled: vi.fn().mockResolvedValue(false),
   freelancerCancelJob: vi.fn(),
   getDescriptionCid: vi.fn(),
   storeDescriptionCid: vi.fn(),
@@ -39,6 +43,7 @@ describe("Admin page fee display (FE-TEST-17)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockWallet = "GADMINWALLET";
+    process.env.NEXT_PUBLIC_ADMIN_ADDRESS = "GADMINWALLET";
     // Sensible defaults so the admin view renders; individual tests override fees.
     mockGetNativeToken.mockResolvedValue("GTOKEN");
     mockGetJobCount.mockResolvedValue(0);
@@ -93,6 +98,7 @@ describe("Admin page fee display (FE-TEST-17)", () => {
     // identity re-triggers the fetch effect, re-reading getFees.
     mockGetFees.mockResolvedValue(50_000_000);
     mockWallet = "GADMINWALLET2";
+    process.env.NEXT_PUBLIC_ADMIN_ADDRESS = "GADMINWALLET2";
     rerender(<AdminPage />);
 
     await waitFor(() => expect(screen.getByText("5.00")).toBeInTheDocument());

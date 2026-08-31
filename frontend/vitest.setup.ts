@@ -31,9 +31,9 @@ function createStorage(): Storage {
 }
 
 // Polyfill crypto for stellar-sdk in node/jsdom environment
-if (!globalThis.crypto) {
+if (!globalThis.crypto || !globalThis.crypto.subtle) {
   // @ts-expect-error - jsdom needs a crypto polyfill for stellar-sdk
-  globalThis.crypto = crypto
+  globalThis.crypto = (crypto as unknown as { webcrypto?: Crypto }).webcrypto ?? crypto;
 }
 
 if (!globalThis.localStorage || typeof globalThis.localStorage.getItem !== 'function') {
@@ -49,3 +49,4 @@ if (!globalThis.sessionStorage || typeof globalThis.sessionStorage.getItem !== '
     configurable: true,
   })
 }
+

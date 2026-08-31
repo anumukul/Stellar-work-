@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "validate-env": "node scripts/validate-env.mjs",
+    "prebuild": "npm run validate-env",
     "build": "next build",
     "start": "next start",
     "analyze": "ANALYZE=true npm run build",
@@ -22,6 +24,8 @@
     "test:visual:update": "playwright test e2e/visual-regression.spec.ts --project=chromium --update-snapshots"
   },
   "dependencies": {
+    "@dnd-kit/core": "^6.0.0",
+    "@dnd-kit/sortable": "^6.0.0",
     "@ledgerhq/hw-app-str": "^6.28.0",
     "@ledgerhq/hw-transport-webhid": "^6.28.0",
     "@stellar/freighter-api": "^6.0.1",
@@ -49,12 +53,13 @@
     "@storybook/addon-vitest": "^10.4.6",
     "@storybook/nextjs-vite": "^10.4.6",
     "@tailwindcss/postcss": "^4",
+    "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@vitejs/plugin-react": "^6.0.1",
+    "@vitejs/plugin-react": "^4.7.0",
     "@vitest/coverage-v8": "^3.2.6",
     "axe-core": "^4.13.0",
     "eslint": "^9",
@@ -65,6 +70,8 @@
     "typescript": "^5",
     "vitest": "^3.2.4",
     "vitest-axe": "^0.1.0"
+    "vite": "^5.4.21",
+    "vitest": "^3.2.4"
   },
   "overrides": {
     "axios": "^1.18.0",

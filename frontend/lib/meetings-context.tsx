@@ -165,8 +165,17 @@ export function MeetingsProvider({ children }: { children: ReactNode }) {
   );
 }
 
+const defaultMeetingsContext: MeetingsContextValue = {
+  meetings: [],
+  proposeMeeting: async () => {},
+  cancelMeeting: async () => {},
+  confirmMeeting: async () => {},
+  getMeetingsForJob: () => [],
+  getUpcomingMeetings: () => [],
+  getPastMeetings: () => [],
+};
+
 export function useMeetings() {
   const ctx = useContext(MeetingsContext);
-  if (!ctx) throw new Error("useMeetings must be used within MeetingsProvider");
-  return ctx;
+  return ctx ?? defaultMeetingsContext;
 }
