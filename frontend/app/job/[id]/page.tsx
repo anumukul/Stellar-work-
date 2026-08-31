@@ -13,7 +13,7 @@ import ShareButton from "@/components/ShareButton";
 import dynamic from "next/dynamic";
 import { isRichText, PlainTextRenderer } from "@/lib/rich-text";
 import TruncatedAddress from "@/components/TruncatedAddress";
-import { verifyHtmlMatchesHash } from "@/lib/crypto";
+ 
 import { useNotifications } from "@/lib/notifications-context";
 import {
   acceptJob,
@@ -24,9 +24,12 @@ import {
   getJob,
   getJobViews,
   recordJobView,
+  storeDescriptionCid,
   submitWork,
   topUpEscrow,
 } from "@/lib/contract";
+import { uploadToIpfs } from "@/lib/ipfs-service";
+import { sha256Hex, htmlToPlainText, verifyHtmlMatchesHash } from "@/lib/crypto";
 import { fetchFromIpfs } from "@/lib/ipfs-service";
 import { sanitizeMeetingTitle } from "@/lib/sanitize";
 import {
@@ -147,6 +150,10 @@ function JobDetailPageContent() {
   const [fiatRates, setFiatRates] = useState<XlmFiatRateCache | null>(null);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isBookmarked, setIsBookmarked] = useState(false);
+  const [showAcceptModal, setShowAcceptModal] = useState(false);
+  const [coverText, setCoverText] = useState("");
+  const [coverPreview, setCoverPreview] = useState(false);
+  const COVER_CHAR_LIMIT = 2000;
   const [bookmarkAnimating, setBookmarkAnimating] = useState(false);
   const [statusAnnouncement, setStatusAnnouncement] = useState("");
   const [viewCount, setViewCount] = useState(0);
@@ -882,6 +889,55 @@ useEffect(() => {
             );
           })()}
         </div>
+        {/* Cover letter (if accepted with a cover letter and available locally) */}
+        {job.freelancer && (
+          (() => {
+            try {
+              const raw = localStorage.getItem(`job-cover:${id}`);
+              if (!raw) return null;
+              const parsed = JSON.parse(raw) as { hash: string; cid: string; author: string };
+              // Only show cover letter to the client (job owner)
+              if (!wallet || wallet !== job.client) return null;
+              const storedKey = `job-cover-content:${parsed.hash}`;
+              const cached = localStorage.getItem(storedKey);
+              if (cached) {
+                return (
+                  <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+                    <strong>Cover letter from freelancer:</strong>
+                    <div className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{cached}</div>
+                  </div>
+                );
+              }
+              // Fetch from IPFS (or fallback local storage) and verify
+              (async () => {
+                try {
+                  let text: string | null = null;
+                  if (parsed.cid.startsWith("fallback:")) {
+                    const fallbackHash = parsed.cid.replace("fallback:", "");
+                    const val = localStorage.getItem(`job-desc:${fallbackHash}`);
+                    if (val) text = val;
+                  } else {
+                    const fetched = await fetchFromIpfs(parsed.cid);
+                    text = fetched;
+                  }
+                  if (text) {
+                    const ok = await verifyHtmlMatchesHash(text, parsed.hash);
+                    if (ok) {
+                      try { localStorage.setItem(storedKey, text); } catch {}
+                      // trigger re-render
+                      setDescription((d) => d);
+                    }
+                  }
+                } catch (err) {
+                  // ignore
+                }
+              })();
+            } catch {
+              return null;
+            }
+            return null;
+          })()
+        )}
         <div className="flex flex-wrap items-center gap-2">
           <p className="flex items-center gap-2">
             <strong className="inline-flex items-center gap-2">
@@ -1235,14 +1291,7 @@ useEffect(() => {
                   className="min-w-0 flex-1 rounded-md border border-blue-600 bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-500 sm:flex-none sm:max-w-48 sm:py-2"
                   onClick={() => {
                     if (!wallet) return;
-                    void handleAction(
-                      () => acceptJob(wallet, id),
-                      "Job accepted successfully.",
-                      {
-                        event: "job_accepted",
-                        message: `You accepted Job #${id}.`,
-                      },
-                    );
+                    setShowAcceptModal(true);
                   }}
                   disabled={!wallet || loading}
                   title={
@@ -1257,6 +1306,86 @@ useEffect(() => {
                   </span>
                 </button>
               )}
+
+                {/* Accept Job modal with optional cover letter */}
+                {showAcceptModal && (
+                  <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40">
+                    <div className="max-w-xl w-full rounded-lg bg-white p-4 shadow-lg">
+                      <h3 className="text-lg font-medium">Accept Job</h3>
+                      <p className="text-sm text-slate-600">Optionally include a short cover letter to introduce yourself to the client. This is optional.</p>
+                      <label className="block text-sm text-slate-700 mt-3">
+                        Cover letter (optional)
+                      </label>
+                      <textarea
+                        value={coverText}
+                        onChange={(e) => setCoverText(e.target.value.slice(0, COVER_CHAR_LIMIT))}
+                        rows={6}
+                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                        placeholder="Write a brief note about why you're a good fit..."
+                      />
+                      <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+                        <div>
+                          <label className="inline-flex items-center gap-2">
+                            <input type="checkbox" checked={coverPreview} onChange={(e) => setCoverPreview(e.target.checked)} /> Preview
+                          </label>
+                        </div>
+                        <div>{coverText.length}/{COVER_CHAR_LIMIT}</div>
+                      </div>
+                      {coverPreview && coverText.trim() && (
+                        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+                          <strong className="text-sm">Preview</strong>
+                          <div className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{coverText}</div>
+                        </div>
+                      )}
+                      <div className="mt-4 flex justify-end gap-2">
+                        <button type="button" className="rounded-md border border-slate-300 px-4 py-2 text-sm" onClick={() => setShowAcceptModal(false)}>Cancel</button>
+                        <button
+                          type="button"
+                          className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                          disabled={loading}
+                          onClick={async () => {
+                            setShowAcceptModal(false);
+                            if (!wallet) return;
+                            setLoading(true);
+                            setError(null);
+                            try {
+                              // If cover text provided, upload to IPFS and store mapping on-chain
+                              if (coverText.trim()) {
+                                const html = coverText;
+                                const plain = htmlToPlainText(html);
+                                const hash = await sha256Hex(plain);
+                                const cid = await uploadToIpfs(html);
+                                try {
+                                  await storeDescriptionCid(wallet, hash, cid);
+                                } catch (err) {
+                                  // swallow mapping errors but continue
+                                  console.warn("storeDescriptionCid failed", err);
+                                }
+                                // Persist locally so the client can view the cover letter after accept
+                                try {
+                                  localStorage.setItem(`job-cover:${id}`, JSON.stringify({ hash, cid, author: wallet }));
+                                } catch {}
+                              }
+                              await handleAction(
+                                () => acceptJob(wallet, id),
+                                "Job accepted successfully.",
+                                {
+                                  event: "job_accepted",
+                                  message: `You accepted Job #${id}.`,
+                                },
+                              );
+                            } finally {
+                              setLoading(false);
+                              setCoverText("");
+                            }
+                          }}
+                        >
+                          {loading ? "Processing..." : "Accept Job"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
               {canSubmit && (
                 <button
