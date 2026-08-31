@@ -10,6 +10,7 @@ import { useToast } from "@/components/ToastProvider";
 import StatusPill from "@/components/StatusPill";
 import JobStatusTimeline from "@/components/JobStatusTimeline";
 import ShareButton from "@/components/ShareButton";
+import ClientReputationBadge from "@/components/ClientReputationBadge";
 import dynamic from "next/dynamic";
 import { isRichText, PlainTextRenderer } from "@/lib/rich-text";
 import TruncatedAddress from "@/components/TruncatedAddress";
@@ -823,6 +824,12 @@ useEffect(() => {
             </button>
           </div>
         </div>
+        <div className="flex items-center gap-2">
+          <strong>Client:</strong> 
+          <span>{job.client}</span>
+          <ClientReputationBadge clientAddress={job.client} />
+        </div>
+        <p>
         <p>
           <strong>Client:</strong> {job.client}
         </p>

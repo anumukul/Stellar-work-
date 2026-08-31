@@ -16,6 +16,7 @@ import {
   getJobStatusCounts,
   submitWork,
   enforceDeadline,
+  extendDeadline,
 } from "@/lib/contract";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import EmptyState from "@/components/EmptyState";
@@ -128,6 +129,10 @@ export default function DashboardPage() {
   const [selectedJobIds, setSelectedJobIds] = useState<Set<number>>(new Set());
   const [showBulkConfirm, setShowBulkConfirm] = useState(false);
   const [bulkCancelProgress, setBulkCancelProgress] = useState<{ done: number; total: number; failed: number[] } | null>(null);
+  const [showExtendModal, setShowExtendModal] = useState(false);
+  const [extendDate, setExtendDate] = useState("");
+  const [extendConsent, setExtendConsent] = useState("");
+  const [bulkExtendProgress, setBulkExtendProgress] = useState<{ done: number; total: number; failed: number[] } | null>(null);
   const bookmarkedIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const filterOptions: Array<JobStatus | "All" | "Active"> = ["All", ...STATUS_OPTIONS];
   const filterButtonRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -424,6 +429,30 @@ export default function DashboardPage() {
     }
   }, [wallet, selectedJobIds, fetchJobs, showSuccess, showError]);
 
+  const handleBulkExtend = useCallback(async (newDeadlineTimestamp: string, freelancerConsent?: string) => {
+    if (!wallet || selectedJobIds.size === 0) return;
+    setShowExtendModal(false);
+    const ids = Array.from(selectedJobIds);
+    setBulkExtendProgress({ done: 0, total: ids.length, failed: [] });
+    const failed: number[] = [];
+    for (const id of ids) {
+      try {
+        await extendDeadline(wallet, String(id), newDeadlineTimestamp, freelancerConsent || undefined);
+      } catch {
+        failed.push(id);
+      }
+      setBulkExtendProgress((prev) => (prev ? { ...prev, done: prev.done + 1, failed } : null));
+    }
+    setBulkExtendProgress(null);
+    setSelectedJobIds(new Set());
+    await fetchJobs();
+    if (failed.length === 0) {
+      showSuccess(`${ids.length} job${ids.length > 1 ? "s" : ""} updated with new deadline.`);
+    } else {
+      showError(`${ids.length - failed.length} updated; ${failed.length} failed (Job${failed.length > 1 ? "s" : ""} #${failed.join(", #")}).`);
+    }
+  }, [wallet, selectedJobIds, fetchJobs, showSuccess, showError]);
+
   const postedJobs = allJobs.filter((j) => j.job.client === wallet);
   const acceptedJobs = allJobs.filter((j) => j.job.freelancer === wallet);
 
@@ -705,7 +734,9 @@ export default function DashboardPage() {
             onSelectAll={handleSelectAllOpen}
             onDeselectAll={handleDeselectAll}
             onBulkCancel={() => setShowBulkConfirm(true)}
+            onBulkExtend={() => setShowExtendModal(true)}
             bulkCancelProgress={bulkCancelProgress}
+            bulkExtendProgress={bulkExtendProgress}
           />
           <JobSection
             title="Accepted Jobs"
@@ -830,6 +861,50 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {showExtendModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl ring-1 ring-black/5">
+            <h2 className="text-base font-semibold text-slate-900">Extend deadline for {selectedJobIds.size} job(s)</h2>
+            <p className="mt-1 text-sm text-slate-600">Provide a new deadline for the selected jobs. Deadlines must be a future timestamp.</p>
+            <div className="mt-4 grid gap-2">
+              <label className="text-xs text-slate-600">New deadline</label>
+              <input
+                type="datetime-local"
+                value={extendDate}
+                onChange={(e) => setExtendDate(e.target.value)}
+                className="w-full rounded-md border border-slate-300 px-2 py-1 text-sm"
+              />
+              <label className="text-xs text-slate-600">Freelancer consent (optional)</label>
+              <input
+                type="text"
+                placeholder="Freelancer address (optional)"
+                value={extendConsent}
+                onChange={(e) => setExtendConsent(e.target.value)}
+                className="w-full rounded-md border border-slate-300 px-2 py-1 text-sm"
+              />
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                className="rounded-lg px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 transition-colors"
+                onClick={() => setShowExtendModal(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
+                onClick={() => {
+                  if (!extendDate) return;
+                  const ts = Math.floor(new Date(extendDate).getTime() / 1000);
+                  void handleBulkExtend(String(ts), extendConsent || undefined);
+                }}
+              >
+                Extend {selectedJobIds.size} jobs
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {pendingAction !== null && (() => {
         const { type, jobId, amountXlm } = pendingAction;
         const configs = {
@@ -940,6 +1015,7 @@ export function JobSection({
   onSelectAll?: () => void;
   onDeselectAll?: () => void;
   onBulkCancel?: () => void;
+  onBulkExtend?: () => void;
   bulkCancelProgress?: { done: number; total: number; failed: number[] } | null;
   orderedIds?: number[];
   setOrder?: (ids: number[]) => void;
@@ -1016,6 +1092,19 @@ export function JobSection({
               >
                 {allOpenSelected ? "Deselect all" : "Select all open"}
               </button>
+              {selectionCount >= 1 && (
+                <>
+                  <button
+                    type="button"
+                    disabled={!!bulkExtendProgress}
+                    className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-60 transition-colors"
+                    onClick={onBulkExtend}
+                  >
+                    {bulkExtendProgress ? `Extending... ${bulkExtendProgress.done}/${bulkExtendProgress.total}` : `Extend selected (${selectionCount})`}
+                  </button>
+                  
+                </>
+              )}
               {selectionCount >= 2 && (
                 <button
                   type="button"
