@@ -21,6 +21,7 @@ import AppFooter from "@/components/AppFooter";
 import OfflineIndicator from "@/components/OfflineIndicator";
 import WalletNetworkWarning from "@/components/WalletNetworkWarning";
 import DeferredClientFeatures from "@/components/DeferredClientFeatures";
+import { PWAInstallPrompt } from "@/components/pwa-install-prompt";
 import { ClientProviders } from "./client-providers";
 import "./globals.css";
 
@@ -160,6 +161,7 @@ export default async function RootLayout({
           <DeferredClientFeatures />
           <ClientProviders>
           <OfflineIndicator />
+          <PWAInstallPrompt />
           <WalletNetworkWarning />
           <Navigation />
           <ScrollRestorer />
