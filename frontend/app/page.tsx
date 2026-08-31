@@ -171,6 +171,7 @@ export default function HomePage() {
       maxAmount: params.get("maxAmount") ?? "",
       dateRange: (params.get("dateRange") as JobFilters["dateRange"]) ?? "all",
       freelancerStatus: (params.get("freelancerStatus") as JobFilters["freelancerStatus"]) ?? "all",
+      language: params.get("language") ?? "all",
     };
   });
 
@@ -274,6 +275,7 @@ export default function HomePage() {
     if (advancedFilters.dateRange !== "all") params.set("dateRange", advancedFilters.dateRange);
     if (advancedFilters.freelancerStatus !== "all")
       params.set("freelancerStatus", advancedFilters.freelancerStatus);
+    if (advancedFilters.language !== "all") params.set("language", advancedFilters.language);
     if (compareIds.length > 0) params.set(COMPARE_IDS_PARAM, compareIds.join(","));
     const qs = params.toString();
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
@@ -496,7 +498,7 @@ export default function HomePage() {
       : bookmarkedJobs;
 
     return afterSearch.filter(({ job }) => {
-      const { minAmount, maxAmount, dateRange, freelancerStatus } = advancedFilters;
+      const { minAmount, maxAmount, dateRange, freelancerStatus, language } = advancedFilters;
       const amountXlm = parseFloat(toXlm(job.amount));
 
       if (statusFilter === "Active") {
@@ -517,6 +519,13 @@ export default function HomePage() {
       }
       if (freelancerStatus === "unassigned" && job.freelancer) return false;
       if (freelancerStatus === "assigned" && !job.freelancer) return false;
+
+      if (language !== "all") {
+        const desc = getDescription(job.description_hash);
+        const langMatch = desc.match(/<!--\s*stellarwork-language:\s*([a-z]{2})\s*-->/);
+        const jobLang = langMatch ? langMatch[1] : "en";
+        if (jobLang !== language) return false;
+      }
 
       return true;
     });

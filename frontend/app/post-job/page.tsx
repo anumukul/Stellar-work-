@@ -23,6 +23,7 @@ import {
   MIN_JOB_AMOUNT_STROOPS,
 } from "@/lib/sanitize";
 import { JobCategorySelect } from "@/components/JobCategorySelect";
+import { embedLanguage } from "@/lib/language";
 import { StrKey } from "@stellar/stellar-sdk";
 
 const MIN_JOB_AMOUNT_XLM = 0.5;
@@ -109,6 +110,7 @@ interface DraftData {
   tokenAddress: string;
   title: string;
   category: string;
+  language: string;
   savedAt: number;
 }
 
@@ -152,6 +154,7 @@ export default function PostJobPage() {
   const [deadline, setDeadline] = useState("");
   const [title, setTitle] = useState("");
   const [category, setCategory] = useState("development");
+  const [language, setLanguage] = useState("en");
   const descriptionLabelId = useId();
   const [tokenAddress, setTokenAddress] = useState(
     process.env.NEXT_PUBLIC_NATIVE_TOKEN ?? "",
@@ -212,6 +215,7 @@ export default function PostJobPage() {
       );
       setTitle(draft.title || "");
       setCategory(draft.category || "development");
+      setLanguage(draft.language || "en");
       setDraftSavedAt(draft.savedAt);
       setHasDraft(true);
     } else {
@@ -304,6 +308,7 @@ export default function PostJobPage() {
         tokenAddress,
         title,
         category,
+        language,
         savedAt: now,
       });
       setDraftSavedAt(now);
@@ -315,7 +320,7 @@ export default function PostJobPage() {
         clearTimeout(debounceTimerRef.current);
       }
     };
-  }, [amount, description, deadline, tokenAddress, title, category, wallet]);
+  }, [amount, description, deadline, tokenAddress, title, category, language, wallet]);
 
   // Warn on navigation away when unsaved changes exist
   useEffect(() => {
@@ -461,8 +466,9 @@ export default function PostJobPage() {
               setFieldErrors(nextFieldErrors);
               return;
             }
-            const htmlContent = description.trim();
-            const plainContent = htmlToPlainText(htmlContent);
+            const rawDescription = description.trim();
+            const htmlContent = embedLanguage(rawDescription, language);
+            const plainContent = htmlToPlainText(rawDescription);
             const hashHex = await sha256Hex(plainContent);
             const descriptionPayloadLen = new TextEncoder().encode(plainContent).length;
             const deadlineUnix = deadline
@@ -471,6 +477,7 @@ export default function PostJobPage() {
 
             localStorage.setItem(`job-desc:${hashHex}`, htmlContent);
             const cid = await uploadToIpfs(htmlContent);
+
             const result = await withContractErrorHandling(
               () =>
                 postJob(
@@ -497,6 +504,7 @@ export default function PostJobPage() {
               throw new Error("The job was posted, but its ID was not returned.");
             }
             const jobId = String(rawJobId);
+
             if (cid && !cid.startsWith("fallback:")) {
               try {
                 await withContractErrorHandling(

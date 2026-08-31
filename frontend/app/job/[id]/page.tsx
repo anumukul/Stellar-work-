@@ -179,6 +179,11 @@ function JobDetailPageContent() {
     };
   } | null>(null);
 
+  // Translation state
+  const [translatedDescription, setTranslatedDescription] = useState<string | null>(null);
+  const [translating, setTranslating] = useState(false);
+  const [translateTarget, setTranslateTarget] = useState("en");
+
   const numericId = Number(id);
   const isIdValid =
     !isNaN(numericId) && numericId > 0 && Number.isInteger(numericId);
@@ -716,6 +721,19 @@ useEffect(() => {
             {job.category}
           </span>
         )}
+        {(() => {
+          const descText = description ?? localStorage.getItem(`job-desc:${job.description_hash}`) ?? "";
+          const langMatch = descText.match(/<!--\s*stellarwork-language:\s*([a-z]{2})\s*-->/);
+          const lang = langMatch ? langMatch[1] : null;
+          return lang ? (
+            <span
+              className="rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700 uppercase"
+              title={`Language: ${lang}`}
+            >
+              {lang}
+            </span>
+          ) : null;
+        })()}
       </div>
 
       <ContractRetryBanner
@@ -908,12 +926,64 @@ useEffect(() => {
                 </span>
               );
             }
-            return isRichText(content) ? (
-              <RichTextRenderer html={content} className="mt-1" />
+            const displayContent = translatedDescription ?? content;
+            return isRichText(displayContent) ? (
+              <RichTextRenderer html={displayContent} className="mt-1" />
             ) : (
-              <PlainTextRenderer text={content} className="mt-1" />
+              <PlainTextRenderer text={displayContent} className="mt-1" />
             );
           })()}
+
+          {/* Translation controls */}
+          {(description ?? localStorage.getItem(`job-desc:${job.description_hash}`)) && (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <select
+                value={translateTarget}
+                onChange={(e) => {
+                  setTranslateTarget(e.target.value);
+                  setTranslatedDescription(null);
+                }}
+                className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700"
+                aria-label="Translate to language"
+              >
+                {Object.entries(SUPPORTED_LANGUAGES).map(([code, label]) => (
+                  <option key={code} value={code}>{label}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                disabled={translating}
+                onClick={async () => {
+                  const raw =
+                    description ??
+                    localStorage.getItem(`job-desc:${job.description_hash}`) ??
+                    "";
+                  const srcLang = extractLanguage(raw) ?? "en";
+                  setTranslating(true);
+                  try {
+                    const { htmlToPlainText } = await import("@/lib/crypto");
+                    const plain = htmlToPlainText(raw);
+                    const translated = await translateText(plain, translateTarget, srcLang);
+                    setTranslatedDescription(translated);
+                  } finally {
+                    setTranslating(false);
+                  }
+                }}
+                className="rounded-md border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+              >
+                {translating ? "Translating…" : "Translate"}
+              </button>
+              {translatedDescription && (
+                <button
+                  type="button"
+                  onClick={() => setTranslatedDescription(null)}
+                  className="text-xs text-slate-500 hover:text-slate-700 underline"
+                >
+                  Show original
+                </button>
+              )}
+            </div>
+          )}
         </div>
         {/* Cover letter (if accepted with a cover letter and available locally) */}
         {job.freelancer && (
