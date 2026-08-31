@@ -841,6 +841,29 @@ function JobDetailPageContent() {
           >
             {copied ? "Copied!" : "Copy"}
           </button>
+          {process.env.NODE_ENV !== "production" && (
+            <button
+              onClick={() => {
+                const raw = JSON.stringify(
+                  {
+                    job_id: id,
+                    contract_id:
+                      process.env.NEXT_PUBLIC_CONTRACT_ID ?? "unknown",
+                    job,
+                    description,
+                    last_updated: new Date().toISOString(),
+                  },
+                  null,
+                  2,
+                );
+                void copyToClipboard(raw);
+              }}
+              className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 active:bg-slate-200"
+              title="Copy raw job JSON to clipboard"
+            >
+              {copied ? "Copied!" : "Copy Raw JSON"}
+            </button>
+          )}
         </div>
         <p className="flex flex-wrap items-center gap-2">
           <strong>Deadline:</strong>
