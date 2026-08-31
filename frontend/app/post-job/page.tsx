@@ -6,6 +6,7 @@ import ErrorBanner from "@/components/ErrorBanner";
 import dynamic from "next/dynamic";
 import { getExplorerTxUrl, isValidStellarAddress, parseContractError, getNativeBalance } from "@/lib/stellar";
 import { useWallet } from "@/lib/wallet-context";
+import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState } from "react";
 import {
   getRateLimitStatus,
@@ -18,6 +19,7 @@ import { StrKey } from "@stellar/stellar-sdk";
 
 const MIN_JOB_AMOUNT_XLM = 0.5;
 const DRAFT_STORAGE_KEY_PREFIX = "stellarwork:post-job-draft:";
+const REDIRECT_DELAY_MS = 1500;
 
 interface DraftData {
   amount: string;
@@ -144,6 +146,7 @@ function clearDraft(walletAddress: string | null): void {
 import { sha256Hex, htmlToPlainText } from "@/lib/crypto";
 
 export default function PostJobPage() {
+  const router = useRouter();
   const { wallet, connectWallet } = useWallet();
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
@@ -183,7 +186,14 @@ export default function PostJobPage() {
   const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
   const [hasDraft, setHasDraft] = useState(false);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const redirectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevWalletRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (redirectTimerRef.current) clearTimeout(redirectTimerRef.current);
+    };
+  }, []);
 
   const parseAmountToStroops = (value: string): string | null => {
     const trimmed = value.trim();
@@ -492,6 +502,18 @@ export default function PostJobPage() {
               title.trim(),
               category,
             );
+            if (result.status !== "SUCCESS") {
+              throw new Error(result.errorResult ?? "Job transaction failed.");
+            }
+            const rawJobId = result.data;
+            if (
+              typeof rawJobId !== "bigint" &&
+              typeof rawJobId !== "number" &&
+              typeof rawJobId !== "string"
+            ) {
+              throw new Error("The job was posted, but its ID was not returned.");
+            }
+            const jobId = String(rawJobId);
             if (cid && !cid.startsWith("fallback:")) {
               try {
                 await storeDescriptionCid(wallet, hashHex, cid);
@@ -504,9 +526,7 @@ export default function PostJobPage() {
             }
             recordPostJob();
             setRateLimit(getRateLimitStatus());
-            const jobId = typeof result === "number" || typeof result === "string" ? result : null;
-            const successMessage =
-              jobId != null ? `Job #${jobId} created successfully.` : "Job submitted to contract.";
+            const successMessage = `Job #${jobId} created successfully. Redirecting...`;
             setSuccess(successMessage);
             if (successMessage !== lastAnnouncedSuccess) {
               setLastAnnouncedSuccess(successMessage);
@@ -521,6 +541,10 @@ export default function PostJobPage() {
             setCategory("development");
             setDraftSavedAt(null);
             setHasDraft(false);
+
+            redirectTimerRef.current = setTimeout(() => {
+              router.push(`/job/${encodeURIComponent(jobId)}`);
+            }, REDIRECT_DELAY_MS);
           } catch (e) {
             setError(
               formatContractError(

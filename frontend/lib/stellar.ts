@@ -369,6 +369,13 @@ async function invokeContract(
       throw new Error(simulation.error);
     }
 
+      if (status.status === rpc.Api.GetTransactionStatus.SUCCESS) {
+        return {
+          status: "SUCCESS",
+          hash: sent.hash,
+          data: status.returnValue ? scValToNative(status.returnValue) : undefined,
+        };
+      }
     const assembled = rpc.assembleTransaction(tx, simulation).build();
     const prepared = await server.prepareTransaction(assembled);
     const signedXdr = await signTransaction(prepared.toXDR());

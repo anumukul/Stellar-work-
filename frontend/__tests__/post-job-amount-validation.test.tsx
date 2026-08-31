@@ -3,6 +3,10 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import PostJobPage from "@/app/post-job/page";
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
 const mockPostJob = vi.fn();
 const mockGetDescPayloadMax = vi.fn();
 const mockUseWallet = vi.fn();
@@ -97,7 +101,7 @@ describe("Post job amount input validation", () => {
     vi.clearAllMocks();
     localStorage.clear();
     mockGetDescPayloadMax.mockResolvedValue(4096);
-    mockPostJob.mockResolvedValue({ hash: "TX_OK", status: "SUCCESS" });
+    mockPostJob.mockResolvedValue({ hash: "TX_OK", status: "SUCCESS", data: 1n });
     mockUseWallet.mockReturnValue({
       wallet: "GWALLET000000000000000000000000000000000000000000000000000",
       connectWallet: vi.fn(),
