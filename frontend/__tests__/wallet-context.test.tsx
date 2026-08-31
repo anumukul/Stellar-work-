@@ -58,11 +58,14 @@ function WalletErrorProbe() {
 describe("WalletProvider", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
+    sessionStorage.clear();
     mockGetWalletNetwork.mockResolvedValue("testnet");
     mockWatchWalletNetworkChanges.mockReturnValue(() => undefined);
   });
 
-  it("propagates provider state to consumers", async () => {
+  it("propagates provider state to consumers when auto-reconnect is enabled", async () => {
+    localStorage.setItem("stellarwork:wallet-auto-reconnect", "true");
     mockGetPublicKey.mockResolvedValue("GINITIALWALLET");
 
     render(
@@ -76,6 +79,48 @@ describe("WalletProvider", () => {
     );
     await waitFor(() =>
       expect(screen.getByTestId("wallet-network")).toHaveTextContent("testnet"),
+    );
+    expect(localStorage.getItem("stellarwork:last-connected-account")).toBe(
+      "GINITIALWALLET",
+    );
+  });
+
+  it("skips auto-reconnect after an explicit disconnect", async () => {
+    localStorage.setItem("stellarwork:wallet-auto-reconnect", "false");
+    mockGetPublicKey.mockResolvedValue("GSHOULDNOTCONNECT");
+
+    render(
+      <WalletProvider>
+        <WalletProbe />
+      </WalletProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("wallet")).toHaveTextContent("none"),
+    );
+    expect(mockGetPublicKey).not.toHaveBeenCalled();
+  });
+
+  it("clears stale persistence when Freighter no longer allows access", async () => {
+    localStorage.setItem("stellarwork:wallet-auto-reconnect", "true");
+    localStorage.setItem(
+      "stellarwork:last-connected-account",
+      "GSTALEWALLET",
+    );
+    mockGetPublicKey.mockResolvedValue(null);
+
+    render(
+      <WalletProvider>
+        <WalletProbe />
+      </WalletProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("wallet")).toHaveTextContent("none"),
+    );
+    expect(localStorage.getItem("stellarwork:last-connected-account")).toBeNull();
+    expect(localStorage.getItem("stellarwork:wallet-auto-reconnect")).toBe(
+      "false",
     );
   });
 
@@ -95,6 +140,9 @@ describe("WalletProvider", () => {
     await waitFor(() =>
       expect(screen.getByTestId("wallet")).toHaveTextContent("GCONNECTEDWALLET"),
     );
+    expect(localStorage.getItem("stellarwork:wallet-auto-reconnect")).toBe(
+      "true",
+    );
     await waitFor(() =>
       expect(screen.getByTestId("wallet-network")).toHaveTextContent("testnet"),
     );
@@ -102,6 +150,10 @@ describe("WalletProvider", () => {
     fireEvent.click(screen.getByRole("button", { name: "disconnect" }));
     expect(screen.getByTestId("wallet")).toHaveTextContent("none");
     expect(screen.getByTestId("wallet-network")).toHaveTextContent("none");
+    expect(localStorage.getItem("stellarwork:wallet-auto-reconnect")).toBe(
+      "false",
+    );
+    expect(localStorage.getItem("stellarwork:last-connected-account")).toBeNull();
   });
 
   it("surfaces connect errors to consumer callers", async () => {
