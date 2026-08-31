@@ -38,7 +38,9 @@ import { isConfirmSuppressed, CONFIRM_KEYS } from "@/lib/confirm-prefs";
 import { useWallet } from "@/lib/wallet-context";
 import type { Job, JobStatus, NotificationEvent, JobStatusCounts } from "@/lib/types";
 import { STATUS_TO_COUNTS_KEY } from "@/lib/types";
-import { useEffect, useState, useCallback, useRef, type KeyboardEvent } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo, type KeyboardEvent } from "react";
+import { buildActiveFreelancerJobCountMap } from "@/lib/availability";
+import AvailabilityIndicator from "@/components/AvailabilityIndicator";
 
 type PendingDashAction = {
   type: "cancelJob" | "approveWork" | "submitWork" | "freelancerCancelJob" | "enforceDeadline";
@@ -431,6 +433,10 @@ export default function DashboardPage() {
 
   const filteredPosted = filterJobs(postedJobs);
   const filteredAccepted = filterJobs(acceptedJobs);
+  const activeFreelancerJobCounts = useMemo(
+    () => buildActiveFreelancerJobCountMap(allJobs),
+    [allJobs],
+  );
 
   const handleFilterKeyDown = (
     event: KeyboardEvent<HTMLButtonElement>,
@@ -606,6 +612,7 @@ export default function DashboardPage() {
             onAction={handleAction}
             onRequestAction={requestDashAction}
             onClearFilter={() => setStatusFilter("All")}
+            activeFreelancerJobCounts={activeFreelancerJobCounts}
             selectedJobs={selectedJobs}
             onToggleBatchSelect={(id) => {
               setSelectedJobs((prev) => {
@@ -832,6 +839,7 @@ function JobSection({
   onDeselectAll,
   onBulkCancel,
   bulkCancelProgress,
+  activeFreelancerJobCounts,
 }: {
   title: string;
   subtitle: string;
@@ -855,6 +863,7 @@ function JobSection({
   onDeselectAll?: () => void;
   onBulkCancel?: () => void;
   bulkCancelProgress?: { done: number; total: number; failed: number[] } | null;
+  activeFreelancerJobCounts?: Map<string, number>;
 }) {
   const pendingReviewIds = allJobs
     .filter((j) => j.job.status === "SubmittedForReview")
@@ -956,6 +965,11 @@ function JobSection({
                   isSelected={isSelected}
                   onToggleSelect={toggle}
                   selectMode={canBulkCancel ? "cancel" : canBatchApprove ? "approve" : undefined}
+                  freelancerActiveJobCount={
+                    job.freelancer
+                      ? activeFreelancerJobCounts?.get(job.freelancer) ?? 0
+                      : 0
+                  }
                 />
               </li>
             );
@@ -977,6 +991,7 @@ function JobCard({
   isSelected = false,
   onToggleSelect,
   selectMode,
+  freelancerActiveJobCount = 0,
 }: {
   id: number;
   job: Job;
@@ -988,6 +1003,7 @@ function JobCard({
   isSelected?: boolean;
   onToggleSelect?: (id: number) => void;
   selectMode?: "cancel" | "approve";
+  freelancerActiveJobCount?: number;
 }) {
   const actions = getActions(id, job, wallet, role);
   const amountXlm = `${toXlm(job.amount)} XLM`;
@@ -1051,8 +1067,14 @@ function JobCard({
           })()}
         </p>
         {role === "client" && job.freelancer && (
-          <p className="truncate">
-            Freelancer: <TruncatedAddress address={job.freelancer} />
+          <p className="flex flex-wrap items-center gap-2 truncate">
+            <span>Freelancer:</span>
+            <TruncatedAddress address={job.freelancer} />
+            <AvailabilityIndicator
+              address={job.freelancer}
+              activeJobCount={freelancerActiveJobCount}
+              showLabel={true}
+            />
           </p>
         )}
         {role === "freelancer" && (

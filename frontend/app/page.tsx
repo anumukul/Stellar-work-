@@ -1,6 +1,7 @@
 "use client";
 
 import ErrorBanner from "@/components/ErrorBanner";
+import AvailabilityIndicator from "@/components/AvailabilityIndicator";
 import EmptyState from "@/components/EmptyState";
 import InfoTooltip from "@/components/InfoTooltip";
 import LoadingState from "@/components/LoadingState";
@@ -40,6 +41,7 @@ import { getExplorerTxUrl } from "@/lib/stellar";
 import { getRecentJobIds, getJobWindowBounds } from "@/lib/recent-ids";
 import Pagination from "@/components/Pagination";
 import type { Job, JobStatus } from "@/lib/types";
+import { buildActiveFreelancerJobCountMap } from "@/lib/availability";
 import { useWallet } from "@/lib/wallet-context";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
@@ -463,6 +465,11 @@ export default function HomePage() {
     if (stored) return stored;
     return "Description unavailable (posted from another device)";
   }, [descriptions]);
+
+  const activeFreelancerJobCounts = useMemo(
+    () => buildActiveFreelancerJobCountMap(jobs),
+    [jobs],
+  );
 
   const visibleJobs = useMemo(() => {
     const bookmarkedJobs = showBookmarkedOnly
@@ -1137,6 +1144,16 @@ export default function HomePage() {
                   <p className="mt-1 text-xs text-slate-500">
                     Hash: {job.description_hash.slice(0, 12)}...
                   </p>
+                  {job.freelancer && (
+                    <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                      <span>Freelancer:</span>
+                      <TruncatedAddress address={job.freelancer} />
+                      <AvailabilityIndicator
+                        address={job.freelancer}
+                        activeJobCount={activeFreelancerJobCounts.get(job.freelancer) ?? 0}
+                      />
+                    </p>
+                  )}
                   <p className="mt-1 text-xs text-slate-600">
                     {deadline
                       ? `Deadline: ${deadline.isPast ? "Past due" : deadline.relative} • ${deadline.exact}`
