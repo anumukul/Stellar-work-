@@ -830,6 +830,9 @@ useEffect(() => {
 
       <article className="space-y-2 rounded-lg border border-slate-200 bg-white p-5 text-sm">
         <div className="flex items-center justify-between gap-2">
+          <p>
+            <strong>Status:</strong> <StatusPill status={job.status} isLoading={loading} />
+          </p>
           <div className="flex items-center gap-3">
             <p>
               <strong>Status:</strong> <StatusPill status={job.status} />
