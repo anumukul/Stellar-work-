@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
+import { sanitizeAnnouncementMessage } from "@/lib/sanitize";
 
 export interface AnnouncementConfig {
   id: string;
@@ -87,6 +88,11 @@ export default function AnnouncementBanner() {
 
   if (!isVisible || !config) return null;
 
+  const sanitizedMessage = useMemo(
+    () => sanitizeAnnouncementMessage(config.message),
+    [config.message],
+  );
+
   const bgColors = {
     info: "bg-blue-600 text-white",
     warning: "bg-amber-500 text-white",
@@ -99,7 +105,7 @@ export default function AnnouncementBanner() {
       <div className="mx-auto max-w-5xl pr-8">
         <div 
           className="text-sm font-medium" 
-          dangerouslySetInnerHTML={{ __html: config.message }} 
+          dangerouslySetInnerHTML={{ __html: sanitizedMessage }} 
         />
       </div>
       <button

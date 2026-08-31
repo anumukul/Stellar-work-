@@ -31,6 +31,7 @@ import {
   areReadReceiptsEnabled,
   type Message,
 } from "@/lib/messaging";
+import { sanitizePlainText } from "@/lib/sanitize";
 
 const MAX_BODY_LEN = 2000;
 const TYPING_TIMEOUT_MS = 3000;
@@ -303,7 +304,7 @@ export default function ConversationPage() {
   async function handleSend(e?: FormEvent) {
     e?.preventDefault();
     if (!wallet || !body.trim() || sending) return;
-    const clean = sanitiseMessageBody(body);
+    const clean = sanitiseMessageBody(sanitizePlainText(body, MAX_BODY_LEN));
     if (!clean) return;
 
     setSending(true);

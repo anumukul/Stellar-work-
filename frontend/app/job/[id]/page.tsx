@@ -25,6 +25,7 @@ import {
   topUpEscrow,
 } from "@/lib/contract";
 import { fetchFromIpfs } from "@/lib/ipfs-service";
+import { sanitizeMeetingTitle } from "@/lib/sanitize";
 import {
   hasViewedToday,
   markViewed,
@@ -1026,6 +1027,31 @@ function JobDetailPageContent() {
                     Send Proposal
                   </button>
                 </div>
+                <button
+                  type="button"
+                  disabled={!meetingTitle.trim() || !slotDate || !slotStart || !slotEnd}
+                  onClick={() => {
+                    const start = `${slotDate}T${slotStart}:00`;
+                    const end = `${slotDate}T${slotEnd}:00`;
+                    const cleanTitle = sanitizeMeetingTitle(meetingTitle);
+                    if (!cleanTitle) return;
+                    proposeMeeting(
+                      numericId,
+                      cleanTitle,
+                      [{ start, end }],
+                      wallet,
+                      otherParty,
+                    );
+                    setMeetingTitle("");
+                    setSlotDate("");
+                    setSlotStart("");
+                    setSlotEnd("");
+                    setShowScheduleForm(false);
+                  }}
+                  className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Send Proposal
+                </button>
               </div>
             );
           })()}

@@ -26,7 +26,15 @@ import { useWallet } from "@/lib/wallet-context";
 import type { Job, JobStatus, JobStatusCounts } from "@/lib/types";
 import { STATUS_TO_COUNTS_KEY } from "@/lib/types";
 import { useEffect, useState, useCallback } from "react";
-import { ANNOUNCEMENT_STORAGE_KEY, type AnnouncementConfig } from "@/components/AnnouncementBanner";
+import {
+  ANNOUNCEMENT_STORAGE_KEY,
+  type AnnouncementConfig,
+} from "@/components/AnnouncementBanner";
+import {
+  sanitizeAnnouncementMessage,
+  validateStellarAddress,
+  MAX_ANNOUNCEMENT_MSG_LEN,
+} from "@/lib/sanitize";
 import {
   getAllFlagNames,
   getFlagDescription,
@@ -78,7 +86,9 @@ export default function AdminPage() {
 
   // Announcement state
   const [announcementMsg, setAnnouncementMsg] = useState("");
-  const [announcementType, setAnnouncementType] = useState<"info" | "warning" | "error" | "success">("info");
+  const [announcementType, setAnnouncementType] = useState<
+    "info" | "warning" | "error" | "success"
+  >("info");
   const [announcementEnabled, setAnnouncementEnabled] = useState(false);
   const [announcementTtl, setAnnouncementTtl] = useState<number>(0);
 
@@ -169,7 +179,7 @@ export default function AdminPage() {
       try {
         const raw = localStorage.getItem(TX_LOG_KEY);
         if (raw) setWithdrawals(JSON.parse(raw) as WithdrawalTx[]);
-        
+
         const rawAnn = localStorage.getItem(ANNOUNCEMENT_STORAGE_KEY);
         if (rawAnn) {
           const parsed = JSON.parse(rawAnn) as AnnouncementConfig;
@@ -239,12 +249,16 @@ export default function AdminPage() {
   };
 
   const handlePublishAnnouncement = () => {
+    const sanitized = sanitizeAnnouncementMessage(announcementMsg);
     const config: AnnouncementConfig = {
       id: `${Date.now()}`,
       type: announcementType,
-      message: announcementMsg,
+      message: sanitized,
       enabled: announcementEnabled,
-      expiresAt: announcementTtl > 0 ? Date.now() + announcementTtl * 60 * 60 * 1000 : null,
+      expiresAt:
+        announcementTtl > 0
+          ? Date.now() + announcementTtl * 60 * 60 * 1000
+          : null,
     };
     try {
       localStorage.setItem(ANNOUNCEMENT_STORAGE_KEY, JSON.stringify(config));
@@ -256,12 +270,35 @@ export default function AdminPage() {
     }
   };
 
-  const handleAccessAction = async (action: "addBlacklist" | "removeBlacklist" | "addWhitelist" | "removeWhitelist") => {
+  const handleAccessAction = async (
+    action:
+      | "addBlacklist"
+      | "removeBlacklist"
+      | "addWhitelist"
+      | "removeWhitelist",
+  ) => {
     if (!wallet || !accessTarget) return;
+    const validated = validateStellarAddress(accessTarget);
+    if (!validated) {
+      setError(
+        "Invalid Stellar address. Must start with G and be 56 characters.",
+      );
+      return;
+    }
     setAccessUpdating(true);
     setError(null);
     setSuccessMessage(null);
     try {
+      const actualAdmin = process.env.NEXT_PUBLIC_ADMIN_ADDRESS || wallet;
+      if (action === "addBlacklist")
+        await addToBlacklist(actualAdmin, validated);
+      else if (action === "removeBlacklist")
+        await removeFromBlacklist(actualAdmin, validated);
+      else if (action === "addWhitelist")
+        await addToWhitelist(actualAdmin, validated);
+      else if (action === "removeWhitelist")
+        await removeFromWhitelist(actualAdmin, validated);
+      setSuccessMessage(`Successfully processed ${action} for ${validated}`);
       const actualAdmin = process.env.NEXT_PUBLIC_ADMIN_ADDRESS;
       if (!actualAdmin || actualAdmin !== wallet) throw new Error("Unauthorized");
       if (action === "addBlacklist") await addToBlacklist(actualAdmin, accessTarget);
@@ -271,7 +308,9 @@ export default function AdminPage() {
       setSuccessMessage(`Successfully processed ${action} for ${accessTarget}`);
       setAccessTarget("");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Access control action failed.");
+      setError(
+        e instanceof Error ? e.message : "Access control action failed.",
+      );
     } finally {
       setAccessUpdating(false);
     }
@@ -287,9 +326,13 @@ export default function AdminPage() {
       if (!actualAdmin || actualAdmin !== wallet) throw new Error("Unauthorized");
       await setWhitelistMode(actualAdmin, !isWhitelistMode);
       setIsWhitelistMode(!isWhitelistMode);
-      setSuccessMessage(`Whitelist mode ${!isWhitelistMode ? "enabled" : "disabled"}.`);
+      setSuccessMessage(
+        `Whitelist mode ${!isWhitelistMode ? "enabled" : "disabled"}.`,
+      );
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to toggle whitelist mode.");
+      setError(
+        e instanceof Error ? e.message : "Failed to toggle whitelist mode.",
+      );
     } finally {
       setAccessUpdating(false);
     }
@@ -300,11 +343,17 @@ export default function AdminPage() {
       <section className="mx-auto max-w-3xl space-y-6">
         <h1 className="text-2xl font-semibold">Admin Panel</h1>
         <SectionCard className="p-8 text-center">
-          <p className="text-slate-600">Connect your wallet to access admin controls.</p>
+          <p className="text-slate-600">
+            Connect your wallet to access admin controls.
+          </p>
           <button
             className="mt-4 rounded-md bg-slate-900 px-5 py-2.5 text-sm font-medium text-white"
             onClick={async () => {
-              try { await connectWallet(); } catch { /* cancelled */ }
+              try {
+                await connectWallet();
+              } catch {
+                /* cancelled */
+              }
             }}
           >
             Connect Wallet
@@ -384,19 +433,24 @@ export default function AdminPage() {
       <SectionCard title="Announcement Management">
         <div className="space-y-4 mt-4">
           <div>
-            <label className="block text-sm font-medium text-slate-700">Message (HTML supported)</label>
+            <label className="block text-sm font-medium text-slate-700">
+              Message (HTML supported)
+            </label>
             <textarea
               className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
               rows={3}
               value={announcementMsg}
               onChange={(e) => setAnnouncementMsg(e.target.value)}
               placeholder="E.g. Scheduled maintenance on Friday at 2AM UTC."
+              maxLength={MAX_ANNOUNCEMENT_MSG_LEN}
             />
           </div>
-          
+
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div>
-              <label className="block text-sm font-medium text-slate-700">Type</label>
+              <label className="block text-sm font-medium text-slate-700">
+                Type
+              </label>
               <select
                 className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
                 value={announcementType}
@@ -409,7 +463,9 @@ export default function AdminPage() {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-700">Duration (TTL)</label>
+              <label className="block text-sm font-medium text-slate-700">
+                Duration (TTL)
+              </label>
               <select
                 className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
                 value={announcementTtl}
@@ -429,20 +485,33 @@ export default function AdminPage() {
                   checked={announcementEnabled}
                   onChange={(e) => setAnnouncementEnabled(e.target.checked)}
                 />
-                <span className="text-sm font-medium text-slate-700">Enable Announcement</span>
+                <span className="text-sm font-medium text-slate-700">
+                  Enable Announcement
+                </span>
               </label>
             </div>
           </div>
 
           <div className="pt-2">
             <p className="text-sm font-medium text-slate-700 mb-2">Preview:</p>
-            <div className={`rounded-md p-3 text-sm font-medium text-white ${
-              announcementType === "info" ? "bg-blue-600" :
-              announcementType === "warning" ? "bg-amber-500" :
-              announcementType === "error" ? "bg-red-600" :
-              "bg-emerald-600"
-            }`}>
-              <div dangerouslySetInnerHTML={{ __html: announcementMsg || "<em>No message</em>" }} />
+            <div
+              className={`rounded-md p-3 text-sm font-medium text-white ${
+                announcementType === "info"
+                  ? "bg-blue-600"
+                  : announcementType === "warning"
+                    ? "bg-amber-500"
+                    : announcementType === "error"
+                      ? "bg-red-600"
+                      : "bg-emerald-600"
+              }`}
+            >
+              <div
+                dangerouslySetInnerHTML={{
+                  __html:
+                    sanitizeAnnouncementMessage(announcementMsg) ||
+                    "<em>No message</em>",
+                }}
+              />
             </div>
           </div>
 
@@ -461,7 +530,10 @@ export default function AdminPage() {
           <div className="flex items-center justify-between p-4 border border-slate-200 rounded-md bg-slate-50">
             <div>
               <p className="font-medium text-slate-900">Whitelist Mode</p>
-              <p className="text-sm text-slate-500">If enabled, only whitelisted users can interact with the platform.</p>
+              <p className="text-sm text-slate-500">
+                If enabled, only whitelisted users can interact with the
+                platform.
+              </p>
             </div>
             <button
               onClick={handleToggleWhitelistMode}
@@ -470,14 +542,18 @@ export default function AdminPage() {
                 isWhitelistMode ? "bg-slate-900" : "bg-slate-300"
               }`}
             >
-              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                isWhitelistMode ? "translate-x-6" : "translate-x-1"
-              }`} />
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  isWhitelistMode ? "translate-x-6" : "translate-x-1"
+                }`}
+              />
             </button>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700">Target Address</label>
+            <label className="block text-sm font-medium text-slate-700">
+              Target Address
+            </label>
             <input
               type="text"
               className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
@@ -486,7 +562,7 @@ export default function AdminPage() {
               placeholder="G..."
             />
           </div>
-          
+
           <div className="flex flex-wrap gap-2 pt-2">
             <button
               className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
@@ -524,10 +600,15 @@ export default function AdminPage() {
       <SectionCard title="Feature Flags">
         <div className="mt-4 space-y-3">
           {flagNames.map((name) => (
-            <div key={name} className="flex items-center justify-between rounded-md border border-slate-200 p-3">
+            <div
+              key={name}
+              className="flex items-center justify-between rounded-md border border-slate-200 p-3"
+            >
               <div>
                 <p className="text-sm font-medium text-slate-900">{name}</p>
-                <p className="text-xs text-slate-500">{getFlagDescription(name)}</p>
+                <p className="text-xs text-slate-500">
+                  {getFlagDescription(name)}
+                </p>
               </div>
               <button
                 type="button"
@@ -553,7 +634,10 @@ export default function AdminPage() {
           ))}
           <div className="flex items-center justify-between pt-2">
             <p className="text-xs text-slate-400">
-              Overrides stored in localStorage. URL overrides: <code className="rounded bg-slate-100 px-1 text-xs">?feature.flagName=true</code>
+              Overrides stored in localStorage. URL overrides:{" "}
+              <code className="rounded bg-slate-100 px-1 text-xs">
+                ?feature.flagName=true
+              </code>
             </p>
             <button
               className="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
@@ -596,9 +680,14 @@ export default function AdminPage() {
         <SectionCard title="Withdrawal History">
           <div className="mt-2 divide-y divide-slate-100">
             {withdrawals.slice(0, 10).map((tx) => (
-              <div key={tx.id} className="flex items-center justify-between py-2">
+              <div
+                key={tx.id}
+                className="flex items-center justify-between py-2"
+              >
                 <div>
-                  <p className="text-sm font-medium text-slate-900">{tx.amount} XLM</p>
+                  <p className="text-sm font-medium text-slate-900">
+                    {tx.amount} XLM
+                  </p>
                   <p className="text-xs text-slate-400">
                     {new Date(tx.timestamp).toLocaleDateString("en-GB", {
                       day: "numeric",
@@ -720,18 +809,32 @@ export default function AdminPage() {
               </caption>
               <thead>
                 <tr className="border-b border-slate-200 text-xs text-slate-500">
-                  <th scope="col" className="pb-2 pr-4">ID</th>
-                  <th scope="col" className="pb-2 pr-4">Status</th>
-                  <th scope="col" className="pb-2 pr-4">Client</th>
-                  <th scope="col" className="pb-2 pr-4">Freelancer</th>
-                  <th scope="col" className="pb-2 pr-4 text-right">Amount</th>
-                  <th scope="col" className="pb-2 pr-4">Deadline</th>
+                  <th scope="col" className="pb-2 pr-4">
+                    ID
+                  </th>
+                  <th scope="col" className="pb-2 pr-4">
+                    Status
+                  </th>
+                  <th scope="col" className="pb-2 pr-4">
+                    Client
+                  </th>
+                  <th scope="col" className="pb-2 pr-4">
+                    Freelancer
+                  </th>
+                  <th scope="col" className="pb-2 pr-4 text-right">
+                    Amount
+                  </th>
+                  <th scope="col" className="pb-2 pr-4">
+                    Deadline
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {jobs.map(({ id, job }) => (
                   <tr key={id} className="border-b border-slate-100">
-                    <th scope="row" className="py-2 pr-4 font-medium">#{id}</th>
+                    <th scope="row" className="py-2 pr-4 font-medium">
+                      #{id}
+                    </th>
                     <td className="py-2 pr-4">
                       <StatusPill status={job.status} />
                     </td>
@@ -739,6 +842,9 @@ export default function AdminPage() {
                       <TruncatedAddress address={job.client} />
                     </td>
                     <td className="py-2 pr-4 font-mono text-xs">
+                      {job.freelancer
+                        ? `${job.freelancer.slice(0, 8)}...`
+                        : "-"}
                       {job.freelancer ? (
                         <TruncatedAddress address={job.freelancer} />
                       ) : (

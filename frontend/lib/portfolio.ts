@@ -1,5 +1,22 @@
 "use client";
 
+import {
+  sanitizeUrl,
+  MAX_BIO_LENGTH,
+  MAX_SKILLS,
+  MAX_LINKS,
+  MAX_HIGHLIGHTS,
+  MAX_TESTIMONIAL_LENGTH,
+} from "@/lib/sanitize";
+
+export {
+  MAX_BIO_LENGTH,
+  MAX_SKILLS,
+  MAX_LINKS,
+  MAX_HIGHLIGHTS,
+  MAX_TESTIMONIAL_LENGTH,
+};
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface ExternalLink {
@@ -144,22 +161,4 @@ export function isProfileComplete(portfolio: Portfolio): boolean {
 
 // ─── Validation helpers ───────────────────────────────────────────────────────
 
-export function sanitizeUrl(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) return "";
-  try {
-    const url = new URL(
-      trimmed.startsWith("http") ? trimmed : `https://${trimmed}`,
-    );
-    if (url.protocol !== "https:" && url.protocol !== "http:") return "";
-    return url.href;
-  } catch {
-    return "";
-  }
-}
-
-export const MAX_BIO_LENGTH = 600;
-export const MAX_SKILLS = 20;
-export const MAX_LINKS = 5;
-export const MAX_HIGHLIGHTS = 6;
-export const MAX_TESTIMONIAL_LENGTH = 500;
+export { sanitizeUrl } from "@/lib/sanitize";

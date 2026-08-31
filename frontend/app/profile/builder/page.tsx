@@ -1,6 +1,21 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import {
+  sanitizePlainText,
+  MAX_NAME_LEN,
+  MAX_TAGLINE_LEN,
+  MAX_LOCATION_LEN,
+  MAX_LANGUAGES_LEN,
+  MAX_BIO_LENGTH,
+  MAX_EXPERIENCE_TITLE_LEN,
+  MAX_EXPERIENCE_COMPANY_LEN,
+  MAX_EXPERIENCE_DESC_LEN,
+  MAX_EDUCATION_DEGREE_LEN,
+  MAX_EDUCATION_INSTITUTION_LEN,
+  MAX_SKILL_NAME_LEN,
+  sanitizeUrl,
+} from "@/lib/sanitize";
 
 interface Experience {
   id: string;
@@ -109,6 +124,24 @@ export default function ProfileBuilderPage() {
   const completion = calculateCompletion(resume);
 
   function updateField<K extends keyof ResumeData>(key: K, value: ResumeData[K]) {
+    if (typeof value === "string") {
+      const limits: Partial<Record<keyof ResumeData, number>> = {
+        name: MAX_NAME_LEN,
+        tagline: MAX_TAGLINE_LEN,
+        location: MAX_LOCATION_LEN,
+        languages: MAX_LANGUAGES_LEN,
+        bio: MAX_BIO_LENGTH,
+        github: 200,
+        linkedin: 200,
+        website: 200,
+      };
+      const maxLen = limits[key] ?? 200;
+      if (key === "github" || key === "linkedin" || key === "website") {
+        value = sanitizeUrl(value) as ResumeData[K];
+      } else {
+        value = sanitizePlainText(value, maxLen) as ResumeData[K];
+      }
+    }
     setResume((prev) => ({ ...prev, [key]: value }));
   }
 
@@ -123,9 +156,17 @@ export default function ProfileBuilderPage() {
   }
 
   function updateExperience(id: string, field: keyof Experience, value: string) {
+    const limits: Record<string, number> = {
+      title: MAX_EXPERIENCE_TITLE_LEN,
+      company: MAX_EXPERIENCE_COMPANY_LEN,
+      startDate: 50,
+      endDate: 50,
+      description: MAX_EXPERIENCE_DESC_LEN,
+    };
+    const clean = sanitizePlainText(value, limits[field] ?? 200);
     setResume((prev) => ({
       ...prev,
-      experiences: prev.experiences.map((e) => (e.id === id ? { ...e, [field]: value } : e)),
+      experiences: prev.experiences.map((e) => (e.id === id ? { ...e, [field]: clean } : e)),
     }));
   }
 
@@ -147,9 +188,15 @@ export default function ProfileBuilderPage() {
   }
 
   function updateEducation(id: string, field: keyof Education, value: string) {
+    const limits: Record<string, number> = {
+      degree: MAX_EDUCATION_DEGREE_LEN,
+      institution: MAX_EDUCATION_INSTITUTION_LEN,
+      year: 10,
+    };
+    const clean = sanitizePlainText(value, limits[field] ?? 200);
     setResume((prev) => ({
       ...prev,
-      education: prev.education.map((e) => (e.id === id ? { ...e, [field]: value } : e)),
+      education: prev.education.map((e) => (e.id === id ? { ...e, [field]: clean } : e)),
     }));
   }
 
@@ -168,10 +215,11 @@ export default function ProfileBuilderPage() {
   }
 
   function updateSkill(index: number, field: keyof Skill, value: string) {
+    const clean = field === "name" ? sanitizePlainText(value, MAX_SKILL_NAME_LEN) : value;
     setResume((prev) => ({
       ...prev,
       skills: prev.skills.map((s, i) =>
-        i === index ? { ...s, [field]: field === "level" ? (value as Skill["level"]) : value } : s
+        i === index ? { ...s, [field]: field === "level" ? (clean as Skill["level"]) : clean } : s
       ),
     }));
   }
@@ -282,13 +330,13 @@ export default function ProfileBuilderPage() {
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Full Name</label>
               <input type="text" value={resume.name} onChange={(e) => updateField("name", e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                placeholder="Jane Doe" />
+                placeholder="Jane Doe" maxLength={MAX_NAME_LEN} />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Tagline</label>
               <input type="text" value={resume.tagline} onChange={(e) => updateField("tagline", e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                placeholder="Full-stack developer & blockchain engineer" />
+                placeholder="Full-stack developer & blockchain engineer" maxLength={MAX_TAGLINE_LEN} />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Location</label>
@@ -305,9 +353,9 @@ export default function ProfileBuilderPage() {
           </div>
           <div className="mt-4">
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Bio</label>
-            <textarea value={resume.bio} onChange={(e) => updateField("bio", e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-              rows={3} placeholder="Tell clients about yourself..." />
+              <textarea value={resume.bio} onChange={(e) => updateField("bio", e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                rows={3} placeholder="Tell clients about yourself..." maxLength={MAX_BIO_LENGTH} />
           </div>
         </div>
 
