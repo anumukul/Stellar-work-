@@ -16,9 +16,11 @@ import {
   getJobStatusCounts,
   submitWork,
   enforceDeadline,
+  rateJob,
   extendDeadline,
 } from "@/lib/contract";
 import ConfirmDialog from "@/components/ConfirmDialog";
+import JobCelebrationModal from "@/components/JobCelebrationModal";
 import EmptyState from "@/components/EmptyState";
 import ErrorBanner from "@/components/ErrorBanner";
 import ExportButton from "@/components/ExportButton";
@@ -129,6 +131,7 @@ export default function DashboardPage() {
   const [selectedJobIds, setSelectedJobIds] = useState<Set<number>>(new Set());
   const [showBulkConfirm, setShowBulkConfirm] = useState(false);
   const [bulkCancelProgress, setBulkCancelProgress] = useState<{ done: number; total: number; failed: number[] } | null>(null);
+  const [celebratingJob, setCelebratingJob] = useState<{ id: number; job?: Job } | null>(null);
   const [showExtendModal, setShowExtendModal] = useState(false);
   const [extendDate, setExtendDate] = useState("");
   const [extendConsent, setExtendConsent] = useState("");
@@ -304,6 +307,7 @@ export default function DashboardPage() {
         jobId,
         { event: "work_approved", message: `Work for Job #${jobId} was approved and payment released.` },
       );
+      setCelebratingJob({ id: jobId, job: allJobs.find((j) => j.id === jobId)?.job });
     } else if (type === "submitWork") {
       await handleAction(
         () => submitWork(wallet, String(jobId)),
@@ -358,6 +362,7 @@ export default function DashboardPage() {
             jobId,
             { event: "work_approved", message: `Work for Job #${jobId} was approved and payment released.` },
           );
+          setCelebratingJob({ id: jobId, job: allJobs.find((j) => j.id === jobId)?.job });
         } else if (type === "submitWork") {
           await handleAction(
             () => submitWork(wallet, String(jobId)),
@@ -963,6 +968,25 @@ export default function DashboardPage() {
           />
         );
       })()}
+
+      {/* Celebration modal on approval */}
+      {celebratingJob && (
+        <JobCelebrationModal
+          isOpen={celebratingJob !== null}
+          onClose={() => setCelebratingJob(null)}
+          jobId={celebratingJob.id}
+          jobTitle={celebratingJob.job?.title || `Job #${celebratingJob.id}`}
+          amount={celebratingJob.job?.amount}
+          createdAt={celebratingJob.job?.created_at}
+          completedAt={Date.now() / 1000}
+          isClient={true}
+          onRate={async (score) => {
+            if (wallet) {
+              await rateJob(wallet, String(celebratingJob.id), score);
+            }
+          }}
+        />
+      )}
     </section>
     </DashboardWidgets>
   );

@@ -346,11 +346,6 @@ async function submitWriteContract(
     }
 
     const sent = await server.sendTransaction(signedTx);
-  const assembled = rpc.assembleTransaction(tx, simulation).build();
-  const prepared = await server.prepareTransaction(assembled);
-  const signedXdr = await signTransaction(prepared.toXDR());
-  const signedTx = TransactionBuilder.fromXDR(signedXdr, networkPassphrase);
-  const sent = await server.sendTransaction(signedTx);
 
   if (sent.hash) {
     recordRecentContractInteraction({
@@ -411,43 +406,6 @@ async function submitWriteContract(
       }
     }
 
-    if (sent.status === "PENDING") {
-      const pollTimeout = options?.pollTimeout ?? DEFAULT_POLL_TIMEOUT;
-      const pollInterval = DEFAULT_POLL_INTERVAL;
-      const startTime = Date.now();
-
-      while (Date.now() - startTime < pollTimeout) {
-        await new Promise((resolve) => setTimeout(resolve, pollInterval));
-        const status = await server.getTransaction(sent.hash);
-
-        if (status.status === rpc.Api.GetTransactionStatus.SUCCESS) {
-          recordRecentContractInteraction({
-            hash: sent.hash,
-            status: "SUCCESS",
-            timestamp: Date.now(),
-            method,
-          });
-          return {
-            status: "SUCCESS",
-            hash: sent.hash,
-            data: status.returnValue ? scValToNative(status.returnValue) : undefined,
-          } as TransactionResult;
-        }
-
-        if (status.status === rpc.Api.GetTransactionStatus.FAILED) {
-          recordRecentContractInteraction({
-            hash: sent.hash,
-            status: "ERROR",
-            timestamp: Date.now(),
-            method,
-          });
-          return {
-            status: "ERROR",
-            hash: sent.hash,
-            errorResult: "Transaction failed.",
-          } as TransactionResult;
-        }
-      }
     throw new Error(
       `Transaction timed out after ${pollTimeout}ms. Hash: ${sent.hash}`,
     );

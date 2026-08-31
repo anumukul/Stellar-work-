@@ -66,7 +66,16 @@
     "submittedForReview": "Submitted for Review",
     "completed": "Completed",
     "cancelled": "Cancelled",
-    "disputed": "Disputed"
+    "disputed": "Disputed",
+    "celebrationTitle": "Celebration Time!",
+    "celebrationSubtitle": "Work has been successfully approved and payment released.",
+    "turnaroundTime": "Turnaround Time",
+    "paymentReleased": "Payment Released",
+    "jobRating": "Job Rating",
+    "rateFreelancerPrompt": "Rate your experience with this freelancer:",
+    "shareMilestone": "Share this milestone",
+    "celebrateAgain": "Celebrate Again",
+    "done": "Done"
   },
   "dashboard": {
     "title": "Dashboard",

@@ -108,6 +108,20 @@ export async function batchApproveJobs(client: string, jobIds: string[]) {
   ]);
 }
 
+export async function rateJob(
+  caller: string,
+  jobId: string,
+  score: number,
+  commentHash = "0000000000000000000000000000000000000000000000000000000000000000",
+) {
+  return callContract(getActiveContractId(), "rate_job", [
+    nativeToScVal(caller, { type: "address" }),
+    nativeToScVal(jobId, { type: "u64" }),
+    nativeToScVal(score, { type: "u32" }),
+    nativeToScVal(hexToBytes(commentHash), { type: "bytes" }),
+  ]);
+}
+
 export async function setPaymentPreference(
   freelancer: string,
   jobId: string,
