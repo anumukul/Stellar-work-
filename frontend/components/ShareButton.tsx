@@ -78,6 +78,9 @@ const ShareButton: FC<ShareButtonProps> = ({ jobId, jobTitle, jobAmount }) => {
         onClick={() => setOpen(!open)}
         className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
         title="Share this job"
+        aria-label="Share this job"
+        aria-expanded={open}
+        aria-haspopup="true"
       >
         <svg
           className="h-4 w-4"

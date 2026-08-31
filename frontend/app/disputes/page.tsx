@@ -8,6 +8,7 @@ import ConfirmDialog from "@/components/ConfirmDialog";
 import EmptyState from "@/components/EmptyState";
 import NoResultsState from "@/components/NoResultsState";
 import SectionCard from "@/components/SectionCard";
+import Spinner from "@/components/Spinner";
 import { toXlm } from "@/lib/format";
 import { isConfirmSuppressed, CONFIRM_KEYS } from "@/lib/confirm-prefs";
 import { raiseDispute as contractRaiseDispute, resolveDispute as contractResolveDispute } from "@/lib/contract";
@@ -50,14 +51,10 @@ function StatusBadge({ status }: { status: DisputeStatus }) {
   );
 }
 
-function Spinner() {
+function DisputesLoading() {
   return (
-    <div
-      role="status"
-      aria-label="Loading disputes"
-      className="flex items-center justify-center py-16"
-    >
-      <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-200 border-t-slate-700" />
+    <div className="flex items-center justify-center py-16">
+      <Spinner size="lg" color="#334155" label="Loading disputes" />
     </div>
   );
 }
@@ -194,7 +191,7 @@ function RaiseDisputeModal({
               disabled={loading}
               className="flex items-center gap-2 rounded-lg bg-slate-900 px-5 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60 transition-colors"
             >
-              {loading && <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />}
+              {loading && <Spinner size={14} color="currentColor" label="Submitting dispute" />}
               Submit Dispute
             </button>
           </div>
@@ -358,7 +355,7 @@ function ResolveModal({
               disabled={loading}
               className="flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60 transition-colors"
             >
-              {loading && <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />}
+              {loading && <Spinner size={14} color="currentColor" label="Resolving dispute" />}
               Confirm Resolution
             </button>
           </div>
@@ -393,7 +390,7 @@ function DisputeCard({
             <span className="text-xs text-slate-400">·</span>
             <span className="text-xs text-slate-500">Raised by {dispute.raisedBy}</span>
           </div>
-          <h3 className="text-sm font-semibold text-slate-900 truncate">{dispute.jobTitle}</h3>
+          <h2 className="text-sm font-semibold text-slate-900 truncate">{dispute.jobTitle}</h2>
           <div className="flex items-center gap-3 mt-1.5">
             <span className="text-xs text-slate-500">{dispute.client} <span className="text-slate-300">vs</span> {dispute.freelancer}</span>
           </div>
@@ -677,7 +674,7 @@ export default function DisputesPage() {
 
         {/* Content */}
         {loading ? (
-          <Spinner />
+          <DisputesLoading />
         ) : error ? (
           <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             {error}{" "}

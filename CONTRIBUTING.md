@@ -112,6 +112,20 @@ chore(deps): bump @stellar/stellar-sdk to 15.0.1
 - Use dynamic imports for large or rarely-used components
 - All new features must include unit tests in `frontend/__tests__/`
 
+## Security Guidelines
+
+### Content Security Policy (CSP)
+
+- The frontend application enforces strict Content Security Policy headers defined in `frontend/next.config.ts`.
+- `default-src 'self'`, restricting script/style sources and limiting network connections to verified Stellar RPC endpoints and IPFS gateways.
+- To enable report-only mode during testing or staging, set `CSP_REPORT_ONLY=true` in your environment.
+
+### Secret Scanning & Credential Protection
+
+- Secret scanning with **Gitleaks** is enforced in CI (`.github/workflows/ci.yml`).
+- Never commit private keys, API tokens, secret keys (`S...`), or credentials to git.
+- Run `gitleaks detect` locally before pushing code changes to ensure no sensitive credentials or keys are committed.
+
 ## Development Rules
 
 - Contract changes must include or update unit tests and test snapshots.
@@ -191,6 +205,17 @@ When making significant architectural changes, please submit an ADR in the `docs
 - [ ] Consequences list what becomes easier or harder.
 - [ ] Linked from relevant code comments if applicable.
 
+## Accessibility
+
+The interface targets WCAG 2.1 Level AA. Current conformance, the features
+already implemented, and the known gaps are recorded in the
+[Accessibility Conformance Report](docs/accessibility-conformance.md).
+
+Before opening a PR that touches the interface, run the reviewer checklist in
+that report — it is a short keyboard, semantics and responsive pass that catches
+the regressions cheapest to catch. If you close one of the listed gaps, move it
+out of the gaps table in the same PR.
+
 ## Pull Request Process
 
 1. **Open an issue** (if one doesn't exist) describing the bug or feature.
@@ -227,6 +252,56 @@ See [PR title conventions](docs/pr-title-conventions.md) for details.
   recurring.
 - **Refactors**: existing tests must continue to pass. Update tests if behavior
   changes.
+
+## Feature Flags
+
+StellarWork uses a feature flag system (`frontend/lib/feature-flags.ts`) to enable gradual rollouts, A/B testing, and emergency feature disabling without deployments.
+
+### Available Flags
+
+| Flag | Description |
+|------|-------------|
+| `newDashboard` | New analytics dashboard layout |
+| `newMessaging` | Redesigned messaging interface |
+| `biddingSystem` | Freelancer bidding system for jobs |
+| `milestones` | Milestone-based payment releases |
+| `multiToken` | Support for multiple token types |
+
+### Using Flags in Code
+
+```typescript
+import { isEnabled } from "@/lib/feature-flags";
+
+if (isEnabled("newMessaging")) {
+  // render new messaging UI
+}
+```
+
+### Evaluation Order
+
+Flags are evaluated in this priority order (highest first):
+
+1. **URL parameters**: `?feature.newMessaging=true`
+2. **Environment variables**: `NEXT_PUBLIC_FF_NEWMESSAGING=true`
+3. **localStorage overrides**: Set via the admin panel
+4. **Default value**: Defined in `FLAG_DEFINITIONS`
+
+### Admin Panel
+
+Admins can toggle flags from the admin panel. Overrides are persisted in `localStorage` under the key `stellarwork:feature-flags`.
+
+### Adding a New Flag
+
+1. Add the flag to `FLAG_DEFINITIONS` in `frontend/lib/feature-flags.ts` with a default value and description.
+2. Use `isEnabled('yourFlag')` in components.
+3. Write tests covering both enabled and disabled states.
+4. Document the flag in the table above.
+
+### Development Helpers
+
+- Use `logActiveFlags()` to print all active flags to the console for debugging.
+- Use `getActiveFlags()` to inspect the current state of all flags programmatically.
+- Use URL overrides (`?feature.flagName=true`) to test flags without changing localStorage.
 
 ## Getting Help
 

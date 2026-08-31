@@ -28,7 +28,34 @@ vi.mock("@/lib/wallet-context", () => ({
 
 vi.mock("@/lib/stellar", () => ({
   getExplorerTxUrl: (hash: string) => `https://stellar.expert/tx/${hash}`,
+  isValidStellarAddress: (address: string) =>
+    /^[GC][A-Z2-7]{55}$/.test(address.trim()),
 }));
+
+vi.mock("@/components/RichTextEditor", () => ({
+  __esModule: true,
+  default: ({
+    value,
+    onChange,
+    labelId,
+    required,
+  }: {
+    value: string;
+    onChange: (html: string) => void;
+    labelId?: string;
+    required?: boolean;
+  }) => (
+    <textarea
+      aria-labelledby={labelId}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      required={required}
+    />
+  ),
+  htmlToPlainText: (html: string) => html.replace(/<[^>]+>/g, "").trim(),
+}));
+
+const VALID_TOKEN = "GABC7DEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUV";
 
 describe("Post job form validation", () => {
   beforeEach(() => {
@@ -62,13 +89,46 @@ describe("Post job form validation", () => {
       target: { value: "Build escrow UI" },
     });
     fireEvent.change(screen.getByRole("textbox", { name: /Token Address/ }), {
-      target: { value: "GNATIVE" },
+      target: { value: VALID_TOKEN },
     });
     fireEvent.submit(screen.getByRole("button", { name: "Post Job" }).closest("form")!);
 
     expect(
       await screen.findAllByText("Enter a valid amount with up to 7 decimal places."),
     ).toHaveLength(2);
+    expect(mockPostJob).not.toHaveBeenCalled();
+  });
+
+  it("shows inline feedback for an invalid token address format", async () => {
+    render(<PostJobPage />);
+
+    const tokenInput = screen.getByLabelText(/Token Address/);
+    fireEvent.change(tokenInput, { target: { value: "not-a-stellar-address" } });
+    fireEvent.blur(tokenInput);
+
+    await waitFor(() => {
+      expect(tokenInput).toHaveAttribute("aria-invalid", "true");
+    });
+    expect(document.getElementById("post-job-token-address-error")).toHaveTextContent(
+      /valid Stellar address/i,
+    );
+  });
+
+  it("blocks submit when token address format is invalid", async () => {
+    render(<PostJobPage />);
+
+    fireEvent.change(screen.getByRole("spinbutton", { name: /Amount/ }), {
+      target: { value: "1.25" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: /Job Description/ }), {
+      target: { value: "Build escrow UI" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: /Token Address/ }), {
+      target: { value: "GNATIVE" },
+    });
+    fireEvent.submit(screen.getByRole("button", { name: "Post Job" }).closest("form")!);
+
+    expect(await screen.findAllByText(/Enter a valid Stellar address/)).toHaveLength(2);
     expect(mockPostJob).not.toHaveBeenCalled();
   });
 
@@ -83,7 +143,7 @@ describe("Post job form validation", () => {
       target: { value: "  Build escrow UI  " },
     });
     fireEvent.change(screen.getByRole("textbox", { name: /Token Address/ }), {
-      target: { value: "  GNATIVE  " },
+      target: { value: `  ${VALID_TOKEN}  ` },
     });
     fireEvent.submit(screen.getByRole("button", { name: "Post Job" }).closest("form")!);
 
@@ -94,7 +154,7 @@ describe("Post job form validation", () => {
       "0000000000000000000000000000000000000000000000000000000000000000",
       15,
       "0",
-      "GNATIVE",
+      VALID_TOKEN,
     );
   });
 });

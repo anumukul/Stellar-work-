@@ -18,6 +18,9 @@
 ### Batching Strategies
 
 - Use `get_jobs_batch(start, limit)` for paginated reads instead of individual `get_job` calls.
+- **PERF-01:** Prefer `get_job_requiring_status` / combined job+status helpers so mutation paths do one persistent read, then reuse the in-memory `Job` (including `status`) instead of re-fetching.
+- **PERF-01:** Cache instance values such as fee bps across batch loops (`batch_approve_jobs` reads fee config once per call).
+- **PERF-01:** Access checks (`require_active_access`) short-circuit: blacklist first, then whitelist only when whitelist mode is enabled.
 - `batch_resolve_disputes` processes up to 20 disputes in a single admin call, reducing per-job overhead.
 - For multi-item operations (fee tiers, milestones), prefer single storage entries over per-item keys.
 
@@ -42,6 +45,27 @@ See `contracts/CONTRACT.md` for per-function gas estimates. Key takeaways:
   const RichTextEditor = dynamic(() => import("@/components/RichTextEditor"), { ssr: false });
   ```
 - **Tree shaking**: Import only what you need from libraries (e.g., `import {某 } from "lodash"` instead of `import _ from "lodash"`).
+
+#### Route-based code splitting (implemented)
+
+- Every app route is a dynamic route (`ƒ` in `next build`); Next.js emits route-specific chunks, so each page only downloads its own JS on first visit.
+- Heaviest client-only libraries are lazy-loaded on their own routes via `next/dynamic` with `ssr: false` — nothing is shipped to unrelated routes:
+  - `@/components/RichTextEditor` (Tiptap + extensions, ~440 KB chunk) is loaded only on `/post-job`.
+  - `@/components/RichTextRenderer` (DOMPurify sanitizer, ~62 KB chunk) is loaded only on `/job/[id]`.
+  - Both render `<RichTextLoadingFallback/>` placeholders while the chunk streams in, and `htmlToPlainText` moved into `@/lib/crypto` so plain-text paths do not pull the editor.
+- `chart`/analytics rendering is confined to the dashboard/analytics routes, which are already separate route chunks.
+- Fonts: Geist + Geist Mono load via `next/font` (`app/layout.tsx`), which self-hosts and preloads the static `.woff2` files.
+
+#### Measuring and enforcing bundle size
+
+Next.js 16 no longer reports `First Load JS`/`size` per route in the build output — measure real load with **Lighthouse CI** (`.lighthouserc.json`: `total-byte-weight` ≤ 500 KB, `performance` ≥ 0.9, run from `lighthouse.yml`) and enforce the app-shell main bundle in `frontend.yml`:
+
+```bash
+node scripts/check-main-bundle.mjs          # fails if main bundle > MAIN_BUNDLE_KB (default 500)
+MAIN_BUNDLE_KB=450 node scripts/check-main-bundle.mjs
+```
+
+The main bundle is the shared app-shell chain recorded in `.next/build-manifest.json` (`rootMainFiles`, ~429 KB). Adding lazy-loading for the editor/sanitizer keeps these heavy chunks out of it.
 
 ### RPC Call Batching and Caching
 

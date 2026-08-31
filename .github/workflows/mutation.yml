@@ -1,0 +1,119 @@
+name: Contract Mutation Testing
+
+# TEST-14 (#765).
+#
+# Non-blocking by design. Mutation testing is a quality signal, not a gate: a
+# surviving mutant may be a missing test, an equivalent mutant that no test
+# could ever kill, or dead code. Blocking merges on it would train people to
+# add assertions that kill mutants rather than assertions that describe
+# behaviour, which is worse than not running it at all.
+#
+# Scheduled rather than per-PR because a scoped pass still takes tens of
+# minutes. See docs/mutation-testing.md for running it locally.
+
+on:
+  schedule:
+    # Weekly, Monday 03:00 UTC — offset from the Sunday fuzz run so the two do
+    # not compete for runners.
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      timeout_minutes:
+        description: "Wall-clock budget for the mutation pass"
+        required: false
+        default: "45"
+
+permissions:
+  contents: read
+
+jobs:
+  mutants:
+    name: Mutation pass over escrow core
+    runs-on: ubuntu-latest
+    # Never fails the workflow: the report is the product.
+    continue-on-error: true
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            contracts/escrow/target
+          key: mutants-${{ runner.os }}-${{ hashFiles('contracts/escrow/Cargo.lock') }}
+
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants --locked
+
+      - name: Confirm the suite is green before mutating
+        # A red baseline makes every mutant look "killed" — the run would
+        # report a perfect score while testing nothing.
+        working-directory: ./contracts/escrow
+        run: cargo test --lib
+
+      - name: Run mutation pass
+        working-directory: ./contracts/escrow
+        run: |
+          cargo mutants \
+            --timeout-multiplier 5 \
+            --in-place \
+            --output ../../mutants-report \
+            -- --lib || true
+
+      - name: Summarise
+        if: always()
+        run: |
+          REPORT=mutants-report/mutants.out
+          if [ ! -d "$REPORT" ]; then
+            echo "No report produced." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          caught=$(wc -l < "$REPORT/caught.txt" 2>/dev/null || echo 0)
+          missed=$(wc -l < "$REPORT/missed.txt" 2>/dev/null || echo 0)
+          timeout=$(wc -l < "$REPORT/timeout.txt" 2>/dev/null || echo 0)
+          total=$((caught + missed + timeout))
+
+          {
+            echo "## Mutation testing"
+            echo ""
+            echo "| Outcome | Count |"
+            echo "| --- | ---: |"
+            echo "| Caught (killed) | $caught |"
+            echo "| Missed (survived) | $missed |"
+            echo "| Timed out | $timeout |"
+            echo "| Total | $total |"
+            echo ""
+            if [ "$total" -gt 0 ]; then
+              echo "Kill rate: $(( caught * 100 / total ))% (target: 80% on lifecycle functions)"
+            fi
+            echo ""
+            if [ "$missed" -gt 0 ]; then
+              echo "### Survivors"
+              echo ""
+              echo '```'
+              head -50 "$REPORT/missed.txt"
+              echo '```'
+              echo ""
+              echo "Each survivor is either a missing test or an equivalent mutant."
+              echo "See [docs/mutation-testing.md](../blob/main/docs/mutation-testing.md)."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-report
+          path: mutants-report/
+          retention-days: 30
+          if-no-files-found: ignore

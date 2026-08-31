@@ -5,6 +5,12 @@ use soroban_sdk::{
     Vec,
 };
 
+// Keep rate-limit state alive for the whole configurable window. The values are
+// in ledgers (roughly 30 days at a five-second ledger cadence).
+const RATE_LIMIT_STATE_TTL_THRESHOLD: u32 = 17_280;
+const RATE_LIMIT_STATE_TTL_BUMP: u32 = 518_400;
+const MAX_RATE_LIMIT_WINDOW_SECONDS: u64 = 2_592_000;
+
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -16,6 +22,23 @@ pub enum Error {
     MaxRenewalsReached = 5,
     AlreadyInitialized = 6,
     NotInitialized = 7,
+    InvalidRateLimitConfig = 8,
+    RateLimitExceeded = 9,
+}
+
+/// Per-address call limit. A `max_calls` value of zero disables rate limiting.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RateLimitConfig {
+    pub max_calls: u32,
+    pub window_seconds: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RateLimitState {
+    pub window_started_at: u64,
+    pub calls_in_window: u32,
 }
 
 #[contracttype]
@@ -63,6 +86,72 @@ pub enum DataKey {
     CrossChainJob(u64),
     CrossChainJobCount,
     NativeToken,
+    RateLimitConfig,
+    RateLimitState(Address),
+    TrustedAddress(Address),
+}
+
+fn require_admin(env: &Env, admin: &Address) -> Result<(), Error> {
+    admin.require_auth();
+    let stored_admin: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::Admin)
+        .ok_or(Error::NotInitialized)?;
+    if *admin != stored_admin {
+        return Err(Error::Unauthorized);
+    }
+    Ok(())
+}
+
+/// Counts an authenticated caller's state-changing request unless the caller is
+/// trusted or rate limiting has been disabled. State is keyed by address so one
+/// user cannot consume another user's quota.
+fn enforce_rate_limit(env: &Env, caller: &Address) -> Result<(), Error> {
+    if env
+        .storage()
+        .persistent()
+        .get::<_, bool>(&DataKey::TrustedAddress(caller.clone()))
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+
+    let config: RateLimitConfig = env
+        .storage()
+        .instance()
+        .get(&DataKey::RateLimitConfig)
+        .unwrap_or(RateLimitConfig {
+            max_calls: 0,
+            window_seconds: 0,
+        });
+    if config.max_calls == 0 {
+        return Ok(());
+    }
+
+    let now = env.ledger().timestamp();
+    let key = DataKey::RateLimitState(caller.clone());
+    let mut state: RateLimitState = env.storage().persistent().get(&key).unwrap_or(RateLimitState {
+        window_started_at: now,
+        calls_in_window: 0,
+    });
+
+    if now.saturating_sub(state.window_started_at) >= config.window_seconds {
+        state.window_started_at = now;
+        state.calls_in_window = 0;
+    }
+    if state.calls_in_window >= config.max_calls {
+        return Err(Error::RateLimitExceeded);
+    }
+
+    state.calls_in_window += 1;
+    env.storage().persistent().set(&key, &state);
+    env.storage().persistent().extend_ttl(
+        &key,
+        RATE_LIMIT_STATE_TTL_THRESHOLD,
+        RATE_LIMIT_STATE_TTL_BUMP,
+    );
+    Ok(())
 }
 
 #[contract]
@@ -79,6 +168,15 @@ impl RetainerContract {
         env.storage().instance().set(&DataKey::NativeToken, &native_token);
         env.storage().instance().set(&DataKey::RetainerCount, &0u64);
         env.storage().instance().set(&DataKey::CrossChainJobCount, &0u64);
+        // Disabled by default so deploying this upgrade does not change existing
+        // call behaviour until the administrator configures a policy.
+        env.storage().instance().set(
+            &DataKey::RateLimitConfig,
+            &RateLimitConfig {
+                max_calls: 0,
+                window_seconds: 0,
+            },
+        );
         env.events().publish((symbol_short!("init"),), (admin, native_token));
         Ok(())
     }
@@ -93,6 +191,7 @@ impl RetainerContract {
         token: Address,
     ) -> Result<u64, Error> {
         client.require_auth();
+        enforce_rate_limit(&env, &client)?;
         let count: u64 = env.storage().instance().get(&DataKey::RetainerCount).unwrap_or(0);
         let retainer_id = count + 1;
         env.storage().instance().set(&DataKey::RetainerCount, &retainer_id);
@@ -118,6 +217,7 @@ impl RetainerContract {
 
     pub fn renew_retainer(env: Env, caller: Address, retainer_id: u64) -> Result<u64, Error> {
         caller.require_auth();
+        enforce_rate_limit(&env, &caller)?;
         let mut retainer: Retainer = env.storage().persistent().get(&DataKey::Retainer(retainer_id)).ok_or(Error::NotFound)?;
         if retainer.status != RetainerStatus::Active {
             return Err(Error::InvalidStatus);
@@ -147,6 +247,7 @@ impl RetainerContract {
 
     pub fn cancel_retainer(env: Env, client: Address, retainer_id: u64) -> Result<(), Error> {
         client.require_auth();
+        enforce_rate_limit(&env, &client)?;
         let mut retainer: Retainer = env.storage().persistent().get(&DataKey::Retainer(retainer_id)).ok_or(Error::NotFound)?;
         if retainer.client != client {
             return Err(Error::Unauthorized);
@@ -177,11 +278,7 @@ impl RetainerContract {
         target_chain: String,
         target_contract: Address,
     ) -> Result<u64, Error> {
-        admin.require_auth();
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).ok_or(Error::NotInitialized)?;
-        if admin != stored_admin {
-            return Err(Error::Unauthorized);
-        }
+        require_admin(&env, &admin)?;
         let count: u64 = env.storage().instance().get(&DataKey::CrossChainJobCount).unwrap_or(0);
         let cc_id = count + 1;
         env.storage().instance().set(&DataKey::CrossChainJobCount, &cc_id);
@@ -213,11 +310,7 @@ impl RetainerContract {
         amount: i128,
         token: Address,
     ) -> Result<u64, Error> {
-        admin.require_auth();
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).ok_or(Error::NotInitialized)?;
-        if admin != stored_admin {
-            return Err(Error::Unauthorized);
-        }
+        require_admin(&env, &admin)?;
         let mut cross: CrossChainJob = env.storage().persistent().get(&DataKey::CrossChainJob(cross_chain_id)).ok_or(Error::NotFound)?;
         cross.imported = true;
         env.storage().persistent().set(&DataKey::CrossChainJob(cross_chain_id), &cross);
@@ -230,6 +323,69 @@ impl RetainerContract {
 
     pub fn get_cross_chain_job(env: Env, cross_chain_id: u64) -> CrossChainJob {
         env.storage().persistent().get(&DataKey::CrossChainJob(cross_chain_id)).expect("Cross-chain job not found")
+    }
+
+    /// Sets the maximum number of state-changing calls one untrusted address may
+    /// make during `window_seconds`. Pass `(0, 0)` to disable the limiter.
+    pub fn set_rate_limit(
+        env: Env,
+        admin: Address,
+        max_calls: u32,
+        window_seconds: u64,
+    ) -> Result<(), Error> {
+        require_admin(&env, &admin)?;
+        if (max_calls == 0) != (window_seconds == 0)
+            || window_seconds > MAX_RATE_LIMIT_WINDOW_SECONDS
+        {
+            return Err(Error::InvalidRateLimitConfig);
+        }
+        env.storage().instance().set(
+            &DataKey::RateLimitConfig,
+            &RateLimitConfig {
+                max_calls,
+                window_seconds,
+            },
+        );
+        env.events()
+            .publish((symbol_short!("rl_cfg"),), (max_calls, window_seconds));
+        Ok(())
+    }
+
+    pub fn get_rate_limit(env: Env) -> RateLimitConfig {
+        env.storage()
+            .instance()
+            .get(&DataKey::RateLimitConfig)
+            .unwrap_or(RateLimitConfig {
+                max_calls: 0,
+                window_seconds: 0,
+            })
+    }
+
+    /// Trusted addresses do not consume quota. This is intentionally an
+    /// explicit administrator action rather than an implicit admin exemption.
+    pub fn set_trusted_address(
+        env: Env,
+        admin: Address,
+        address: Address,
+        trusted: bool,
+    ) -> Result<(), Error> {
+        require_admin(&env, &admin)?;
+        let key = DataKey::TrustedAddress(address.clone());
+        if trusted {
+            env.storage().persistent().set(&key, &true);
+        } else {
+            env.storage().persistent().remove(&key);
+        }
+        env.events()
+            .publish((symbol_short!("trusted"),), (address, trusted));
+        Ok(())
+    }
+
+    pub fn is_trusted_address(env: Env, address: Address) -> bool {
+        env.storage()
+            .persistent()
+            .get(&DataKey::TrustedAddress(address))
+            .unwrap_or(false)
     }
 }
 
@@ -355,5 +511,35 @@ mod test {
             client.renew_retainer(&user, &rid);
         }));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_rate_limit_blocks_calls_until_the_window_resets() {
+        let (env, client, admin, user, freelancer) = setup();
+        let token = Address::generate(&env);
+        client.set_rate_limit(&admin, &2u32, &100u64);
+
+        client.create_retainer(&user, &freelancer, &1i128, &1u64, &1u32, &token);
+        client.create_retainer(&user, &freelancer, &1i128, &1u64, &1u32, &token);
+        let limited = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.create_retainer(&user, &freelancer, &1i128, &1u64, &1u32, &token);
+        }));
+        assert!(limited.is_err());
+
+        env.ledger().with_mut(|li| li.timestamp = 100);
+        client.create_retainer(&user, &freelancer, &1i128, &1u64, &1u32, &token);
+    }
+
+    #[test]
+    fn test_trusted_address_is_exempt_from_rate_limit() {
+        let (env, client, admin, user, freelancer) = setup();
+        let token = Address::generate(&env);
+        client.set_rate_limit(&admin, &1u32, &100u64);
+        client.set_trusted_address(&admin, &user, &true);
+        assert!(client.is_trusted_address(&user));
+
+        client.create_retainer(&user, &freelancer, &1i128, &1u64, &1u32, &token);
+        client.create_retainer(&user, &freelancer, &1i128, &1u64, &1u32, &token);
+        assert_eq!(client.get_retainer(&2u64).client, user);
     }
 }
