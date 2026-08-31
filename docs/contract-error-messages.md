@@ -119,6 +119,9 @@ Applied to every row, and enforced by tests where they can be:
 | 41 | `InsufficientBurnPool` | A burn exceeded the accumulated burn pool. | There are not enough funds in the burn pool. | Contact support — this is a platform operation. |
 | 42 | `InvalidBurnPercentage` | The burn percentage is outside the permitted range. | The configured burn rate is invalid. | Contact support — this is a platform configuration problem. |
 | 43 | `NoActiveOracles` | A dispute needed an oracle and none were active. | No dispute resolvers are available right now. | Try again later, or contact support. |
+| 47 | `UnsupportedToken` | The payment token is not on the contract's approved whitelist. | This token is not accepted for payments. | Choose a supported token, such as XLM or USDC. |
+| 48 | `BelowMinimumRating` | The freelancer's average rating is below the platform minimum required to accept jobs. | Your rating is too low to accept this job. | Improve your rating by completing other jobs before applying. |
+| 49 | `InvalidRating` | The rating value is outside the permitted range of 1 to 500. | The rating value is not valid. | Enter a rating between 1 and 500. |
 
 ## Lifecycle errors by flow
 
