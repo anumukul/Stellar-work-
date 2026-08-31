@@ -101,15 +101,6 @@ const RichTextEditor = dynamic(
   { ssr: false, loading: () => <p className="text-sm text-slate-500">Loading editor…</p> },
 );
 
-const JOB_CATEGORIES = [
-  "development",
-  "design",
-  "writing",
-  "marketing",
-  "video",
-  "consulting",
-  "other",
-] as const;
 
 interface DraftData {
   amount: string;
@@ -627,20 +618,14 @@ export default function PostJobPage() {
           )}
         </label>
 
-        <label className="block text-sm font-medium">
-          Category
-          <select
-            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 bg-white"
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-          >
-            {JOB_CATEGORIES.map((cat) => (
-              <option key={cat} value={cat}>
-                {cat.charAt(0).toUpperCase() + cat.slice(1)}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="block text-sm font-medium">
+          <JobCategorySelect
+            category={category}
+            tags={tags}
+            onCategoryChange={setCategory}
+            onTagsChange={setTags}
+          />
+        </div>
 
         <div className="block text-sm font-medium">
           <span id={descriptionLabelId}>Job Description</span>
@@ -761,13 +746,6 @@ export default function PostJobPage() {
                 </p>
               )}
             </label>
-
-            <JobCategorySelect
-              category={category}
-              tags={tags}
-              onCategoryChange={setCategory}
-              onTagsChange={setTags}
-            />
           </div>
         </details>
 

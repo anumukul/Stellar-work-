@@ -16,6 +16,7 @@ import SwipeableJobCard from "@/components/SwipeableJobCard";
 import JobFilterPanel, { DEFAULT_FILTERS, type JobFilters } from "@/components/JobFilterPanel";
 import { acceptJob, cancelJob, getDescriptionCid, getJob, getJobCount } from "@/lib/contract";
 import { fetchFromIpfs } from "@/lib/ipfs-service";
+import { JOB_CATEGORIES } from "@/lib/job-categories";
 import { useNotifications } from "@/lib/notifications-context";
 import {
   FIAT_CURRENCIES,
@@ -1119,11 +1120,18 @@ export default function HomePage() {
                       )}
                     </h3>
                   </Link>
-                  {job.category && (
-                    <span className="mt-1 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
-                      {job.category}
-                    </span>
-                  )}
+                  {job.category && (() => {
+                    const cat = JOB_CATEGORIES.find(
+                      c => c.id === job.category?.toLowerCase() || c.label === job.category
+                    );
+                    const Icon = cat?.icon;
+                    return (
+                      <span className={`mt-1 inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${cat ? cat.colorClass : "bg-slate-100 text-slate-600"}`}>
+                        {Icon && <Icon className="w-3.5 h-3.5" />}
+                        {cat ? cat.label : job.category}
+                      </span>
+                    );
+                  })()}
                   <p
                     className="mt-2 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-sm font-bold tabular-nums text-slate-700"
                     title={fiatTooltip}

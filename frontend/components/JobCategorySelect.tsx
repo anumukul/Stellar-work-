@@ -43,18 +43,30 @@ export function JobCategorySelect({ category, tags, onCategoryChange, onTagsChan
         <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
           Category
         </label>
-        <select
-          value={category}
-          onChange={handleCategoryChange}
-          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-        >
-          <option value="">Select a category</option>
-          {JOB_CATEGORIES.map((cat) => (
-            <option key={cat.id} value={cat.id}>
-              {cat.label}
-            </option>
-          ))}
-        </select>
+        <div className="flex items-center gap-2">
+          {category && (() => {
+            const cat = JOB_CATEGORIES.find(c => c.id === category);
+            if (!cat) return null;
+            const Icon = cat.icon;
+            return (
+              <div className={`p-1.5 rounded-md ${cat.colorClass}`}>
+                <Icon className="w-5 h-5" />
+              </div>
+            );
+          })()}
+          <select
+            value={category}
+            onChange={handleCategoryChange}
+            className="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+          >
+            <option value="">Select a category</option>
+            {JOB_CATEGORIES.map((cat) => (
+              <option key={cat.id} value={cat.id}>
+                {cat.label}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {category && (
