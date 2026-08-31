@@ -2,6 +2,7 @@
 
 import CancelJobConfirmModal from "@/components/CancelJobConfirmModal";
 import ConfirmDialog from "@/components/ConfirmDialog";
+import AvailabilityIndicator from "@/components/AvailabilityIndicator";
 import ContractRetryBanner from "@/components/ContractRetryBanner";
 import DeadlineCountdown from "@/components/DeadlineCountdown";
 import InfoTooltip from "@/components/InfoTooltip";
@@ -802,15 +803,23 @@ function JobDetailPageContent() {
         <p>
           <strong>Client:</strong> {job.client}
         </p>
-        <p>
+        <p className="flex flex-wrap items-center gap-2">
           <strong>Freelancer:</strong>{" "}
           {job.freelancer ? (
-            <Link
-              href={`/profile/${job.freelancer}`}
-              className="font-mono text-blue-600 hover:underline text-sm"
-            >
-              {job.freelancer}
-            </Link>
+            <>
+              <Link
+                href={`/profile/${job.freelancer}`}
+                className="font-mono text-blue-600 hover:underline text-sm"
+              >
+                {job.freelancer}
+              </Link>
+              <AvailabilityIndicator
+                address={job.freelancer}
+                activeJobCount={
+                  job.status === "InProgress" || job.status === "SubmittedForReview" ? 1 : 0
+                }
+              />
+            </>
           ) : (
             "Not assigned"
           )}
