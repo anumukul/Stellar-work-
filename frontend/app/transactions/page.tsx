@@ -3,8 +3,10 @@
 import EmptyState from "@/components/EmptyState";
 import ErrorBanner from "@/components/ErrorBanner";
 import NoResultsState from "@/components/NoResultsState";
+import PullToRefresh from "@/components/PullToRefresh";
 import SectionCard from "@/components/SectionCard";
 import TransactionRowSkeleton from "@/components/TransactionRowSkeleton";
+import TruncatedAddress from "@/components/TruncatedAddress";
 import { getJob, getJobCount } from "@/lib/contract";
 import { useWallet } from "@/lib/wallet-context";
 import {
@@ -49,11 +51,6 @@ function formatDate(ts: number): { date: string; time: string } {
       minute: "2-digit",
     }),
   };
-}
-
-function shortenAddress(address: string | null): string {
-  if (!address) return "—";
-  return `${address.slice(0, 6)}…${address.slice(-4)}`;
 }
 
 function sumXlm(txns: Transaction[]): string {
@@ -204,6 +201,8 @@ export default function TransactionsPage() {
   // ── render ────────────────────────────────────────────────────────
   return (
     <section className="space-y-6">
+      <PullToRefresh onRefresh={fetchJobs} label="Refresh transactions" />
+
       {/* Live region for screen readers */}
       <p
         ref={announcerRef}
@@ -475,12 +474,14 @@ function TransactionRow({ tx }: { tx: Transaction }) {
 
       {/* Counterparty */}
       <td className="py-3 pr-4">
-        <span
-          className="font-mono text-xs text-slate-500"
-          title={tx.counterparty ?? undefined}
-        >
-          {shortenAddress(tx.counterparty)}
-        </span>
+        {tx.counterparty ? (
+          <TruncatedAddress
+            address={tx.counterparty}
+            className="font-mono text-xs text-slate-500"
+          />
+        ) : (
+          <span className="font-mono text-xs text-slate-500">—</span>
+        )}
       </td>
 
       {/* Status */}

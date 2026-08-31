@@ -3,6 +3,22 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import HomePage from "@/app/page";
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    refresh: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+  usePathname: () => "/",
+  useSearchParams: () => ({
+    get: vi.fn().mockReturnValue(null),
+    toString: vi.fn().mockReturnValue(""),
+  }),
+}));
+
 const mockGetJobCount = vi.fn();
 const mockGetJob = vi.fn();
 
@@ -59,6 +75,7 @@ describe("Home page layout toggle buttons", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       })
       .mockResolvedValueOnce({
         client: "GCLIENT",
@@ -70,6 +87,7 @@ describe("Home page layout toggle buttons", () => {
         deadline: "0",
         token: "GTOKEN",
         revision_count: 0,
+        submitted_at: "0",
       });
   });
 

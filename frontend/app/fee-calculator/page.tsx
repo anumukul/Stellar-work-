@@ -29,7 +29,7 @@ export default function FeeCalculatorPage() {
     if (!showFiat) return xlm;
     const fiat = value * XLM_TO_FIAT[fiatCurrency];
     const sym = FIAT_SYMBOLS[fiatCurrency];
-    return `${xlm} (${sym}${fiat.toFixed(2)})`;
+    return `${xlm} (${sym}${fiat.toFixed(2)} ${fiatCurrency})`;
   }
 
   return (

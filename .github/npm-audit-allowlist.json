@@ -1,0 +1,13 @@
+{
+  "_comment": "Advisory IDs that are accepted with a documented reason. Enforcement: any high/critical finding NOT listed here fails the dependency audit job. Entries must be removed when an in-range patched release becomes available. All entries currently listed are development-only transitive dependencies of the Storybook/Vite toolchain (never shipped; see package.json scripts).",
+  "advisories": {
+    "GHSA-3jxr-9vmj-r5cp": "brace-expansion ReDoS; dev-only transitive via Storybook tooling; no patched release in the 1.x line used by the toolchain",
+    "GHSA-mh99-v99m-4gvg": "brace-expansion OOM; dev-only transitive via Storybook tooling; not fixable without breaking the toolchain's 1.x constraint",
+    "GHSA-rgw5-rvv9-x895": "brace-expansion intermediate-array DoS; dev-only transitive via Storybook tooling; no patched release in the 1.x line used by the toolchain",
+    "GHSA-w3rx-r6r6-pgpr": "image-size ICNS parser DoS; dev-only transitive via Storybook tooling; no patched release exists yet",
+    "GHSA-5p2g-fcmc-qvqq": "image-size JXL/HEIF parser DoS; dev-only transitive via Storybook tooling; no patched release exists yet",
+    "GHSA-5p4m-2wfm-xmqj": "js-yaml quadratic CPU in !!omap; dev-only transitive via vite-plugin-storybook-nextjs; toolchain still requires js-yaml 4.x < 4.3.1",
+    "@storybook/nextjs-vite": "Storybook dev server; severity reported via audit but no GHSA URL present in registry output; dev-only, no patched release in the installed range (<=10.6.0-alpha.6)",
+    "vite-plugin-storybook-nextjs": "Storybook Vite integration; severity reported via audit but no GHSA URL present in registry output; dev-only, no patched release in the installed range"
+  }
+}

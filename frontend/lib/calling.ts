@@ -47,7 +47,7 @@ export function getDailyUrl(
 
   const props: Record<string, string> = {
     domain: DAILY_DOMAIN,
-    room: { name: room, privacy: "private" },
+    room: JSON.stringify({ name: room, privacy: "private" }),
     userName,
     audioSource: callType === "audio" ? "mic" : "mic,cam",
     videoSource: callType === "video" ? "camera" : "none",

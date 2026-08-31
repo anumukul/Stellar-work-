@@ -2,7 +2,9 @@
 
 import ErrorBanner from "@/components/ErrorBanner";
 import StatusPill from "@/components/StatusPill";
-import { getJob, getJobCount, isBlacklisted, isWhitelisted, isWhitelistModeEnabled } from "@/lib/contract";
+import TruncatedAddress from "@/components/TruncatedAddress";
+import { getJob, getJobCount, isBlacklisted, isWhitelisted, isWhitelistModeEnabled, getCertificates, getCertificateCount } from "@/lib/contract";
+import type { CompletionCertificate } from "@/lib/contract";
 import { toXlm } from "@/lib/format";
 import {
   MAX_BIO_LENGTH,
@@ -304,6 +306,7 @@ export default function ProfilePageClient({ address }: { address: string }) {
   const [draft, setDraft] = useState<Portfolio>(emptyPortfolio());
   const [testimonials, setTestimonials] = useState<Testimonial[]>([]);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [certificates, setCertificates] = useState<CompletionCertificate[]>([]);
 
   const addressValid = isValidStellarAddress(address);
   const isOwner = wallet === address;
@@ -366,6 +369,21 @@ export default function ProfilePageClient({ address }: { address: string }) {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void fetchJobs();
   }, [fetchJobs]);
+
+  useEffect(() => {
+    if (!wallet || !addressValid) return;
+    let cancelled = false;
+    getCertificateCount(address)
+      .then((count) => {
+        if (cancelled || count === 0) return;
+        return getCertificates(address, 0, count);
+      })
+      .then((certs) => {
+        if (!cancelled && certs) setCertificates(certs);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [wallet, address, addressValid]);
 
   // Derived stats
   const jobsPosted = jobs.filter((j) => j.role === "client").length;
@@ -898,6 +916,40 @@ export default function ProfilePageClient({ address }: { address: string }) {
                     <span>·</span>
                     <span>{new Date(Number(item.job.created_at) * 1000).toLocaleDateString()}</span>
                   </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Completion Certificates ─────────────────────────────────────────── */}
+      {!loading && certificates.length > 0 && (
+        <div className="rounded-lg border border-slate-200 bg-white p-5">
+          <h2 className="text-lg font-semibold">Completion Certificates</h2>
+          <p className="mt-1 text-xs text-slate-400">{certificates.length} on-chain proof{certificates.length !== 1 ? "s" : ""} of completed work</p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {certificates.map((cert, idx) => (
+              <div
+                key={`${cert.job_id}-${idx}`}
+                className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-4"
+              >
+                <div className="flex items-center gap-2">
+                  <svg className="h-5 w-5 text-emerald-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M12 15l-2 5l9-9l-9-9l2 5" />
+                    <circle cx="12" cy="12" r="10" />
+                  </svg>
+                  <Link
+                    href={`/job/${cert.job_id}`}
+                    className="text-sm font-semibold text-blue-600 hover:underline"
+                  >
+                    Job #{cert.job_id}
+                  </Link>
+                </div>
+                <div className="mt-2 space-y-1 text-xs text-slate-600">
+                  <p><span className="font-medium">Client:</span> <TruncatedAddress address={cert.client} /></p>
+                  <p><span className="font-medium">Amount:</span> {toXlm(cert.amount)} XLM</p>
+                  <p><span className="font-medium">Completed:</span> ledger {cert.completed_at}</p>
                 </div>
               </div>
             ))}

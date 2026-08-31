@@ -11,6 +11,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  secret-scanning:
+    name: Secret Scanning (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks Secret Scanner
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   contract:
     name: Contract Build & Test
     runs-on: ubuntu-latest
@@ -54,6 +68,40 @@ jobs:
       - name: Run tests
         working-directory: contracts/escrow/
         run: cargo test
+
+  reproducible-build:
+    name: Reproducible Contract Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            contracts/escrow/target/
+          key: ${{ runner.os }}-cargo-repro-${{ hashFiles('contracts/escrow/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-repro-
+            ${{ runner.os }}-cargo-
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verify reproducible build
+        run: python3 scripts/check_reproducible.py
 
   frontend:
     name: Frontend Lint, Type Check & Build

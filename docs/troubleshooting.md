@@ -72,3 +72,7 @@ To bypass hooks (use sparingly):
 ```bash
 git commit -m "..." --no-verify
 ```
+
+## 5. Escrow Top-Up (SC-83)
+
+Clients can add funds to an existing job via `top_up_escrow(client, job_id, additional_amount)` while the job is `Open`, `InProgress`, or `SubmittedForReview`. Only the original client may call it. The job detail page exposes an **Add Funds** action that confirms the new total before submitting.

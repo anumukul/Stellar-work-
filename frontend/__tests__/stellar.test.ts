@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 
-import { truncateAddress, getNetwork, getExplorerTxUrl } from "../lib/stellar";
+import {
+  truncateAddress,
+  getNetwork,
+  getExplorerTxUrl,
+  isValidStellarAddress,
+} from "../lib/stellar";
 
 describe("truncateAddress", () => {
   it("truncates a Stellar address with default 4 chars", () => {
@@ -21,6 +26,43 @@ describe("truncateAddress", () => {
 
   it("returns empty string for empty input", () => {
     expect(truncateAddress("")).toBe("");
+  });
+});
+
+describe("isValidStellarAddress", () => {
+  it("accepts a 56-character G account address", () => {
+    expect(
+      isValidStellarAddress(
+        "GABC7DEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUV",
+      ),
+    ).toBe(true);
+  });
+
+  it("accepts a 56-character C contract address", () => {
+    expect(
+      isValidStellarAddress(
+        "CABC7DEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUV",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects short, padded, or invalid-alphabet strings", () => {
+    expect(isValidStellarAddress("GNATIVE")).toBe(false);
+    expect(isValidStellarAddress("not-an-address")).toBe(false);
+    expect(
+      isValidStellarAddress(
+        "GTOKEN000000000000000000000000000000000000000000000000000",
+      ),
+    ).toBe(false);
+    expect(isValidStellarAddress("")).toBe(false);
+  });
+
+  it("trims whitespace before validating", () => {
+    expect(
+      isValidStellarAddress(
+        "  GABC7DEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUV  ",
+      ),
+    ).toBe(true);
   });
 });
 

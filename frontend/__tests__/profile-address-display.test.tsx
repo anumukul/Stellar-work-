@@ -29,6 +29,8 @@ vi.mock("@/lib/contract", () => ({
   freelancerCancelJob: vi.fn(),
   getDescriptionCid: vi.fn(),
   storeDescriptionCid: vi.fn(),
+  getCertificateCount: vi.fn().mockResolvedValue(0),
+  getCertificates: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("@/lib/format", () => ({
