@@ -52,6 +52,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
 import JobDetailPageSkeleton from "@/components/JobDetailPageSkeleton";
+import { useJobSubscription } from "@/lib/useJobSubscription";
 
 const RichTextRenderer = dynamic(
   () => import("@/components/RichTextRenderer"),
@@ -158,6 +159,10 @@ function JobDetailPageContent() {
   const numericId = Number(id);
   const isIdValid =
     !isNaN(numericId) && numericId > 0 && Number.isInteger(numericId);
+
+  const { status: streamStatus } = useJobSubscription(isIdValid ? id : undefined, () => {
+    void load();
+  });
 
   async function load() {
     if (!isIdValid) {
@@ -735,9 +740,41 @@ function JobDetailPageContent() {
 
       <article className="space-y-2 rounded-lg border border-slate-200 bg-white p-5 text-sm">
         <div className="flex items-center justify-between gap-2">
-          <p>
-            <strong>Status:</strong> <StatusPill status={job.status} />
-          </p>
+          <div className="flex items-center gap-3">
+            <p>
+              <strong>Status:</strong> <StatusPill status={job.status} />
+            </p>
+            <div className="flex items-center gap-1.5 text-xs font-medium">
+              <span className="relative flex h-2 w-2">
+                {streamStatus === "connected" && (
+                  <>
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </>
+                )}
+                {streamStatus === "connecting" && (
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-400"></span>
+                )}
+                {streamStatus === "fallback-polling" && (
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-400"></span>
+                )}
+                {streamStatus === "disconnected" && (
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-slate-400"></span>
+                )}
+              </span>
+              <span className={
+                streamStatus === "connected" ? "text-emerald-700" :
+                streamStatus === "connecting" ? "text-amber-700" :
+                streamStatus === "fallback-polling" ? "text-blue-700" :
+                "text-slate-500"
+              }>
+                {streamStatus === "connected" ? "Live" :
+                 streamStatus === "connecting" ? "Connecting..." :
+                 streamStatus === "fallback-polling" ? "Polling" :
+                 "Disconnected"}
+              </span>
+            </div>
+          </div>
           <span className="inline-flex items-center gap-1 text-slate-500" title={`${viewCount} people viewed this job`}>
             <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
