@@ -198,17 +198,17 @@ export default function ProfileBuilderPage() {
             </button>
           </div>
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-8">
-            {resume.name && <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-1">{resume.name}</h2>}
+            {resume.name && <p className="text-3xl font-bold text-gray-900 dark:text-white mb-1">{resume.name}</p>}
             {resume.tagline && <p className="text-lg text-gray-600 dark:text-gray-400 mb-2">{resume.tagline}</p>}
             {resume.location && <p className="text-sm text-gray-500 dark:text-gray-500 mb-4">{resume.location}</p>}
             {resume.bio && <p className="text-gray-700 dark:text-gray-300 mb-6">{resume.bio}</p>}
 
             {resume.experiences.length > 0 && (
               <div className="mb-6">
-                <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-3">Experience</h3>
+                <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-3">Experience</h2>
                 {resume.experiences.map((exp) => (
                   <div key={exp.id} className="mb-4">
-                    <h4 className="font-medium text-gray-900 dark:text-white">{exp.title}</h4>
+                    <h3 className="font-medium text-gray-900 dark:text-white">{exp.title}</h3>
                     <p className="text-sm text-gray-600 dark:text-gray-400">{exp.company} | {exp.startDate} - {exp.endDate || "Present"}</p>
                     {exp.description && <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{exp.description}</p>}
                   </div>
@@ -218,7 +218,7 @@ export default function ProfileBuilderPage() {
 
             {resume.education.length > 0 && (
               <div className="mb-6">
-                <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-3">Education</h3>
+                <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-3">Education</h2>
                 {resume.education.map((edu) => (
                   <div key={edu.id} className="mb-2">
                     <p className="font-medium text-gray-900 dark:text-white">{edu.degree}</p>
@@ -230,7 +230,7 @@ export default function ProfileBuilderPage() {
 
             {resume.skills.length > 0 && (
               <div className="mb-6">
-                <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-3">Skills</h3>
+                <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-3">Skills</h2>
                 <div className="flex flex-wrap gap-2">
                   {resume.skills.map((skill, i) => (
                     <span key={i} className="px-3 py-1 text-sm rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">
@@ -243,7 +243,7 @@ export default function ProfileBuilderPage() {
 
             {(resume.github || resume.linkedin || resume.website) && (
               <div>
-                <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-3">Links</h3>
+                <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-3">Links</h2>
                 <div className="space-y-1 text-sm">
                   {resume.github && <p>GitHub: {resume.github}</p>}
                   {resume.linkedin && <p>LinkedIn: {resume.linkedin}</p>}

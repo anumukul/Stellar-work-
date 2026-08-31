@@ -46,6 +46,9 @@ Use this guide when a production-impacting issue is detected in StellarWork (fro
 
 ## Related docs
 
+- [incident-runbook-template.md](./incident-runbook-template.md) — recording an incident end-to-end and postmortem
+- [OPS_RUNBOOK.md](./OPS_RUNBOOK.md) — monitoring and per-scenario incident procedures
+- [maintenance-window-announcement-template.md](./maintenance-window-announcement-template.md) — planned-downtime announcements
 - [TRIAGE.md](./TRIAGE.md) — issue labels and triage SLA
 - [release-checklist.md](./release-checklist.md) — release and rollback
 - [troubleshooting.md](./troubleshooting.md) — local development issues
