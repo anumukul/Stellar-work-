@@ -69,9 +69,8 @@
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^3.2.4",
-    "vitest-axe": "^0.1.0"
-    "vite": "^5.4.21",
-    "vitest": "^3.2.4"
+    "vitest-axe": "^0.1.0",
+    "vite": "^5.4.21"
   },
   "overrides": {
     "axios": "^1.18.0",
