@@ -11,6 +11,15 @@ const nextConfig: NextConfig = {
     NEXT_PUBLIC_COMMIT_SHA: process.env.COMMIT_SHA ?? process.env.VERCEL_GIT_COMMIT_SHA ?? "",
     NEXT_PUBLIC_DEPLOY_ENV: process.env.DEPLOY_ENV ?? process.env.VERCEL_ENV ?? "development",
   },
+  images: {
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "**",
+      },
+    ],
+    dangerouslyAllowSVG: true,
+  },
   headers: async () => {
     const isReportOnly = process.env.CSP_REPORT_ONLY === "true";
     const cspHeaderKey = isReportOnly
