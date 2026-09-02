@@ -141,6 +141,44 @@ html {
     outline-offset: 3px !important;
     box-shadow: 0 0 0 2px var(--focus-ring-offset) !important;
   }
+
+  /* High contrast mode support using system colors */
+  @media (forced-colors: active) {
+    :root, .dark, .high-contrast, .high-contrast:not(.dark) {
+      --color-bg: Canvas;
+      --color-surface: Canvas;
+      --color-border: CanvasText;
+      --color-border-hover: Highlight;
+      --color-text: CanvasText;
+      --color-text-secondary: CanvasText;
+      --color-text-muted: GrayText;
+      --color-accent: Highlight;
+      --color-accent-hover: HighlightText;
+      --color-badge-bg: Canvas;
+      --color-badge-text: CanvasText;
+      --color-card: Canvas;
+      --color-card-hover: Canvas;
+      --focus-ring: Highlight;
+      --focus-ring-offset: Canvas;
+      
+      --color-slate-600: CanvasText;
+    }
+
+    /* Ensure interactive elements keep visible borders */
+    * {
+      forced-color-adjust: auto;
+    }
+    
+    svg {
+      fill: currentColor;
+    }
+
+    :focus-visible {
+      outline: 3px solid Highlight !important;
+      outline-offset: 3px !important;
+      box-shadow: none !important;
+    }
+  }
 }
 
 @layer components {
