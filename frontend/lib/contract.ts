@@ -276,6 +276,16 @@ export async function getNativeToken(): Promise<string> {
   return String(response.data ?? "");
 }
 
+export async function getJobEscrowBalance(jobId: string): Promise<string> {
+  const response = await callContract(
+    getActiveContractId(),
+    "get_job_escrow_balance",
+    [nativeToScVal(jobId, { type: "u64" })],
+    { readOnly: true },
+  );
+  return String(response.data ?? "0");
+}
+
 export async function getJob(jobId: string): Promise<Job | null> {
   const response = await callContract(
     getActiveContractId(),
