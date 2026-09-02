@@ -306,6 +306,16 @@ export async function getNativeToken(): Promise<string> {
   return String(response.data ?? "");
 }
 
+export async function getJobEscrowBalance(jobId: string): Promise<string> {
+  const response = await callContract(
+    getActiveContractId(),
+    "get_job_escrow_balance",
+    [nativeToScVal(jobId, { type: "u64" })],
+    { readOnly: true },
+  );
+  return String(response.data ?? "0");
+}
+
 export async function getJob(jobId: string): Promise<Job | null> {
   const response = await callContract(
     getActiveContractId(),
@@ -314,6 +324,31 @@ export async function getJob(jobId: string): Promise<Job | null> {
     { readOnly: true },
   );
   return (response.data as Job) ?? null;
+}
+
+export async function getJobsBatch(start: string, limit: number): Promise<Job[]> {
+  const response = await callContract(
+    getActiveContractId(),
+    "get_jobs_batch",
+    [
+      nativeToScVal(start, { type: "u64" }),
+      nativeToScVal(limit, { type: "u32" }),
+    ],
+    { readOnly: true },
+  );
+  return (response.data as Job[]) ?? [];
+}
+
+export async function getJobsByCategory(category: string): Promise<number[]> {
+  const response = await callContract(
+    getActiveContractId(),
+    "get_jobs_by_category",
+    [nativeToScVal(category, { type: "symbol" })],
+    { readOnly: true },
+  );
+  const data = response.data as number[] | string[] | undefined;
+  if (!data) return [];
+  return data.map((id) => Number(id));
 }
 
 export async function getJobCount(): Promise<number> {

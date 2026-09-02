@@ -23,8 +23,10 @@ import {
   rateJob,
   cancelJob,
   freelancerCancelJob,
+  getActiveContractId,
   getDescriptionCid,
   getJob,
+  getJobEscrowBalance,
   getJobViews,
   recordJobView,
   storeDescriptionCid,
@@ -53,12 +55,13 @@ import {
   type FiatCurrency,
   type XlmFiatRateCache,
 } from "@/lib/format";
-import { getExplorerTxUrl, parseContractError, getNativeBalance, retryQueuedWrites } from "@/lib/stellar";
+import { getExplorerTxUrl, getExplorerAccountUrl, parseContractError, getNativeBalance, retryQueuedWrites } from "@/lib/stellar";
 import { isConfirmSuppressed, CONFIRM_KEYS } from "@/lib/confirm-prefs";
 import type { Job } from "@/lib/types";
 import { useWallet } from "@/lib/wallet-context";
 import { useMeetings } from "@/lib/meetings-context";
 import CertificateDownloadButton from "@/components/CertificateDownloadButton";
+import SimilarJobsSection from "@/components/SimilarJobsSection";
 import { buildCertificateData } from "@/lib/certificate-pdf";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -141,6 +144,7 @@ function JobDetailPageContent() {
   const { showSuccess, showError } = useToast();
   const { addNotification } = useNotifications();
   const [job, setJob] = useState<Job | null>(null);
+  const [escrowBalance, setEscrowBalance] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(
@@ -204,8 +208,12 @@ function JobDetailPageContent() {
     setError(null);
     setDescription(null);
     try {
-      const data = await getJob(id);
+      const [data, escrow] = await Promise.all([
+        getJob(id),
+        getJobEscrowBalance(id).catch(() => null),
+      ]);
       setJob(data);
+      setEscrowBalance(escrow);
       if (data) {
         const hash = data.description_hash;
         const stored = localStorage.getItem(`job-desc:${hash}`);
@@ -940,9 +948,33 @@ useEffect(() => {
           )}
         </p>
         <p title={fiatTooltip}>
-          <strong>Amount:</strong>{" "}
+          <strong>Agreed Amount:</strong>{" "}
           {formatXlmWithFiat(job.amount, fiatCurrency, fiatRates?.rates)}
         </p>
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 mt-2 mb-4">
+          <p className="text-lg font-semibold text-slate-900" title={escrowBalance ? formatXlmFiatRateTooltip(fiatCurrency, fiatRates?.rates, fiatRates?.fetchedAt) : undefined}>
+            <strong>Real-time Escrow Balance:</strong>{" "}
+            {escrowBalance ? formatXlmWithFiat(escrowBalance, fiatCurrency, fiatRates?.rates) : "Loading..."}
+          </p>
+          <a 
+            href={getExplorerAccountUrl(getActiveContractId())} 
+            target="_blank" 
+            rel="noreferrer" 
+            className="text-sm text-blue-600 hover:underline mt-1 inline-block"
+          >
+            Verify balance on Explorer
+          </a>
+          {escrowBalance !== null && BigInt(escrowBalance) < BigInt(job.amount) && job.status !== "Completed" && job.status !== "Cancelled" && (
+            <div className="mt-3 p-3 bg-red-100 text-red-800 rounded-md text-sm font-medium">
+              Alert: Escrow balance ({escrowBalance ? formatXlmWithFiat(escrowBalance, fiatCurrency, fiatRates?.rates) : "0"}) is less than the agreed amount! Funds may not be fully secured.
+            </div>
+          )}
+          {escrowBalance !== null && BigInt(escrowBalance) > BigInt(job.amount) && (
+            <div className="mt-3 p-3 bg-blue-100 text-blue-800 rounded-md text-sm font-medium">
+              Note: Escrow balance includes additional topped-up funds.
+            </div>
+          )}
+        </div>
         <p>
           <strong>Token:</strong>{" "}
           <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-xs">
@@ -1570,6 +1602,15 @@ useEffect(() => {
         </>
       )}
 
+      {job && (
+        <SimilarJobsSection
+          job={job}
+          jobId={id}
+          description={description}
+          fiatCurrency={fiatCurrency}
+          fiatRates={fiatRates}
+        />
+      )}
 
       {canTopUp && showTopUpForm && (
         <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-3">

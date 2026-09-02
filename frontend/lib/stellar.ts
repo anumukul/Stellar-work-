@@ -448,6 +448,11 @@ export function getExplorerTxUrl(txHash: string): string {
   return `${base}/${txHash}`;
 }
 
+export function getExplorerAccountUrl(address: string): string {
+  const base = getNetworkConfig(getActiveNetwork()).explorerUrl.replace('/tx', '/contract');
+  return `${base}/${address}`;
+}
+
 export function truncateAddress(address: string, chars = 4): string {
   if (!address || address.length <= chars * 2 + 3) return address;
   return `${address.slice(0, chars + 2)}...${address.slice(-chars)}`;
