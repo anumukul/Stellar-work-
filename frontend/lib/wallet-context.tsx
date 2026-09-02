@@ -17,7 +17,6 @@ import {
   watchWalletNetworkChanges,
 } from "@/lib/stellar";
 import type { StellarNetwork } from "@/lib/network-config";
-import LegalConsentModal, { hasAcceptedLegal } from "@/components/LegalConsentModal";
 import LegalConsentModal, { hasAcceptedLegal, acceptLegal } from "@/components/LegalConsentModal";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import { CONFIRM_KEYS } from "@/lib/confirm-prefs";

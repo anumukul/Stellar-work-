@@ -19,13 +19,14 @@ const mockJob: Job = {
   freelancer: null,
   amount: "100000000",
   description_hash: "abcd",
-  description_payload_len: 4,
   deadline: "1672531200", // 2023-01-01
   status: "Open",
-  token_address: "token",
+  token: "token",
   title: "Test Job",
   category: "dev",
   created_at: "1672530000",
+  revision_count: 0,
+  submitted_at: "1672530000",
 };
 
 describe("RSS Feed Route (/feed.xml)", () => {

@@ -28,7 +28,7 @@ import InfoTooltip from "@/components/InfoTooltip";
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable';
 import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
-import JobCard from '@/components/JobCard';
+import JobCardSkeleton from "@/components/JobCardSkeleton";
 import { useJobOrder } from '@/lib/hooks/useJobOrder';
 import NoResultsState from "@/components/NoResultsState";
 import PullToRefresh from "@/components/PullToRefresh";
@@ -50,8 +50,6 @@ import { buildActiveFreelancerJobCountMap } from "@/lib/availability";
 import AvailabilityIndicator from "@/components/AvailabilityIndicator";
 
 export type PendingDashAction = {
-  type: "cancelJob" | "approveWork" | "submitWork" | "freelancerCancelJob";
-type PendingDashAction = {
   type: "cancelJob" | "approveWork" | "submitWork" | "freelancerCancelJob" | "enforceDeadline";
   jobId: number;
   amountXlm: string;
@@ -478,8 +476,8 @@ export default function DashboardPage() {
     [allJobs],
   );
 
-  const { orderedJobs: orderedPosted, setOrder: setPostedOrder, resetOrder: resetPostedOrder } = useJobOrder(filteredPosted, wallet, "posted");
-  const { orderedJobs: orderedAccepted, setOrder: setAcceptedOrder, resetOrder: resetAcceptedOrder } = useJobOrder(filteredAccepted, wallet, "accepted");
+  const { orderedJobs: orderedPosted, setOrder: setPostedOrder, resetOrder: resetPostedOrder } = useJobOrder(filteredPosted, wallet ?? "", "posted");
+  const { orderedJobs: orderedAccepted, setOrder: setAcceptedOrder, resetOrder: resetAcceptedOrder } = useJobOrder(filteredAccepted, wallet ?? "", "accepted");
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -1010,10 +1008,13 @@ export function JobSection({
   batchLoading,
   selectedJobIds = new Set(),
   onToggleSelectBulk,
+  onToggleSelect,
   onSelectAll,
   onDeselectAll,
   onBulkCancel,
+  onBulkExtend,
   bulkCancelProgress,
+  bulkExtendProgress,
   orderedIds,
   setOrder,
   activeFreelancerJobCounts,
@@ -1041,6 +1042,7 @@ export function JobSection({
   onBulkCancel?: () => void;
   onBulkExtend?: () => void;
   bulkCancelProgress?: { done: number; total: number; failed: number[] } | null;
+  bulkExtendProgress?: { done: number; total: number } | null;
   orderedIds?: number[];
   setOrder?: (ids: number[]) => void;
   activeFreelancerJobCounts?: Map<string, number>;
@@ -1066,21 +1068,39 @@ export function JobSection({
 
   const renderList = (items: Array<{ id: number; job: Job }>) => (
     <ul className="grid list-none gap-4 sm:grid-cols-2" aria-label={title}>
-      {items.map(({ id, job }) => (
-        <li key={id}>
-          <JobCard
-            id={id}
-            job={job}
-            wallet={wallet}
-            role={role}
-            isLoading={actionLoading === id}
-            onAction={onAction}
-            onRequestAction={onRequestAction}
-            isSelected={role === "client" && job.status === "Open" ? selectedJobIds.has(id) : selectedJobs?.has(id) ?? false}
-            onToggleSelect={role === "client" ? onToggleSelect : undefined}
-          />
-        </li>
-      ))}
+      {items.map(({ id, job }) => {
+        const canBulkCancel = job.status === "Open" && role === "client";
+        const canBatchApprove = job.status === "SubmittedForReview" && role === "client";
+        const isSelected = canBulkCancel
+          ? selectedJobIds.has(id)
+          : canBatchApprove
+            ? (selectedJobs?.has(id) ?? false)
+            : false;
+        const toggle = canBulkCancel
+          ? onToggleSelectBulk
+          : canBatchApprove
+            ? onToggleBatchSelect
+            : onToggleSelect;
+        return (
+          <li key={id}>
+            <JobCard
+              id={id}
+              job={job}
+              wallet={wallet}
+              role={role}
+              isLoading={actionLoading === id}
+              onAction={onAction}
+              onRequestAction={onRequestAction}
+              isSelected={isSelected}
+              onToggleSelect={toggle}
+              selectMode={canBulkCancel ? "cancel" : canBatchApprove ? "approve" : undefined}
+              freelancerActiveJobCount={
+                job.freelancer ? activeFreelancerJobCounts?.get(job.freelancer) ?? 0 : 0
+              }
+            />
+          </li>
+        );
+      })}
     </ul>
   );
 
@@ -1168,45 +1188,6 @@ export function JobSection({
         ) : (
           renderList(jobs)
         )
-        <ul className="grid list-none gap-4 sm:grid-cols-2" aria-label={title}>
-          {jobs.map(({ id, job }) => {
-            const canBulkCancel = job.status === "Open" && role === "client";
-            const canBatchApprove = job.status === "SubmittedForReview" && role === "client";
-            const isSelected = canBulkCancel
-              ? selectedJobIds.has(id)
-              : canBatchApprove
-                ? (selectedJobs?.has(id) ?? false)
-                : false;
-            const toggle =
-              canBulkCancel
-                ? onToggleSelectBulk
-                : canBatchApprove
-                  ? onToggleBatchSelect
-                  : undefined;
-
-            return (
-              <li key={id}>
-                <JobCard
-                  id={id}
-                  job={job}
-                  wallet={wallet}
-                  role={role}
-                  isLoading={actionLoading === id}
-                  onAction={onAction}
-                  onRequestAction={onRequestAction}
-                  isSelected={isSelected}
-                  onToggleSelect={toggle}
-                  selectMode={canBulkCancel ? "cancel" : canBatchApprove ? "approve" : undefined}
-                  freelancerActiveJobCount={
-                    job.freelancer
-                      ? activeFreelancerJobCounts?.get(job.freelancer) ?? 0
-                      : 0
-                  }
-                />
-              </li>
-            );
-          })}
-        </ul>
       )}
     </div>
   );

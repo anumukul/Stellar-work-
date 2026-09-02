@@ -33,31 +33,31 @@ describe('Accessibility Tests', () => {
   it('Spinner has no accessibility violations', async () => {
     const { container } = render(<Spinner size="md" />);
     const results = await axe(container);
-    expect(results).toHaveNoViolations();
+    expect(results.violations).toEqual([]);
   });
 
   it('LoadingState has no accessibility violations', async () => {
-    const { container } = render(<LoadingState />);
+    const { container } = render(<LoadingState text="Loading..." />);
     const results = await axe(container);
-    expect(results).toHaveNoViolations();
+    expect(results.violations).toEqual([]);
   });
 
   it('EmptyState has no accessibility violations', async () => {
-    const { container } = render(<EmptyState message="No items found" />);
+    const { container } = render(<EmptyState title="No items found" description="No items found" />);
     const results = await axe(container);
-    expect(results).toHaveNoViolations();
+    expect(results.violations).toEqual([]);
   });
 
   it('ErrorBanner has no accessibility violations', async () => {
     const { container } = render(<ErrorBanner message="Something went wrong" />);
     const results = await axe(container);
-    expect(results).toHaveNoViolations();
+    expect(results.violations).toEqual([]);
   });
 
   it('StatusPill has no accessibility violations', async () => {
     const { container } = render(<StatusPill status="Open" />);
     const results = await axe(container);
-    expect(results).toHaveNoViolations();
+    expect(results.violations).toEqual([]);
   });
 
   // ── Navigation / Layout ────────────────────────────────────────────
@@ -65,15 +65,15 @@ describe('Accessibility Tests', () => {
   it('AppFooter has no accessibility violations', async () => {
     const { container } = render(<AppFooter />);
     const results = await axe(container);
-    expect(results).toHaveNoViolations();
+    expect(results.violations).toEqual([]);
   });
 
   // ── Stellar-specific ──────────────────────────────────────────────
 
   it('NetworkBadge has no accessibility violations', async () => {
-    const { container } = render(<NetworkBadge network="testnet" />);
+    const { container } = render(<NetworkBadge />);
     const results = await axe(container);
-    expect(results).toHaveNoViolations();
+    expect(results.violations).toEqual([]);
   });
 });
 
@@ -86,17 +86,17 @@ describe('Accessibility Tests', () => {
  */
 describe('Stellar-Specific Accessibility Patterns', () => {
   it('NetworkBadge conveys network info without relying solely on color', async () => {
-    const { container } = render(<NetworkBadge network="testnet" />);
+    const { container } = render(<NetworkBadge />);
     // The badge must include text content, not just a colored dot
     expect(container.textContent).toBeTruthy();
     const results = await axe(container);
-    expect(results).toHaveNoViolations();
+    expect(results.violations).toEqual([]);
   });
 
   it('StatusPill conveys status without relying solely on color', async () => {
     const { container } = render(<StatusPill status="Completed" />);
     expect(container.textContent).toBeTruthy();
     const results = await axe(container);
-    expect(results).toHaveNoViolations();
+    expect(results.violations).toEqual([]);
   });
 });
