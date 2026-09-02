@@ -96,21 +96,34 @@ chore(deps): bump @stellar/stellar-sdk to 15.0.1
 - Run `cargo fmt --all -- --check` in `contracts/escrow` to verify formatting.
 - Run `make coverage-contract` to verify test coverage meets the 80% threshold.
 - Run frontend checks for changed frontend files.
+
+### Style Guide
+
+All code style conventions are documented in the [Style Guide](docs/STYLE_GUIDE.md). This covers:
+- TypeScript and Rust style conventions
+- Comment and docstring formats
+- Naming conventions for components, functions, and types
+- Commit message guidelines
+- Links to automated linting configuration
+
 ### Rust (Contract)
 
 - Follow `rustfmt` formatting: `cargo fmt --all -- --check`
-- Run `cargo clippy` and address warnings
+- Run `cargo clippy` and address warnings (zero warnings enforced)
 - All public contract functions must have unit tests
 - Use `proptest` for property-based testing of state machines
+- Follow naming conventions: `PascalCase` for types, `snake_case` for functions/variables, `SCREAMING_SNAKE_CASE` for constants
 
 ### TypeScript / React (Frontend)
 
 - Follow ESLint configuration in `frontend/eslint.config.mjs`
+- Use Prettier formatting (enforced via ESLint)
 - Use `"use client"` directive at the top of client component files
 - Use Tailwind CSS utilities for all styling — no external UI libraries
 - Prefer `React.memo` for pure presentational components
 - Use dynamic imports for large or rarely-used components
 - All new features must include unit tests in `frontend/__tests__/`
+- Follow naming conventions: `PascalCase` for components/types, `camelCase` for functions/variables
 
 ## Security Guidelines
 
