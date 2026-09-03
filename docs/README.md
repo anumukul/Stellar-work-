@@ -22,6 +22,9 @@ Index of project documentation. Start with the [root README](../README.md) for s
 | [FRONTEND_ARCHITECTURE.md](./FRONTEND_ARCHITECTURE.md) | Component hierarchy, data flow, wallet connection, and responsive design |
 | [INTEGRATION.md](./INTEGRATION.md) | Third-party developer integration guide with TypeScript examples |
 | [testnet-deployment-guide.md](./testnet-deployment-guide.md) | Deploy escrow to Stellar testnet |
+| [FRONTEND_CONTRACT_INTERACTION.md](./FRONTEND_CONTRACT_INTERACTION.md) | How the frontend calls the contract, per-function reference |
+| [GAS_OPTIMIZATION.md](./GAS_OPTIMIZATION.md) | Gas cost of common operations, before/after optimizations, profiling, anti-patterns |
+| [PERFORMANCE.md](./PERFORMANCE.md) | Contract storage patterns, bundle size, RPC batching, and frontend performance budgets |
 
 ## Deployment
 

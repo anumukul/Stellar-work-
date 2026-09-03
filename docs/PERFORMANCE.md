@@ -1,5 +1,9 @@
 # Performance Optimization Guide
 
+> For gas/fee-specific guidance — cost tables for common operations, before/after optimization
+> examples, profiling with `env.budget()` and simulation, and anti-patterns to avoid — see
+> [GAS_OPTIMIZATION.md](./GAS_OPTIMIZATION.md).
+
 ## Smart Contract Performance
 
 ### Storage Access Patterns
@@ -26,7 +30,8 @@
 
 ### Gas Cost Benchmarks
 
-See `contracts/CONTRACT.md` for per-function gas estimates. Key takeaways:
+See [GAS_OPTIMIZATION.md](./GAS_OPTIMIZATION.md) for the full per-operation cost table,
+measurement workflow, and optimization examples. Key takeaways:
 
 | Operation | Relative Cost |
 |---|---|
