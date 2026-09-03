@@ -1174,39 +1174,42 @@ if (result.status === "SUCCESS") {
 
 ## Error Handling
 
-The contract uses numeric error codes. Errors surface to the frontend either as SDK exceptions during simulation or as transaction failures during submission.
+The escrow contract (`contracts/escrow/src/lib.rs`) defines numeric error codes via the `Error` enum. Errors surface to the frontend in three phases:
 
-### Contract Error Codes
+1. **Simulation** — `simulateTransaction` throws SDK exceptions when the contract rejects the call.
+2. **Submission** — `sendTransaction` returns `status === "ERROR"` with an `errorResult`.
+3. **Polling** — `GetTransactionStatus` returns `FAILED` after submission.
 
-Errors from the Soroban contract are defined in `contracts/escrow/src/lib.rs`:
+> **Complete catalogue:** See [`docs/contract-error-messages.md`](./contract-error-messages.md) for all variants, user-facing messages, actions, and lifecycle mapping. The authoritative source of truth is [`frontend/lib/contract-errors.ts`](../frontend/lib/contract-errors.ts), which is guarded by [`frontend/__tests__/contract-errors.test.ts`](../frontend/__tests__/contract-errors.test.ts) against drift from the Rust enum.
 
-| Code | Variant | Description | Common Cause |
-|------|---------|-------------|--------------|
-| 1 | `AlreadyInitialized` | Contract has been initialized twice | Contract was already set up |
-| 2 | `NotInitialized` | Operation on uninitialized contract | Contract not yet initialized |
-| 3 | `Unauthorized` | Caller lacks authorization | Wrong wallet address for operation |
-| 4 | `JobNotFound` | Job ID does not exist | Invalid job ID |
-| 5 | `InvalidJobStatus` | Job is not in the required state | e.g., trying to accept a closed job |
-| 6 | `NotJobClient` | Caller is not the job's client | Wrong address |
-| 7 | `NotJobFreelancer` | Caller is not the assigned freelancer | Wrong address |
-| 8 | `JobAlreadyAccepted` | Job already has a freelancer | Someone already accepted it |
-| 9 | `DeadlinePassed` | Deadline has expired | Job deadline was exceeded |
-| 10 | `InsufficientFunds` | Not enough token balance | Caller lacks sufficient balance |
-| 11 | `InvalidAdmin` | Caller is not the contract admin | Only admin can perform this |
-| 12 | `NoFeesToWithdraw` | No accumulated fees to withdraw | Try again after transactions |
-| 13 | `TokenNotAllowed` | Token is not whitelisted | Token must be added by admin first |
-| 14 | `Blacklisted` | Caller is on the blacklist | Contact admin for removal |
-| 15 | `NotWhitelisted` | Caller is not on the whitelist | Contact admin for whitelist approval |
-| 16 | `TransferFailed` | Token transfer failed | Check token contract state |
-| 17 | `InvalidMilestoneCount` | Wrong number of milestones | Milestone count must match contract expectations |
-| 18 | `MilestoneNotFound` | Milestone ID does not exist | Invalid milestone index |
-| 19 | `MilestoneAlreadyReleased` | Milestone payment already released | Cannot approve twice |
-| 20 | `JobNotDisputed` | Job is not in disputed state | Only disputed jobs can be resolved |
-| 21 | `NoMilestones` | Job has no milestones | Only milestone jobs have milestones |
-| 22 | `InvalidDisputeSplit` | Invalid dispute resolution split | Client share must be 0–10,000 bps |
-| 23 | `NotTrustedForwarder` | Caller is not a trusted forwarder | Must be added via `setTrustedForwarder()` |
-| 24 | `AuthorizationFailed` | Authorization check failed | Freighter signature validation failed |
-| 25 | `DescriptionTooLong` | Description payload exceeds limit | Check `getDescPayloadMax()` |
+### Contract Error Codes (summary)
+
+| Code | Variant | Typical trigger | User-facing message / action |
+|---|---|---|---|
+| 1 | `JobNotFound` | Invalid / archived job id | "This job could not be found." / Return to job list |
+| 2 | `Unauthorized` | Wrong party / wallet | "You do not have permission." / Switch wallet |
+| 3 | `InvalidStatus` | Wrong status for transition | "Not available in current state." / Refresh |
+| 4 | `InsufficientFunds` | Escrow balance too low | "Not enough funds." / Contact support |
+| 5 | `JobAlreadyAccepted` | Freelancer already accepted | "Someone else accepted." / Browse others |
+| 6 | `DeadlinePassed` | Deadline in past | "Deadline has passed." / Extend or cancel |
+| 7 | `DeadlineNotExpired` | Tried before deadline | "Deadline has not passed." / Wait |
+| 8 | `TokenNotAllowed` | Token not on allowlist | "Token not accepted." / Choose supported |
+| 9 | `FeeTooHigh` | Admin fee above max | "Fee invalid." / Contact support |
+| 10 | `AlreadyInitialized` | Initialize twice | "Already set up." / No action |
+| 11 | `InvalidAmount` | Zero or negative amount | "Amount must be > 0." / Enter positive |
+| 12 | `InvalidDescriptionHash` | All-zero hash / zero payload | "Description missing." / Add description |
+| 13 | `UnauthorizedAdmin` | Non-admin calls admin fn | "Only admin can do this." / Switch wallet |
+| 14 | `InvalidDeadline` | Deadline already past | "Must be in future." / Pick later date |
+| 15 | `ActiveJobLimitExceeded` | Client at max active jobs | "Reached max active." / Finish/cancel |
+| 16 | `RevisionLimitReached` | Max revisions used | "Revision limit reached." / Approve or dispute |
+| 17 | `DescriptionPayloadTooLarge` | Description exceeds limit | "Too long." / Shorten |
+| 18–20 | Upgrade / proposal errors | See catalogue | See catalogue |
+| 21–43 | Referral / access / oracle / burn / batch / attestation / visibility / rating | See catalogue | See catalogue |
+| 44 | `DuplicateNonce` | Replay of client nonce | "Already submitted." / Recover via nonce or submit new |
+| 45 | `InvalidAttachmentCount` | Empty / too many attachments | "List empty / too large." / Adjust |
+| 46 | `InvalidPageLimit` | Page size zero or above max | "Page size invalid." / Use 1–max |
+| 47–49 | Token / rating errors | See catalogue | See catalogue |
+| 50 | `RecoveryError` / `InvalidCategory` / `InvalidMetadataHash` | Multi-condition (details in audit / events) | "Something went wrong." / Check audit log or contact support |
 
 ### Error Detection Pattern
 
@@ -1265,14 +1268,19 @@ async function handlePostJob() {
     }
   } catch (error) {
     console.error("Contract call error:", error);
-    // Handle SDK-level errors (simulation failed, signing rejected, etc.)
-    if (error instanceof Error) {
+    // Contract errors have structured messages; network/wallet errors fall through
+    const contractErr = describeContractError(error);
+    if (contractErr) {
+      toast.error(contractErr.message, { description: contractErr.action });
+    } else if (error instanceof Error) {
       if (error.message.includes("Simulation failed")) {
-        // Contract validation failed
-      } else if (error.message.includes("signature")) {
+        // Contract validation failed — surface contract message if available
+      } else if (error.message.includes("signature") || error.message.includes("rejected")) {
         // User rejected Freighter signature
+      } else if (isRetryableNetworkError(error)) {
+        // Network / timeout — retry logic handled by withContractRetry
       } else {
-        // Other error
+        // Other SDK / wallet error
       }
     }
   }
