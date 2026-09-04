@@ -2,6 +2,9 @@
 
 This guide explains how the StellarWork frontend communicates with the Soroban smart contract, covering the contract API layer, Soroban Value (ScVal) encoding, the transaction lifecycle, error handling, and event processing.
 
+> Before adding a new contract call, review the fee checklist in
+> [GAS_OPTIMIZATION.md](./GAS_OPTIMIZATION.md#frontend-interaction-checklist).
+
 ## Overview
 
 All contract interaction flows through two main files:

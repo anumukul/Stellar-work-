@@ -2,6 +2,10 @@
 
 This guide documents the performance benchmarks for the core functions of the Stellar escrow contract: `post_job`, `accept_job`, `submit_work`, and `approve_work`.
 
+> Looking for optimization guidance rather than raw numbers? See
+> [docs/GAS_OPTIMIZATION.md](../docs/GAS_OPTIMIZATION.md) for cost tables, before/after examples,
+> and anti-patterns.
+
 ## Overview
 
 Performance benchmarks measure the actual resource consumption of contract operations using Soroban's test environment cost-tracking API. This allows us to identify bottlenecks, detect regressions, and optimize critical paths.
