@@ -332,13 +332,6 @@ pub enum DataKey {
     JobRating(u64, Address),
     JobEscrowBalance(u64),
     TotalEscrowBalance,
-    /// SC-130: high-value multi-approver configuration and state
-    /// Jobs with amount >= HighValueThreshold require RequiredApprovals approvals
-    HighValueThreshold,
-    RequiredApprovals,
-    Approver(Address),
-    JobApproval(u64, Address),
-    JobApprovalCount(u64),
 }
 
 #[contracttype]
@@ -385,6 +378,18 @@ pub enum ExtKey {
     RecoverySignerThreshold,
     /// Approval status of a signer for a specific recovery proposal.
     RecoveryApproval(u64, Address),
+    // SC-130: high-value multi-approver configuration and state.
+    // Originally lived in `DataKey`; moved here to keep that enum within the
+    // 50-case limit of the Soroban contract spec (ScSpecUdtUnionCaseVec).
+    /// Jobs with amount >= HighValueThreshold require RequiredApprovals approvals.
+    HighValueThreshold,
+    RequiredApprovals,
+    Approver(Address),
+    JobApproval(u64, Address),
+    JobApprovalCount(u64),
+    /// Per-client cap on concurrently active jobs. `0` (the default) disables
+    /// the cap. Stored in instance storage.
+    MaxJobsPerClient,
 }
 
 #[contracterror]
@@ -398,7 +403,6 @@ pub enum Error {
     JobAlreadyAccepted = 5,
     DeadlinePassed = 6,
     DeadlineNotExpired = 7,
-    TokenNotAllowed = 8,
     FeeTooHigh = 9,
     RevisionLimitReached = 16,
     AlreadyInitialized = 10,
@@ -408,7 +412,6 @@ pub enum Error {
     InvalidDeadline = 14,
     ActiveJobLimitExceeded = 15,
     DescriptionPayloadTooLarge = 17,
-    UpgradeNotApproved = 18,
     UpgradeTimelockPending = 19,
     NoPendingUpgrade = 20,
     // Issue #412: referral reward system
@@ -429,15 +432,11 @@ pub enum Error {
     BatchSizeMismatch = 32,
     BatchTooLarge = 33,
     AttestationNotFound = 34,
-    JobNotVisible = 35,
-    FreelancerNotInvited = 36,
     OracleNotFound = 37,
     OracleNotActive = 38,
     OracleNotAssigned = 39,
-    OracleAlreadySubmitted = 40,
     InsufficientBurnPool = 41,
     InvalidBurnPercentage = 42,
-    NoActiveOracles = 43,
     /// SC-122: this client already submitted a job with this nonce.
     DuplicateNonce = 44,
     /// SC-121: attachment list is empty or exceeds [`MAX_ATTACHMENT_LEAVES`].
@@ -447,12 +446,12 @@ pub enum Error {
     UnsupportedToken = 47,
     BelowMinimumRating = 48,
     InvalidRating = 49,
-    /// SC-138: a metadata hash must be non-zero to be stored on a job.
-    InvalidMetadataHash = 50,
     // SC-137: emergency fund recovery. A single error code covers the invalid
     // states of recovery proposals; details are surfaced via events + audit log.
     RecoveryError = 50,
-    InvalidCategory = 50,
+    /// SC-138: a metadata hash must be non-zero to be stored on a job.
+    InvalidMetadataHash = 51,
+    InvalidCategory = 52,
 }
 
 #[contract]
@@ -669,7 +668,7 @@ impl EscrowContract {
         }
         e.storage()
             .persistent()
-            .set(&DataKey::Approver(approver.clone()), &true);
+            .set(&ExtKey::Approver(approver.clone()), &true);
         e.events().publish((Symbol::new(&e, "approver_added"),), (approver.clone(),));
         Self::record_event(&e, "approver_added", 0, &admin);
     }
@@ -680,7 +679,7 @@ impl EscrowContract {
         if admin != stored {
             panic_with_error!(&e, Error::UnauthorizedAdmin);
         }
-        e.storage().persistent().remove(&DataKey::Approver(approver.clone()));
+        e.storage().persistent().remove(&ExtKey::Approver(approver.clone()));
         e.events().publish((Symbol::new(&e, "approver_removed"),), (approver.clone(),));
         Self::record_event(&e, "approver_removed", 0, &admin);
     }
@@ -688,7 +687,7 @@ impl EscrowContract {
     pub fn is_approver(e: Env, addr: Address) -> bool {
         e.storage()
             .persistent()
-            .get(&DataKey::Approver(addr))
+            .get(&ExtKey::Approver(addr))
             .unwrap_or(false)
     }
 
@@ -698,7 +697,7 @@ impl EscrowContract {
         if admin != stored {
             panic_with_error!(&e, Error::UnauthorizedAdmin);
         }
-        e.storage().instance().set(&DataKey::HighValueThreshold, &amount);
+        e.storage().instance().set(&ExtKey::HighValueThreshold, &amount);
         e.events().publish((Symbol::new(&e, "high_value_threshold_set"),), (amount,));
         Self::record_event(&e, "set_high_value_threshold", 0, &admin);
     }
@@ -707,7 +706,7 @@ impl EscrowContract {
         // Default to very large threshold so feature is opt-in.
         e.storage()
             .instance()
-            .get(&DataKey::HighValueThreshold)
+            .get(&ExtKey::HighValueThreshold)
             .unwrap_or(i128::MAX)
     }
 
@@ -720,7 +719,7 @@ impl EscrowContract {
         if req == 0 {
             panic_with_error!(&e, Error::InvalidAmount);
         }
-        e.storage().instance().set(&DataKey::RequiredApprovals, &req);
+        e.storage().instance().set(&ExtKey::RequiredApprovals, &req);
         e.events()
             .publish((Symbol::new(&e, "required_approvals_set"),), (req,));
         Self::record_event(&e, "set_required_approvals", 0, &admin);
@@ -729,21 +728,21 @@ impl EscrowContract {
     pub fn get_required_approvals(e: Env) -> u32 {
         e.storage()
             .instance()
-            .get(&DataKey::RequiredApprovals)
+            .get(&ExtKey::RequiredApprovals)
             .unwrap_or(1u32)
     }
 
     fn has_approver_approved(e: &Env, job_id: u64, approver: &Address) -> bool {
         e.storage()
             .persistent()
-            .get(&DataKey::JobApproval(job_id, approver.clone()))
+            .get(&ExtKey::JobApproval(job_id, approver.clone()))
             .unwrap_or(false)
     }
 
     fn get_approval_count(e: &Env, job_id: u64) -> u32 {
         e.storage()
             .persistent()
-            .get(&DataKey::JobApprovalCount(job_id))
+            .get(&ExtKey::JobApprovalCount(job_id))
             .unwrap_or(0u32)
     }
 
@@ -753,12 +752,12 @@ impl EscrowContract {
         }
         e.storage()
             .persistent()
-            .set(&DataKey::JobApproval(job_id, approver.clone()), &true);
+            .set(&ExtKey::JobApproval(job_id, approver.clone()), &true);
         let mut count = Self::get_approval_count(e, job_id);
         count += 1;
         e.storage()
             .persistent()
-            .set(&DataKey::JobApprovalCount(job_id), &count);
+            .set(&ExtKey::JobApprovalCount(job_id), &count);
         count
     }
 
@@ -1024,7 +1023,10 @@ impl EscrowContract {
             panic_with_error!(&e, Error::UnsupportedToken);
         }
         enforce_user_active_job_limit(&e, &client);
-        if categories.len() == 0 || categories.len() > MAX_CATEGORIES {
+        // An empty category list is allowed: the legacy `post_job` wrapper
+        // delegates here with no categories, and "no categories" is a valid
+        // job. Only lists longer than MAX_CATEGORIES are rejected.
+        if categories.len() > MAX_CATEGORIES {
             panic_with_error!(&e, Error::InvalidCategory);
         }
         enforce_client_active_job_limit(&e, &client);
@@ -1091,6 +1093,7 @@ impl EscrowContract {
         deadline: u64,
         token: Address,
     ) -> u64 {
+        let categories = Vec::new(&e);
         Self::post_job_with_categories(
             e,
             client,
@@ -1099,7 +1102,7 @@ impl EscrowContract {
             description_payload_len,
             deadline,
             token,
-            Vec::new(&e),
+            categories,
         )
     }
 
@@ -2653,6 +2656,37 @@ impl EscrowContract {
         count_user_active_jobs(&e, &user)
     }
 
+    /// Admin-only: cap the number of concurrently active jobs a single client
+    /// may have open. `0` (the default) disables the cap.
+    pub fn set_max_active_jobs_per_client(e: Env, admin: Address, limit: u32) {
+        admin.require_auth();
+        let stored_admin = load_admin(&e);
+        if admin != stored_admin {
+            panic_with_error!(&e, Error::Unauthorized);
+        }
+        e.storage()
+            .instance()
+            .set(&ExtKey::MaxJobsPerClient, &limit);
+        bump_instance_ttl(&e);
+        e.events().publish(
+            (Symbol::new(&e, "max_active_jobs_per_client_set"),),
+            (admin, limit),
+        );
+    }
+
+    /// The current per-client active job cap. `0` means unlimited.
+    pub fn get_max_active_jobs_per_client(e: Env) -> u32 {
+        e.storage()
+            .instance()
+            .get::<ExtKey, u32>(&ExtKey::MaxJobsPerClient)
+            .unwrap_or(0)
+    }
+
+    /// Number of active (non-terminal) jobs owned by `client`.
+    pub fn get_client_active_jobs_count(e: Env, client: Address) -> u32 {
+        count_client_active_jobs(&e, &client)
+    }
+
     pub fn withdraw_fees(e: Env, token: Address) {
         let admin = load_admin(&e);
         admin.require_auth();
@@ -3031,6 +3065,7 @@ impl EscrowContract {
         }
 
         // Delegate to the standard post_job logic.
+        let categories = Vec::new(&e);
         Self::post_job_with_categories(
             e,
             client,
@@ -3039,7 +3074,7 @@ impl EscrowContract {
             description_payload_len,
             deadline,
             token,
-            Vec::new(&e),
+            categories,
         )
     }
 
@@ -4425,6 +4460,43 @@ fn enforce_user_active_job_limit(e: &Env, user: &Address) {
         return;
     }
     let active = count_user_active_jobs(e, user);
+    if active >= limit {
+        panic_with_error!(e, Error::ActiveJobLimitExceeded);
+    }
+}
+
+/// Number of active (non-terminal) jobs where `client` is the job's client.
+fn count_client_active_jobs(e: &Env, client: &Address) -> u32 {
+    let total = get_jobs_count(e);
+    let mut count: u32 = 0;
+    let mut i: u64 = 1;
+    while i <= total {
+        if let Some(job) = e
+            .storage()
+            .persistent()
+            .get::<DataKey, Job>(&DataKey::Job(i))
+        {
+            if &job.client == client && is_active_job_status(&job.status) {
+                count = count.saturating_add(1);
+            }
+        }
+        i = i.saturating_add(1);
+    }
+    count
+}
+
+/// Reject a new job post when the client already holds `limit` active jobs.
+/// `0` disables the cap entirely.
+fn enforce_client_active_job_limit(e: &Env, client: &Address) {
+    let limit: u32 = e
+        .storage()
+        .instance()
+        .get(&ExtKey::MaxJobsPerClient)
+        .unwrap_or(0);
+    if limit == 0 {
+        return;
+    }
+    let active = count_client_active_jobs(e, client);
     if active >= limit {
         panic_with_error!(e, Error::ActiveJobLimitExceeded);
     }
@@ -8695,7 +8767,7 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #50)")]
+    #[should_panic(expected = "Error(Contract, #51)")]
     fn update_metadata_rejects_zero_hash() {
         let (env, client, _, user, _, native_token) = setup();
         let job_id =
@@ -8709,7 +8781,7 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #50)")]
+    #[should_panic(expected = "Error(Contract, #51)")]
     fn update_metadata_rejects_invalid_cid() {
         let (env, client, _, user, _, native_token) = setup();
         let job_id =
@@ -8734,7 +8806,7 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #50)")]
+    #[should_panic(expected = "Error(Contract, #51)")]
     fn store_metadata_cid_rejects_invalid_cid() {
         let (env, client, _, user, _, _) = setup();
         client.store_metadata_cid(
@@ -10234,6 +10306,403 @@ mod test {
         let (env, client, admin, _user, _freelancer, _native_token) = setup();
 
         client.cancel_upgrade(&admin);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Upgrade paths & data-migration tests
+    //
+    // "Contract upgrades are untested, risking data loss on deployment."
+    //
+    // A Soroban upgrade replaces the contract's *code* while leaving the
+    // contract's *storage* untouched. These tests simulate that in two ways:
+    //
+    //  1. Re-registering a second implementation (`EscrowContractV2`) at the
+    //     SAME address — the test host's way of swapping compiled-in code in
+    //     place while preserving storage. This exercises the v1 → v2 migration
+    //     scenario (schema-version stamp, idempotent `migrate`) and rollback.
+    //  2. Driving the real `propose_upgrade` → `execute_upgrade` path, which
+    //     ends in `update_current_contract_wasm` with an uploaded WASM hash,
+    //     and asserting data survives.
+    //
+    // `EscrowContractV2` shares v1's exact storage layout (the same `DataKey`/
+    // `ExtKey` keys) and adds new keys of its own — the standard upgrade shape.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// Storage keys introduced by the v2 contract. v1 never writes these.
+    #[contracttype]
+    #[derive(Clone)]
+    enum V2MigrationKey {
+        SchemaVersion,
+        MigratedAt,
+    }
+
+    /// A minimal "v2" of the escrow contract used only by the upgrade tests.
+    ///
+    /// It reads and writes the same storage as v1 (so it can operate on v1's
+    /// data), delegates lifecycle operations to the v1 implementation, and adds
+    /// a schema-version migration. This mirrors how a real v2 would share the
+    /// old storage schema while adding new state.
+    #[contract]
+    pub struct EscrowContractV2;
+
+    #[contractimpl]
+    impl EscrowContractV2 {
+        pub fn get_job(e: Env, job_id: u64) -> Job {
+            e.storage().persistent().get(&DataKey::Job(job_id)).unwrap()
+        }
+
+        pub fn get_job_count(e: Env) -> u64 {
+            e.storage().instance().get(&DataKey::JobsCount).unwrap_or(0)
+        }
+
+        pub fn get_admin(e: Env) -> Address {
+            e.storage().instance().get(&DataKey::Admin).unwrap()
+        }
+
+        pub fn get_fee_bps(e: Env) -> i128 {
+            e.storage().instance().get(&DataKey::FeeBps).unwrap_or(0)
+        }
+
+        pub fn get_fees(e: Env, token: Address) -> i128 {
+            e.storage()
+                .persistent()
+                .get(&DataKey::TokenFees(token))
+                .unwrap_or(0)
+        }
+
+        pub fn get_job_escrow_balance(e: Env, job_id: u64) -> i128 {
+            e.storage()
+                .persistent()
+                .get(&DataKey::JobEscrowBalance(job_id))
+                .unwrap_or(0)
+        }
+
+        // Lifecycle delegated to the v1 logic over the same storage.
+        pub fn accept_job(e: Env, freelancer: Address, job_id: u64) {
+            EscrowContract::accept_job(e, freelancer, job_id);
+        }
+
+        pub fn submit_work(e: Env, freelancer: Address, job_id: u64) {
+            EscrowContract::submit_work(e, freelancer, job_id);
+        }
+
+        pub fn approve_work(e: Env, caller: Address, job_id: u64) {
+            EscrowContract::approve_work(e, caller, job_id);
+        }
+
+        /// The stored schema version. v1 never stamps it, so it reads 1 before
+        /// the migration runs and 2 afterwards.
+        pub fn get_schema_version(e: Env) -> u32 {
+            e.storage()
+                .instance()
+                .get(&V2MigrationKey::SchemaVersion)
+                .unwrap_or(1u32)
+        }
+
+        /// Idempotent v1 → v2 migration: stamps the schema version and records
+        /// the migration time. Running it again is a no-op, so a retried
+        /// migration transaction cannot corrupt state.
+        pub fn migrate(e: Env) -> u32 {
+            let current: u32 = e
+                .storage()
+                .instance()
+                .get(&V2MigrationKey::SchemaVersion)
+                .unwrap_or(1u32);
+            if current < 2 {
+                e.storage()
+                    .instance()
+                    .set(&V2MigrationKey::SchemaVersion, &2u32);
+                e.storage()
+                    .instance()
+                    .set(&V2MigrationKey::MigratedAt, &e.ledger().timestamp());
+            }
+            2u32
+        }
+    }
+
+    #[test]
+    fn upgrade_v1_to_v2_preserves_jobs_config_and_funds() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+
+        // Seed v1 with representative state before upgrading.
+        client.update_fee_bps(&admin, &300i128);
+        let token_client = token::Client::new(&env, &native_token);
+
+        let open_job = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        let escrow_job = client.post_job(
+            &user,
+            &2_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &escrow_job);
+
+        // Funds escrowed in the contract must survive the upgrade untouched.
+        let escrow_before = token_client.balance(&client.address);
+
+        let contract_id = client.address.clone();
+
+        // Upgrade: swap the code at the same address for v2.
+        env.register_contract(Some(&contract_id), EscrowContractV2);
+        let v2 = EscrowContractV2Client::new(&env, &contract_id);
+
+        // The schema-version stamp is absent until the migration runs.
+        assert_eq!(v2.get_schema_version(), 1);
+
+        // Data preservation: admin, config, job count, job records, escrow.
+        assert_eq!(v2.get_admin(), admin);
+        assert_eq!(v2.get_fee_bps(), 300);
+        assert_eq!(v2.get_job_count(), 2);
+        assert_eq!(v2.get_job(&open_job).status, JobStatus::Open);
+        assert_eq!(v2.get_job(&open_job).amount, 1_000_000);
+        assert_eq!(v2.get_job(&open_job).client, user);
+        assert_eq!(v2.get_job(&escrow_job).status, JobStatus::InProgress);
+        assert_eq!(v2.get_job_escrow_balance(&escrow_job), 2_000_000);
+        assert_eq!(token_client.balance(&client.address), escrow_before);
+
+        // The migration is idempotent: a retried transaction is a no-op.
+        assert_eq!(v2.migrate(), 2);
+        assert_eq!(v2.migrate(), 2);
+        assert_eq!(v2.get_schema_version(), 2);
+
+        // Migration must not disturb any data.
+        assert_eq!(v2.get_job_count(), 2);
+        assert_eq!(v2.get_job_escrow_balance(&escrow_job), 2_000_000);
+        assert_eq!(token_client.balance(&client.address), escrow_before);
+    }
+
+    #[test]
+    fn an_inflight_job_completes_after_upgrade() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+
+        let contract_id = client.address.clone();
+        env.register_contract(Some(&contract_id), EscrowContractV2);
+        let v2 = EscrowContractV2Client::new(&env, &contract_id);
+        v2.migrate();
+
+        // The upgraded code can advance the in-flight job to completion.
+        let token_client = token::Client::new(&env, &native_token);
+        let freelancer_before = token_client.balance(&freelancer);
+        v2.submit_work(&freelancer, &job_id);
+        v2.approve_work(&user, &job_id);
+
+        assert_eq!(v2.get_job(&job_id).status, JobStatus::Completed);
+        // 2.5% fee on 1_000_000 → 975_000 payout.
+        assert_eq!(
+            token_client.balance(&freelancer) - freelancer_before,
+            975_000
+        );
+        assert_eq!(v2.get_job_escrow_balance(&job_id), 0);
+    }
+
+    #[test]
+    fn rollback_to_v1_preserves_data_and_restores_behavior() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+
+        // Rich v1 state spanning every job lifecycle.
+        client.update_fee_bps(&admin, &300i128);
+        let open_job = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        let done_job = client.post_job(
+            &user,
+            &2_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &done_job);
+        client.submit_work(&freelancer, &done_job);
+        client.approve_work(&user, &done_job);
+        let disputed_job = client.post_job(
+            &user,
+            &3_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &disputed_job);
+        client.raise_dispute(&user, &disputed_job);
+
+        let oracle_addr = Address::generate(&env);
+        client.register_oracle(
+            &admin,
+            &oracle_addr,
+            &String::from_str(&env, "O"),
+            &String::from_str(&env, "https://oracle.example"),
+        );
+
+        let fees_before = client.get_fees(&native_token);
+        let contract_id = client.address.clone();
+
+        // Upgrade to v2 and migrate.
+        env.register_contract(Some(&contract_id), EscrowContractV2);
+        let v2 = EscrowContractV2Client::new(&env, &contract_id);
+        v2.migrate();
+        assert_eq!(v2.get_schema_version(), 2);
+
+        // Rollback: re-register v1 at the same address.
+        env.register_contract(Some(&contract_id), EscrowContract);
+        let v1 = EscrowContractClient::new(&env, &contract_id);
+
+        // Every byte of v1 state survives the v1 → v2 → v1 round-trip.
+        assert_eq!(v1.get_contract_version(), 1);
+        assert_eq!(v1.get_admin(), admin);
+        assert_eq!(v1.get_fee_bps(), 300);
+        assert_eq!(v1.get_job_count(), 3);
+        assert_eq!(v1.get_job(&open_job).status, JobStatus::Open);
+        assert_eq!(v1.get_job(&done_job).status, JobStatus::Completed);
+        assert_eq!(v1.get_job(&disputed_job).status, JobStatus::Disputed);
+        assert_eq!(v1.get_fees(&native_token), fees_before);
+        assert!(v1.get_oracle(&oracle_addr).is_some());
+
+        // The rolled-back contract is fully operational again.
+        let new_job = v1.post_job(
+            &user,
+            &500_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        assert_eq!(v1.get_job(&new_job).status, JobStatus::Open);
+    }
+
+    #[test]
+    fn execute_upgrade_after_timelock_swaps_code_and_preserves_data() {
+        let (env, client, admin, user, _, native_token) = setup();
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+
+        // Upload a WASM blob and propose upgrading to it.
+        let wasm = Bytes::new(&env);
+        let wasm_hash = env.deployer().upload_contract_wasm(wasm);
+        client.propose_upgrade(&admin, &wasm_hash);
+        assert!(has_event(&env, "upgrade_proposed"));
+
+        // Before the timelock elapses the upgrade must be refused.
+        assert!(client.try_execute_upgrade(&admin).is_err());
+
+        // Advance past the timelock and execute for real. `execute_upgrade`
+        // calls `update_current_contract_wasm`, which swaps the executable
+        // while preserving storage.
+        env.ledger()
+            .with_mut(|li| li.timestamp = li.timestamp + UPGRADE_TIMELOCK_SECS + 1);
+        client.execute_upgrade(&admin);
+        assert!(has_event(&env, "contract_upgraded"));
+
+        // Pending upgrade state is cleared: a second execute has nothing to run.
+        assert!(client.try_execute_upgrade(&admin).is_err());
+
+        // The contract remains callable and its data is intact.
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Open);
+        assert_eq!(client.get_job_count(), 1);
+    }
+
+    #[test]
+    #[should_panic]
+    fn execute_upgrade_with_unuploaded_wasm_hash_fails() {
+        let (env, client, admin, _user, _freelancer, _native_token) = setup();
+
+        // A hash that was never uploaded to the ledger: the host must refuse
+        // to point the contract at non-existent code.
+        let bogus = BytesN::from_array(&env, &[0xEEu8; 32]);
+        client.propose_upgrade(&admin, &bogus);
+        env.ledger()
+            .with_mut(|li| li.timestamp = li.timestamp + UPGRADE_TIMELOCK_SECS + 1);
+        client.execute_upgrade(&admin);
+    }
+
+    #[test]
+    #[ignore = "migration performance benchmark; run with: cargo test -- upgrade_benchmark -- --ignored --nocapture"]
+    fn upgrade_benchmark_migration_and_governance_costs() {
+        let (env, client, admin, user, _, native_token) = setup();
+
+        // Seed a moderately sized dataset.
+        for i in 0..10u64 {
+            let desc = BytesN::from_array(&env, &[(i + 1) as u8; 32]);
+            client.post_job(
+                &user,
+                &(1_000_000i128 + i as i128),
+                &desc,
+                &32u32,
+                &0u64,
+                &native_token,
+            );
+        }
+        let contract_id = client.address.clone();
+
+        // Upgrade governance costs (measured on the v1 implementation).
+        env.budget().reset_default();
+        let wasm = Bytes::new(&env);
+        let wasm_hash = env.deployer().upload_contract_wasm(wasm);
+        env.budget().reset_tracker();
+        client.propose_upgrade(&admin, &wasm_hash);
+        let propose_cost = (
+            env.budget().cpu_instruction_cost(),
+            env.budget().memory_bytes_cost(),
+        );
+        env.budget().reset_tracker();
+        client.cancel_upgrade(&admin);
+        let cancel_cost = (
+            env.budget().cpu_instruction_cost(),
+            env.budget().memory_bytes_cost(),
+        );
+
+        // Code swap (upgrade) cost.
+        env.budget().reset_tracker();
+        env.register_contract(Some(&contract_id), EscrowContractV2);
+        let swap_cost = (
+            env.budget().cpu_instruction_cost(),
+            env.budget().memory_bytes_cost(),
+        );
+
+        // Migration cost over the seeded data.
+        let v2 = EscrowContractV2Client::new(&env, &contract_id);
+        env.budget().reset_tracker();
+        v2.migrate();
+        let migrate_cost = (
+            env.budget().cpu_instruction_cost(),
+            env.budget().memory_bytes_cost(),
+        );
+
+        use std::println;
+        println!("\n=== Migration & upgrade benchmark (cpu_instructions, memory_bytes) ===");
+        println!("upgrade (code swap)    : {:?}", swap_cost);
+        println!("migrate (v1 -> v2)     : {:?}", migrate_cost);
+        println!("propose_upgrade        : {:?}", propose_cost);
+        println!("cancel_upgrade         : {:?}", cancel_cost);
     }
 
     // ── Property-based Fuzz Tests ──────────────────────────────────────────
