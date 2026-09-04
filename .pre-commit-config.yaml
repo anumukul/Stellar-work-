@@ -32,3 +32,11 @@ repos:
         language: system
         files: ^frontend/.*\.(js|jsx|ts|tsx)$
         pass_filenames: false
+
+      - id: tokenomics-docs
+        name: tokenomics docs consistency
+        description: Verify docs/TOKENOMICS.md constants match the contract and frontend mirrors
+        entry: python3 scripts/check-tokenomics-docs.py
+        language: system
+        files: ^(docs/TOKENOMICS\.md|contracts/escrow/src/lib\.rs|frontend/lib/transactions\.ts|frontend/app/fee-calculator/page\.tsx)$
+        pass_filenames: false

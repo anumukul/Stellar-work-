@@ -49,7 +49,7 @@ Index of project documentation. Start with the [root README](../README.md) for s
 | [PRODUCTION_CHECKLIST.md](./PRODUCTION_CHECKLIST.md) | Pre-launch checklist covering code, infrastructure, contract deploy, E2E verification, and sign-off |
 | [testing-matrix.md](./testing-matrix.md) | Unit, integration, and E2E test coverage and commands |
 | [TESTING_MATRIX.md](./TESTING_MATRIX.md) | Cross-browser testing matrix: supported browsers, devices, and manual checklists |
-| [TOKENOMICS.md](./TOKENOMICS.md) | Platform fee structure, revenue flow, and economic model |
+| [TOKENOMICS.md](./TOKENOMICS.md) | Full economic model: fee calculation & distribution, fee-flow diagrams, per-party incentives, fee sensitivity analysis, and competitive comparison |
 | [release-checklist.md](./release-checklist.md) | Pre-release verification steps |
 | [release-notes-guide.md](./release-notes-guide.md) | How to write release notes entries |
 | [troubleshooting.md](./troubleshooting.md) | Common errors and fixes |
