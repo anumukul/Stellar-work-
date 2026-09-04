@@ -194,6 +194,25 @@ function JobDetailPageContent() {
   const isIdValid =
     !isNaN(numericId) && numericId > 0 && Number.isInteger(numericId);
 
+  const prevStatusRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (job?.status) {
+      if (prevStatusRef.current && prevStatusRef.current !== job.status) {
+        const messages: Record<string, string> = {
+          Open: "Job is now open and accepting freelancers.",
+          InProgress: "Job is now in progress.",
+          SubmittedForReview: "Work has been submitted for review.",
+          Completed: "Job has been completed and payment released.",
+          Cancelled: "Job has been cancelled.",
+        };
+        const announcement = messages[job.status] || `Job status changed to ${job.status}`;
+        setStatusAnnouncement(announcement);
+      }
+      prevStatusRef.current = job.status;
+    }
+  }, [job?.status]);
+
   const { status: streamStatus } = useJobSubscription(isIdValid ? id : undefined, () => {
     void load();
   });
