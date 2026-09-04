@@ -8,6 +8,7 @@ Index of project documentation. Start with the [root README](../README.md) for s
 |----------|-------------|
 | [contributor-onboarding-checklist.md](./contributor-onboarding-checklist.md) | First-time contributor setup and first PR checklist |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | Branching, PR requirements, labels, and pre-commit hooks |
+| [STYLE_GUIDE.md](./STYLE_GUIDE.md) | Comprehensive code, comment, and documentation style conventions |
 | [TRANSLATING.md](./TRANSLATING.md) | How to add or maintain locale translations |
 | [glossary.md](./glossary.md) | Contract and frontend terminology |
 | [VIDEO_TUTORIALS.md](./VIDEO_TUTORIALS.md) | Screencast recording guide, script template, official tutorial series outline, and captioning standards |
