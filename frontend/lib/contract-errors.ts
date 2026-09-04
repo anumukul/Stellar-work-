@@ -351,6 +351,27 @@ export const CONTRACT_ERRORS: Record<number, ContractErrorSpec> = {
     "No dispute resolvers are available right now.",
     "Try again later, or contact support.",
   ),
+  44: spec(
+    44,
+    "DuplicateNonce",
+    "A job submission replayed the same client nonce — wallet retry or double-click.",
+    "This request has already been submitted. You may recover the original job.",
+    "Use get_job_id_for_nonce to retrieve the existing job, or submit with a new nonce.",
+  ),
+  45: spec(
+    45,
+    "InvalidAttachmentCount",
+    "The attachment list is empty or exceeds MAX_ATTACHMENT_LEAVES.",
+    "The attachment list is empty or has too many items.",
+    "Add at least one attachment and ensure the list does not exceed the limit.",
+  ),
+  46: spec(
+    46,
+    "InvalidPageLimit",
+    "A paginated event query requested a page size of zero or above MAX_EVENT_PAGE_LIMIT.",
+    "The page size is invalid.",
+    "Request a page limit between 1 and the maximum allowed.",
+  ),
   47: spec(
     47,
     "UnsupportedToken",
