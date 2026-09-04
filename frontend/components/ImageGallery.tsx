@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef } from "react";
+import Image from "next/image";
 import Lightbox from "./Lightbox";
 
 export interface GalleryImage {
@@ -76,11 +77,13 @@ export default function ImageGallery({ images, columns = 3 }: ImageGalleryProps)
               aria-label={`${image.alt}${image.caption ? ` — ${image.caption}` : ""}`}
             >
             {loadedThumbnails.has(index) ? (
-              <img
+              <Image
                 src={image.thumbnail || image.src}
                 alt={image.alt}
                 className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
                 loading="lazy"
+                fill
+                sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
               />
             ) : (
               <div className="flex h-full w-full items-center justify-center">

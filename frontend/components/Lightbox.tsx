@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Image from "next/image";
 import Spinner from "@/components/Spinner";
 import { useModalFocusTrap } from "@/lib/modal";
 import type { GalleryImage } from "./ImageGallery";
@@ -181,14 +182,16 @@ export default function Lightbox({
               aria-label={current.alt}
             />
           ) : (
-            <img
-              ref={imageRef}
+            <Image
+              ref={imageRef as any}
               src={current.src}
               alt={current.alt}
               className={`max-h-[80vh] max-w-full rounded-lg object-contain transition-opacity duration-300 ${imageLoaded ? "opacity-100" : "opacity-0"}`}
               onLoad={handleImageLoad}
               onError={handleImageError}
               draggable={false}
+              width={1200}
+              height={800}
             />
           )}
         </div>
