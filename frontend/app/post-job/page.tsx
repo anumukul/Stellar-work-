@@ -1,6 +1,16 @@
 "use client";
 
-import { getDescPayloadMax, postJob, storeDescriptionCid } from "@/lib/contract";
+import {
+  buildPostJobArgs,
+  getActiveContractId,
+  getDescPayloadMax,
+  postJob,
+  storeDescriptionCid,
+} from "@/lib/contract";
+import { estimateTransactionFee, type FeeEstimate } from "@/lib/fee-estimator";
+import TransactionPreview, {
+  feeEstimateToSimulation,
+} from "@/components/TransactionPreview";
 import { uploadToIpfs } from "@/lib/ipfs-service";
 import ErrorBanner from "@/components/ErrorBanner";
 import ContractRetryBanner from "@/components/ContractRetryBanner";
@@ -36,6 +46,121 @@ interface DraftData {
   deadline: string;
   tokenAddress: string;
   savedAt: number;
+}
+
+interface JobFormErrors {
+  amount?: string;
+  description?: string;
+  deadline?: string;
+  tokenAddress?: string;
+  title?: string;
+}
+
+interface JobFormInput {
+  amountStroops: string;
+  hashHex: string;
+  descriptionPayloadLen: number;
+  deadlineUnix: string;
+  htmlContent: string;
+}
+
+/**
+ * Validate the post-job form and, when valid, derive the exact inputs used for
+ * both the fee estimate and the on-chain submission. Kept in one place so the
+ * simulated transaction always matches the transaction that gets submitted.
+ */
+async function validateAndBuildJobInput(params: {
+  amount: string;
+  description: string;
+  deadline: string;
+  tokenAddress: string;
+  title: string;
+  language: string;
+  maxDescPayloadBytes: number;
+}): Promise<{ errors: JobFormErrors; input: JobFormInput | null }> {
+  const {
+    amount,
+    description,
+    deadline,
+    tokenAddress,
+    title,
+    language,
+    maxDescPayloadBytes,
+  } = params;
+  const errors: JobFormErrors = {};
+
+  const amountResult = validateAmount(amount);
+  const amountStroops = amountResult.stroops;
+  if (amountResult.error) {
+    errors.amount = amountResult.error;
+  } else if (amountStroops) {
+    const minError = validateAmountMin(
+      amountStroops,
+      MIN_JOB_AMOUNT_STROOPS,
+      `${MIN_JOB_AMOUNT_XLM} XLM`,
+    );
+    if (minError) errors.amount = minError;
+  }
+
+  const plainDescription = htmlToPlainText(description);
+  const descriptionBytes = new TextEncoder().encode(plainDescription).length;
+  if (!plainDescription) {
+    errors.description = "Job description cannot be empty.";
+  } else if (descriptionBytes > maxDescPayloadBytes) {
+    errors.description = `Description must be at most ${maxDescPayloadBytes} bytes (currently ${descriptionBytes}).`;
+  }
+
+  if (deadline) {
+    const deadlineError = validateDeadline(deadline);
+    if (deadlineError) errors.deadline = deadlineError;
+  }
+
+  if (!tokenAddress.trim()) {
+    errors.tokenAddress = "Token address is required.";
+  } else {
+    const tokenError = validateTokenAddress(tokenAddress);
+    if (tokenError) {
+      errors.tokenAddress = tokenError;
+    } else if (
+      !StrKey.isValidContract(tokenAddress.trim()) &&
+      !StrKey.isValidEd25519PublicKey(tokenAddress.trim())
+    ) {
+      errors.tokenAddress = "Invalid Stellar address or contract ID.";
+    } else if (!isValidStellarAddress(tokenAddress)) {
+      errors.tokenAddress =
+        "Enter a valid Stellar address (G... or C..., 56 characters).";
+    }
+  }
+
+  if (!title.trim()) {
+    errors.title = "Job title is required.";
+  } else if (new TextEncoder().encode(title).length > 64) {
+    errors.title = `Title must be at most 64 bytes (currently ${new TextEncoder().encode(title).length}).`;
+  }
+
+  if (Object.keys(errors).length > 0) {
+    return { errors, input: null };
+  }
+
+  const rawDescription = description.trim();
+  const htmlContent = embedLanguage(rawDescription, language);
+  const plainContent = htmlToPlainText(rawDescription);
+  const hashHex = await sha256Hex(plainContent);
+  const descriptionPayloadLen = new TextEncoder().encode(plainContent).length;
+  const deadlineUnix = deadline
+    ? Math.floor(new Date(deadline).getTime() / 1000).toString()
+    : "0";
+
+  return {
+    errors,
+    input: {
+      amountStroops: amountStroops!,
+      hashHex,
+      descriptionPayloadLen,
+      deadlineUnix,
+      htmlContent,
+    },
+  };
 }
 
 function getErrorMessage(error: unknown): string {
@@ -165,6 +290,9 @@ export default function PostJobPage() {
   const [lastAnnouncedSuccess, setLastAnnouncedSuccess] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [feeEstimate, setFeeEstimate] = useState<FeeEstimate | null>(null);
+  const [estimating, setEstimating] = useState(false);
+  const [estimateError, setEstimateError] = useState<string | null>(null);
   const [maxDescPayloadBytes, setMaxDescPayloadBytes] = useState(4096);
   const [fieldErrors, setFieldErrors] = useState<{
     amount?: string;
@@ -196,11 +324,6 @@ export default function PostJobPage() {
       if (redirectTimerRef.current) clearTimeout(redirectTimerRef.current);
     };
   }, []);
-
-  const parseAmountToStroops = (value: string): string | null => {
-    const result = validateAmount(value);
-    return result.stroops;
-  };
 
   // Restore draft on mount and on wallet change
   useEffect(() => {
@@ -261,6 +384,9 @@ export default function PostJobPage() {
       setSuccess(null);
       setWarning(null);
       setTxHash(null);
+      setFeeEstimate(null);
+      setEstimateError(null);
+      setEstimating(false);
     }
   }, [wallet]);
 
@@ -349,6 +475,212 @@ export default function PostJobPage() {
     setFieldErrors({});
   }
 
+  /**
+   * Phase 1 — validate the form, then simulate the transaction on the RPC to
+   * estimate its fee before anything is submitted. The estimate (XLM + USD,
+   * breakdown, recent-fee comparison, high-fee warning) is shown in the
+   * TransactionPreview panel; the user then confirms to actually post.
+   */
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (submitting || estimating) return;
+    setError(null);
+    setSuccess(null);
+    setWarning(null);
+    setTxHash(null);
+    setFieldErrors({});
+    setEstimateError(null);
+    setFeeEstimate(null);
+
+    if (!wallet) {
+      try {
+        await connectWallet();
+      } catch {
+        setError("Failed to connect wallet. Is Freighter installed?");
+      }
+      return;
+    }
+
+    const { errors, input } = await validateAndBuildJobInput({
+      amount,
+      description,
+      deadline,
+      tokenAddress,
+      title,
+      language,
+      maxDescPayloadBytes,
+    });
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors);
+      return;
+    }
+    if (!input) return;
+
+    const limitStatus = getRateLimitStatus();
+    if (limitStatus.isLimited) {
+      setError(
+        `Rate limit reached. You can post at most 5 jobs per hour. Try again in ${formatCooldown(limitStatus.cooldownEndsAt!)}.`,
+      );
+      setRateLimit(limitStatus);
+      return;
+    }
+
+    // Simulate the exact transaction the user will submit (same args).
+    const args = buildPostJobArgs(
+      wallet,
+      input.amountStroops,
+      input.hashHex,
+      input.descriptionPayloadLen,
+      input.deadlineUnix,
+      tokenAddress.trim(),
+      title.trim(),
+      category,
+    );
+
+    setEstimating(true);
+    try {
+      const estimate = await estimateTransactionFee(
+        getActiveContractId(),
+        "post_job",
+        args,
+        { walletAddress: wallet },
+      );
+      setFeeEstimate(estimate);
+    } catch (e) {
+      // Estimation is best-effort: surface the reason but never block posting.
+      setEstimateError(
+        formatContractError(
+          e,
+          "Could not estimate the transaction fee. You can still post the job.",
+        ),
+      );
+    } finally {
+      setEstimating(false);
+    }
+  }
+
+  /**
+   * Phase 2 — the user confirmed the fee estimate: submit the job for real.
+   * Re-validates from the current form state so the posted job always matches
+   * what the user sees (the estimate itself is advisory and re-runnable).
+   */
+  async function handleConfirmPost() {
+    if (submitting || !wallet) return;
+    setError(null);
+    setSuccess(null);
+    setWarning(null);
+    setTxHash(null);
+    setFieldErrors({});
+
+    const limitStatus = getRateLimitStatus();
+    if (limitStatus.isLimited) {
+      setError(
+        `Rate limit reached. You can post at most 5 jobs per hour. Try again in ${formatCooldown(limitStatus.cooldownEndsAt!)}.`,
+      );
+      setRateLimit(limitStatus);
+      return;
+    }
+
+    const { errors, input } = await validateAndBuildJobInput({
+      amount,
+      description,
+      deadline,
+      tokenAddress,
+      title,
+      language,
+      maxDescPayloadBytes,
+    });
+    if (Object.keys(errors).length > 0 || !input) {
+      setFieldErrors(errors);
+      // The estimate may be stale after edits — require a fresh one.
+      setFeeEstimate(null);
+      setEstimateError(null);
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      localStorage.setItem(`job-desc:${input.hashHex}`, input.htmlContent);
+      const cid = await uploadToIpfs(input.htmlContent);
+
+      const result = await withContractErrorHandling(
+        () =>
+          postJob(
+            wallet,
+            input.amountStroops,
+            input.hashHex,
+            input.descriptionPayloadLen,
+            input.deadlineUnix,
+            tokenAddress.trim(),
+            title.trim(),
+            category,
+          ),
+        "Could not post the job to the contract. Please check your wallet and try again.",
+      );
+      if (result.status !== "SUCCESS") {
+        throw new Error(result.errorResult ?? "Job transaction failed.");
+      }
+      const rawJobId = result.data;
+      if (
+        typeof rawJobId !== "bigint" &&
+        typeof rawJobId !== "number" &&
+        typeof rawJobId !== "string"
+      ) {
+        throw new Error("The job was posted, but its ID was not returned.");
+      }
+      const jobId = String(rawJobId);
+
+      if (cid && !cid.startsWith("fallback:")) {
+        try {
+          await withContractErrorHandling(
+            () => storeDescriptionCid(wallet, input.hashHex, cid),
+            "Job posted, but the description CID could not be saved on-chain.",
+          );
+        } catch (cidError) {
+          setWarning(getErrorMessage(cidError));
+        }
+      }
+      if (result.hash) {
+        setTxHash(result.hash);
+      }
+      recordPostJob();
+      setRateLimit(getRateLimitStatus());
+      const successMessage = `Job #${jobId} created successfully. Redirecting...`;
+      setSuccess(successMessage);
+      if (successMessage !== lastAnnouncedSuccess) {
+        setLastAnnouncedSuccess(successMessage);
+      }
+
+      // Clear form and draft after successful submission.
+      clearDraft(wallet);
+      setAmount("");
+      setDescription("");
+      setDeadline("");
+      setTitle("");
+      setCategory("development");
+      setDraftSavedAt(null);
+      setHasDraft(false);
+      setFeeEstimate(null);
+      setEstimateError(null);
+
+      redirectTimerRef.current = setTimeout(() => {
+        router.push(`/job/${encodeURIComponent(jobId)}`);
+      }, REDIRECT_DELAY_MS);
+    } catch (e) {
+      let balance: string | undefined;
+      if (wallet) {
+        try {
+          balance = await getNativeBalance(wallet);
+        } catch {
+          // Balance fetch failed — parseContractError will omit the balance detail
+        }
+      }
+      setError(parseContractError(e, balance));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   return (
     <section className="mx-auto max-w-2xl space-y-6">
       <h1 className="text-2xl font-semibold">Post Job</h1>
@@ -386,173 +718,7 @@ export default function PostJobPage() {
 
       <form
         className="space-y-4 rounded-lg border border-slate-200 bg-white p-5"
-        onSubmit={async (event) => {
-          event.preventDefault();
-          if (submitting) return;
-          setError(null);
-          setSuccess(null);
-          setWarning(null);
-          setTxHash(null);
-          setFieldErrors({});
-
-          if (!wallet) {
-            try {
-              await connectWallet();
-            } catch {
-              setError("Failed to connect wallet. Is Freighter installed?");
-            }
-            return;
-          }
-
-          setSubmitting(true);
-          try {
-            const nextFieldErrors: {
-              amount?: string;
-              description?: string;
-              deadline?: string;
-              tokenAddress?: string;
-              title?: string;
-            } = {};
-            const amountResult = validateAmount(amount);
-            const amountStroops = amountResult.stroops;
-            if (amountResult.error) {
-              nextFieldErrors.amount = amountResult.error;
-            } else if (amountStroops) {
-              const minError = validateAmountMin(amountStroops, MIN_JOB_AMOUNT_STROOPS, `${MIN_JOB_AMOUNT_XLM} XLM`);
-              if (minError) nextFieldErrors.amount = minError;
-            }
-
-            const limitStatus = getRateLimitStatus();
-            if (limitStatus.isLimited) {
-              setError(
-                `Rate limit reached. You can post at most 5 jobs per hour. Try again in ${formatCooldown(limitStatus.cooldownEndsAt!)}.`,
-              );
-              setRateLimit(limitStatus);
-              return;
-            }
-            const plainDescription = htmlToPlainText(description);
-            const descriptionBytes = new TextEncoder().encode(plainDescription).length;
-            if (!plainDescription) {
-              nextFieldErrors.description = "Job description cannot be empty.";
-            } else if (descriptionBytes > maxDescPayloadBytes) {
-              nextFieldErrors.description = `Description must be at most ${maxDescPayloadBytes} bytes (currently ${descriptionBytes}).`;
-            }
-            if (deadline) {
-              const deadlineError = validateDeadline(deadline);
-              if (deadlineError) nextFieldErrors.deadline = deadlineError;
-            }
-            if (!tokenAddress.trim()) {
-              nextFieldErrors.tokenAddress = "Token address is required.";
-            } else {
-              const tokenError = validateTokenAddress(tokenAddress);
-              if (tokenError) {
-                nextFieldErrors.tokenAddress = tokenError;
-              } else if (
-                !StrKey.isValidContract(tokenAddress.trim()) &&
-                !StrKey.isValidEd25519PublicKey(tokenAddress.trim())
-              ) {
-                nextFieldErrors.tokenAddress = "Invalid Stellar address or contract ID.";
-              } else if (!isValidStellarAddress(tokenAddress)) {
-                nextFieldErrors.tokenAddress =
-                  "Enter a valid Stellar address (G... or C..., 56 characters).";
-              }
-            }
-            if (!title.trim()) {
-              nextFieldErrors.title = "Job title is required.";
-            } else if (new TextEncoder().encode(title).length > 64) {
-              nextFieldErrors.title = `Title must be at most 64 bytes (currently ${new TextEncoder().encode(title).length}).`;
-            }
-            if (Object.keys(nextFieldErrors).length > 0) {
-              setFieldErrors(nextFieldErrors);
-              return;
-            }
-            const rawDescription = description.trim();
-            const htmlContent = embedLanguage(rawDescription, language);
-            const plainContent = htmlToPlainText(rawDescription);
-            const hashHex = await sha256Hex(plainContent);
-            const descriptionPayloadLen = new TextEncoder().encode(plainContent).length;
-            const deadlineUnix = deadline
-              ? Math.floor(new Date(deadline).getTime() / 1000).toString()
-              : "0";
-
-            localStorage.setItem(`job-desc:${hashHex}`, htmlContent);
-            const cid = await uploadToIpfs(htmlContent);
-
-            const result = await withContractErrorHandling(
-              () =>
-                postJob(
-                  wallet,
-                  amountStroops!,
-                  hashHex,
-                  descriptionPayloadLen,
-                  deadlineUnix,
-                  tokenAddress.trim(),
-                  title.trim(),
-                  category,
-                ),
-              "Could not post the job to the contract. Please check your wallet and try again.",
-            );
-            if (result.status !== "SUCCESS") {
-              throw new Error(result.errorResult ?? "Job transaction failed.");
-            }
-            const rawJobId = result.data;
-            if (
-              typeof rawJobId !== "bigint" &&
-              typeof rawJobId !== "number" &&
-              typeof rawJobId !== "string"
-            ) {
-              throw new Error("The job was posted, but its ID was not returned.");
-            }
-            const jobId = String(rawJobId);
-
-            if (cid && !cid.startsWith("fallback:")) {
-              try {
-                await withContractErrorHandling(
-                  () => storeDescriptionCid(wallet, hashHex, cid),
-                  "Job posted, but the description CID could not be saved on-chain.",
-                );
-              } catch (cidError) {
-                setWarning(getErrorMessage(cidError));
-              }
-            }
-            if (result.hash) {
-              setTxHash(result.hash);
-            }
-            recordPostJob();
-            setRateLimit(getRateLimitStatus());
-            const successMessage = `Job #${jobId} created successfully. Redirecting...`;
-            setSuccess(successMessage);
-            if (successMessage !== lastAnnouncedSuccess) {
-              setLastAnnouncedSuccess(successMessage);
-            }
-
-            // Clear form and draft after successful submission.
-            clearDraft(wallet);
-            setAmount("");
-            setDescription("");
-            setDeadline("");
-            setTitle("");
-            setCategory("development");
-            setDraftSavedAt(null);
-            setHasDraft(false);
-
-            redirectTimerRef.current = setTimeout(() => {
-              router.push(`/job/${encodeURIComponent(jobId)}`);
-            }, REDIRECT_DELAY_MS);
-          } catch (e) {
-            let balance: string | undefined;
-            if (wallet) {
-              try {
-                balance = await getNativeBalance(wallet);
-              } catch {
-                // Balance fetch failed — parseContractError will omit the balance detail
-              }
-            }
-            setError(parseContractError(e, balance));
-          } finally {
-            setSubmitting(false);
-          }
-        }}
+        onSubmit={handleSubmit}
       >
         {(fieldErrors.amount ||
           fieldErrors.description ||
@@ -773,13 +939,58 @@ export default function PostJobPage() {
           </div>
         )}
 
+        {(estimating || feeEstimate || estimateError) && (
+          <div className="space-y-3">
+            <TransactionPreview
+              operation="Post job"
+              details={`${amount || "0"} XLM escrow + 2.5% platform fee on completion`}
+              simulation={feeEstimate ? feeEstimateToSimulation(feeEstimate) : null}
+              simulating={estimating}
+              simulationError={estimateError ?? undefined}
+              allowSubmitWithoutSimulation
+            />
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleConfirmPost}
+                disabled={submitting || estimating}
+                className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                aria-busy={submitting}
+              >
+                {submitting ? "Posting..." : "Confirm & Post Job"}
+              </button>
+              {(feeEstimate || estimateError) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFeeEstimate(null);
+                    setEstimateError(null);
+                  }}
+                  disabled={submitting || estimating}
+                  className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Edit details
+                </button>
+              )}
+            </div>
+            <p className="text-xs text-slate-500">
+              The fee is estimated by simulating your transaction on the network —
+              nothing is submitted until you confirm.
+            </p>
+          </div>
+        )}
+
         <button
           type="submit"
           className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
-          disabled={submitting || rateLimit.isLimited}
-          aria-busy={submitting}
+          disabled={submitting || estimating || rateLimit.isLimited}
+          aria-busy={submitting || estimating}
         >
-          {submitting ? "Posting..." : "Post Job"}
+          {submitting
+            ? "Posting..."
+            : estimating
+              ? "Estimating fee…"
+              : "Post Job"}
         </button>
         <p className="mt-2 text-xs text-slate-500">
           A 2.5% platform fee applies on job completion.{" "}

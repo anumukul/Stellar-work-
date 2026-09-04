@@ -84,7 +84,7 @@ export default function JobStatusTimeline({ job }: JobStatusTimelineProps) {
           );
 
           // Custom formatting for display
-          let displayStatus = status;
+          let displayStatus: string = status;
           if (status === "InProgress") displayStatus = "In Progress";
           if (status === "SubmittedForReview") displayStatus = "Review";
 

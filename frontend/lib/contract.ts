@@ -38,6 +38,32 @@ export function titleToBytesN64(title: string): Uint8Array {
   return padded;
 }
 
+/**
+ * Build the ScVal arguments for `post_job`. Exported separately so the fee
+ * estimator can simulate the exact same transaction the form will submit.
+ */
+export function buildPostJobArgs(
+  client: string,
+  amount: string,
+  descHashHex: string,
+  descriptionPayloadLen: number,
+  deadline: string,
+  tokenAddress: string,
+  title: string,
+  category: string,
+) {
+  return [
+    nativeToScVal(client, { type: "address" }),
+    nativeToScVal(amount, { type: "i128" }),
+    nativeToScVal(hexToBytes(descHashHex), { type: "bytes" }),
+    nativeToScVal(descriptionPayloadLen, { type: "u32" }),
+    nativeToScVal(deadline, { type: "u64" }),
+    nativeToScVal(tokenAddress, { type: "address" }),
+    nativeToScVal(titleToBytesN64(title), { type: "bytes" }),
+    nativeToScVal(category, { type: "symbol" }),
+  ];
+}
+
 export async function postJob(
   client: string,
   amount: string,
@@ -48,16 +74,20 @@ export async function postJob(
   title: string,
   category: string,
 ) {
-  return callContract(getActiveContractId(), "post_job", [
-    nativeToScVal(client, { type: "address" }),
-    nativeToScVal(amount, { type: "i128" }),
-    nativeToScVal(hexToBytes(descHashHex), { type: "bytes" }),
-    nativeToScVal(descriptionPayloadLen, { type: "u32" }),
-    nativeToScVal(deadline, { type: "u64" }),
-    nativeToScVal(tokenAddress, { type: "address" }),
-    nativeToScVal(titleToBytesN64(title), { type: "bytes" }),
-    nativeToScVal(category, { type: "symbol" }),
-  ]);
+  return callContract(
+    getActiveContractId(),
+    "post_job",
+    buildPostJobArgs(
+      client,
+      amount,
+      descHashHex,
+      descriptionPayloadLen,
+      deadline,
+      tokenAddress,
+      title,
+      category,
+    ),
+  );
 }
 
 export async function getCompletedJobsCount(): Promise<number> {

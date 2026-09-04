@@ -103,10 +103,13 @@ export class TransactionVerifier {
       // Hash extraction is best-effort for logging; never block on it.
     }
 
-    this.checkSource(intent, signed.source, result);
-    this.checkOperations(intent, signed.operations, result);
-    this.checkFee(intent, signed.fee, result);
-    this.checkTimebounds(intent, signed.timeBounds, result);
+    // Fee-bump envelopes are not produced by the wallet for contract calls;
+    // narrow to the transaction shape we verify so the SDK union stays happy.
+    const tx = signed as unknown as TxLike;
+    this.checkSource(intent, tx.source, result);
+    this.checkOperations(intent, tx.operations, result);
+    this.checkFee(intent, tx.fee, result);
+    this.checkTimebounds(intent, tx.timeBounds, result);
 
     this.logVerification(result);
     return result;

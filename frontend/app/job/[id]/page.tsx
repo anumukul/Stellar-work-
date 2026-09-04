@@ -37,6 +37,7 @@ import { uploadToIpfs } from "@/lib/ipfs-service";
 import { sha256Hex, htmlToPlainText, verifyHtmlMatchesHash } from "@/lib/crypto";
 import { fetchFromIpfs } from "@/lib/ipfs-service";
 import { sanitizeMeetingTitle } from "@/lib/sanitize";
+import { SUPPORTED_LANGUAGES, extractLanguage, translateText } from "@/lib/language";
 import {
   hasViewedToday,
   markViewed,

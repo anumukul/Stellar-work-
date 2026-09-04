@@ -311,10 +311,12 @@ describe("Job Detail Mobile Footer", () => {
     const { useWallet } = await import("@/lib/wallet-context");
     vi.mocked(useWallet).mockReturnValue({
       wallet: null,
+      walletNetwork: null,
       connectWallet: vi.fn(),
       disconnectWallet: vi.fn(),
       switchAccount: vi.fn(),
       clearCachedData: vi.fn(),
+      refreshWalletNetwork: vi.fn(),
       isSwitching: false,
     });
 
@@ -374,10 +376,12 @@ describe("Job Detail Mobile Footer", () => {
     const { useWallet } = await import("@/lib/wallet-context");
     vi.mocked(useWallet).mockReturnValue({
       wallet: null,
+      walletNetwork: null,
       connectWallet: vi.fn(),
       disconnectWallet: vi.fn(),
       switchAccount: vi.fn(),
       clearCachedData: vi.fn(),
+      refreshWalletNetwork: vi.fn(),
       isSwitching: false,
     });
 
