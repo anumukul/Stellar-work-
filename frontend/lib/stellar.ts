@@ -398,10 +398,26 @@ async function submitWriteContract(
           timestamp: Date.now(),
           method,
         });
+
+        let errorResult = "Transaction failed.";
+        if (txStatus.errorResultXdr) {
+          try {
+            const resultXdr = xdr.TransactionResult.fromXDR(txStatus.errorResultXdr, "base64");
+            const code = resultXdr.result().switch().name;
+            if (code === "txTooLate") {
+              errorResult = "timeout";
+            } else {
+              errorResult = `Transaction failed: ${code}`;
+            }
+          } catch (e) {
+            // ignore
+          }
+        }
+
         return {
           status: "ERROR",
           hash: sent.hash,
-          errorResult: "Transaction failed.",
+          errorResult,
         };
       }
     }
@@ -537,7 +553,7 @@ export function parseContractError(error: unknown, currentBalance?: string): str
   }
 
   // ── Network / timeout errors ──────────────────────────────────────────────
-  if (lower.includes("timeout") || lower.includes("timed out")) {
+  if (lower.includes("timeout") || lower.includes("timed out") || lower.includes("504") || lower.includes("gateway") || lower.includes("abort")) {
     return "The transaction timed out. Please check your network connection and try again.";
   }
   if (lower.includes("econnrefused") || lower.includes("network") || lower.includes("fetch")) {
