@@ -1,4 +1,5 @@
 #![cfg(test)]
+mod bonus_test;
 use super::*;
 use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, vec, IntoVal};
 

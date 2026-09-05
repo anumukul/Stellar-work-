@@ -98,6 +98,8 @@ pub struct Job {
     pub deadline: u64,
     pub token: Address,
     pub revision_count: u32,
+    pub bonus_amount: i128,
+    pub bonus_paid: bool,
     /// SC-121: Merkle root over the SHA-256 hashes of the job's off-chain
     /// attachments, making deliverables tamper-evident without storing them
     /// on-chain. All-zero bytes means no attachments have been committed.
@@ -817,6 +819,7 @@ impl EscrowContract {
             e.clone(),
             client.clone(),
             amount,
+            0,
             desc_hash,
             description_payload_len,
             deadline,
@@ -996,6 +999,7 @@ impl EscrowContract {
         e: Env,
         client: Address,
         amount: i128,
+        bonus_amount: i128,
         desc_hash: BytesN<32>,
         description_payload_len: u32,
         deadline: u64,
@@ -1003,6 +1007,9 @@ impl EscrowContract {
         categories: Vec<JobCategory>,
     ) -> u64 {
         if amount <= 0 {
+            panic_with_error!(&e, Error::InvalidAmount);
+        }
+        if bonus_amount < 0 {
             panic_with_error!(&e, Error::InvalidAmount);
         }
         if desc_hash == BytesN::from_array(&e, &[0u8; 32]) {
@@ -1031,8 +1038,12 @@ impl EscrowContract {
         }
         enforce_client_active_job_limit(&e, &client);
 
+        let total_escrow = amount.checked_add(bonus_amount).unwrap_or_else(|| {
+            panic_with_error!(&e, Error::InvalidAmount);
+        });
+
         let token_client = token::Client::new(&e, &token);
-        token_client.transfer(&client, &e.current_contract_address(), &amount);
+        token_client.transfer(&client, &e.current_contract_address(), &total_escrow);
 
         let job_id = next_job_id(&e);
         let job_token = token.clone();
@@ -1042,6 +1053,8 @@ impl EscrowContract {
             freelancer: Option::None,
             amount,
             description_hash: desc_hash,
+            bonus_amount: 0,
+            bonus_paid: false,
             // SC-138: no extended metadata committed at creation.
             metadata_hash: BytesN::from_array(&e, &[0u8; 32]),
             status: JobStatus::Open,
@@ -1098,6 +1111,7 @@ impl EscrowContract {
             e,
             client,
             amount,
+            0,
             desc_hash,
             description_payload_len,
             deadline,
@@ -1281,6 +1295,31 @@ impl EscrowContract {
             bump_instance_ttl(&e);
 
             let token_client = token::Client::new(&e, &job.token);
+
+            // Early completion bonus logic
+            if job.bonus_amount > 0 && !job.bonus_paid {
+                let current_time = e.ledger().timestamp();
+                if job.deadline != 0 && current_time < job.deadline {
+                    // Calculate bonus proportion (time saved / total time)
+                    let total_time = checked_sub(&e, job.deadline.into(), job.created_at.into());
+                    let time_saved = checked_sub(&e, job.deadline.into(), current_time.into());
+
+                    if total_time > 0 {
+                        let bonus_payout = checked_mul_div(&e, job.bonus_amount, time_saved, total_time);
+                        let bonus_refund = checked_sub(&e, job.bonus_amount, bonus_payout);
+
+                        token_client.transfer(&e.current_contract_address(), &freelancer, &bonus_payout);
+                        token_client.transfer(&e.current_contract_address(), &client, &bonus_refund);
+                    } else {
+                        token_client.transfer(&e.current_contract_address(), &freelancer, &job.bonus_amount);
+                    }
+                } else {
+                    // Late or on time: no bonus, refund all to client
+                    token_client.transfer(&e.current_contract_address(), &client, &job.bonus_amount);
+                }
+                job.bonus_paid = true;
+            }
+
             token_client.transfer(&e.current_contract_address(), &freelancer, &payout);
 
             // Issue #412: credit 0.5% referral bonus on the client's first completed job.
@@ -1572,7 +1611,12 @@ impl EscrowContract {
         bump_instance_ttl(&e);
 
         let token_client = token::Client::new(&e, &job.token);
-        token_client.transfer(&e.current_contract_address(), &client, &job.amount);
+        let refund_amount = if job.bonus_amount > 0 && !job.bonus_paid {
+            job.amount.checked_add(job.bonus_amount).unwrap_or(job.amount)
+        } else {
+            job.amount
+        };
+        token_client.transfer(&e.current_contract_address(), &client, &refund_amount);
 
         e.events().publish(
             (Symbol::new(&e, "job_cancelled"),),
@@ -2025,7 +2069,12 @@ impl EscrowContract {
         bump_instance_ttl(&e);
 
         let token_client = token::Client::new(&e, &job.token);
-        token_client.transfer(&e.current_contract_address(), &client, &job.amount);
+        let refund_amount = if job.bonus_amount > 0 && !job.bonus_paid {
+            job.amount.checked_add(job.bonus_amount).unwrap_or(job.amount)
+        } else {
+            job.amount
+        };
+        token_client.transfer(&e.current_contract_address(), &client, &refund_amount);
 
         e.events().publish(
             (Symbol::new(&e, "tx_relayed"),),
@@ -3070,6 +3119,7 @@ impl EscrowContract {
             e,
             client,
             amount,
+            0,
             desc_hash,
             description_payload_len,
             deadline,
@@ -9196,6 +9246,8 @@ mod test {
             // SC-138: a freshly posted job has no extended metadata committed.
             metadata_hash: BytesN::from_array(&env, &[0u8; 32]),
             categories: Vec::new(&env),
+            bonus_amount: 0,
+            bonus_paid: false,
         };
 
         assert_eq!(client.get_job(&job_id), expected);
@@ -9235,6 +9287,8 @@ mod test {
             // SC-138: no extended metadata committed.
             metadata_hash: BytesN::from_array(&env, &[0u8; 32]),
             categories: Vec::new(&env),
+            bonus_amount: 0,
+            bonus_paid: false,
         };
         assert_eq!(after_accept, expected_accept);
 

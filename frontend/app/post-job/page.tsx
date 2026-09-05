@@ -58,6 +58,7 @@ interface JobFormErrors {
 
 interface JobFormInput {
   amountStroops: string;
+  bonusAmountStroops: string;
   hashHex: string;
   descriptionPayloadLen: number;
   deadlineUnix: string;
@@ -71,6 +72,7 @@ interface JobFormInput {
  */
 async function validateAndBuildJobInput(params: {
   amount: string;
+  bonusAmount: string;
   description: string;
   deadline: string;
   tokenAddress: string;
@@ -80,6 +82,7 @@ async function validateAndBuildJobInput(params: {
 }): Promise<{ errors: JobFormErrors; input: JobFormInput | null }> {
   const {
     amount,
+    bonusAmount,
     description,
     deadline,
     tokenAddress,
@@ -100,6 +103,12 @@ async function validateAndBuildJobInput(params: {
       `${MIN_JOB_AMOUNT_XLM} XLM`,
     );
     if (minError) errors.amount = minError;
+  }
+
+  const bonusAmountResult = validateAmount(bonusAmount || "0");
+  const bonusAmountStroops = bonusAmountResult.stroops;
+  if (bonusAmountResult.error) {
+    errors.amount = bonusAmountResult.error;
   }
 
   const plainDescription = htmlToPlainText(description);
@@ -155,6 +164,7 @@ async function validateAndBuildJobInput(params: {
     errors,
     input: {
       amountStroops: amountStroops!,
+      bonusAmountStroops: bonusAmountStroops || "0",
       hashHex,
       descriptionPayloadLen,
       deadlineUnix,
@@ -230,6 +240,7 @@ const RichTextEditor = dynamic(
 
 interface DraftData {
   amount: string;
+  bonusAmount: string;
   description: string;
   deadline: string;
   tokenAddress: string;
@@ -275,6 +286,7 @@ export default function PostJobPage() {
   const router = useRouter();
   const { wallet, connectWallet } = useWallet();
   const [amount, setAmount] = useState("");
+  const [bonusAmount, setBonusAmount] = useState("");
   const [description, setDescription] = useState("");
   const [deadline, setDeadline] = useState("");
   const [title, setTitle] = useState("");
@@ -503,6 +515,7 @@ export default function PostJobPage() {
 
     const { errors, input } = await validateAndBuildJobInput({
       amount,
+      bonusAmount,
       description,
       deadline,
       tokenAddress,
@@ -529,6 +542,7 @@ export default function PostJobPage() {
     const args = buildPostJobArgs(
       wallet,
       input.amountStroops,
+      input.bonusAmountStroops,
       input.hashHex,
       input.descriptionPayloadLen,
       input.deadlineUnix,
@@ -583,6 +597,7 @@ export default function PostJobPage() {
 
     const { errors, input } = await validateAndBuildJobInput({
       amount,
+      bonusAmount,
       description,
       deadline,
       tokenAddress,
@@ -848,6 +863,25 @@ export default function PostJobPage() {
             Advanced options
           </summary>
           <div className="space-y-4 px-4 pb-4">
+            <label className="block text-sm font-medium">
+              Bonus Amount (XLM)
+              <input
+                className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2"
+                type="number"
+                min="0"
+                step="0.0000001"
+                value={bonusAmount}
+                onChange={(e) => {
+                  const nextValue = e.target.value;
+                  if (nextValue.includes("-")) {
+                    return;
+                  }
+                  setBonusAmount(nextValue);
+                }}
+                placeholder="Optional early completion bonus"
+              />
+            </label>
+
             <label className="block text-sm font-medium">
               Deadline (optional)
               <input
