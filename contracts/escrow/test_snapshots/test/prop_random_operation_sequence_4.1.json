@@ -1721,6 +1721,33 @@
                     },
                     {
                       "key": {
+                        "symbol": "bonus_amount"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 0
+                        }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "bonus_paid"
+                      },
+                      "val": {
+                        "bool": false
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "categories"
+                      },
+                      "val": {
+                        "vec": []
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "client"
                       },
                       "val": {
@@ -1856,6 +1883,33 @@
                       },
                       "val": {
                         "bytes": "0000000000000000000000000000000000000000000000000000000000000000"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "bonus_amount"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 0
+                        }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "bonus_paid"
+                      },
+                      "val": {
+                        "bool": false
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "categories"
+                      },
+                      "val": {
+                        "vec": []
                       }
                     },
                     {
@@ -2311,6 +2365,18 @@
                         },
                         "val": {
                           "u64": 2
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "MaxJobsPerUser"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 50
                         }
                       },
                       {
@@ -3937,6 +4003,33 @@
                 },
                 {
                   "key": {
+                    "symbol": "bonus_amount"
+                  },
+                  "val": {
+                    "i128": {
+                      "hi": 0,
+                      "lo": 0
+                    }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "bonus_paid"
+                  },
+                  "val": {
+                    "bool": false
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "categories"
+                  },
+                  "val": {
+                    "vec": []
+                  }
+                },
+                {
+                  "key": {
                     "symbol": "client"
                   },
                   "val": {
@@ -4732,6 +4825,33 @@
                 },
                 {
                   "key": {
+                    "symbol": "bonus_amount"
+                  },
+                  "val": {
+                    "i128": {
+                      "hi": 0,
+                      "lo": 0
+                    }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "bonus_paid"
+                  },
+                  "val": {
+                    "bool": false
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "categories"
+                  },
+                  "val": {
+                    "vec": []
+                  }
+                },
+                {
+                  "key": {
                     "symbol": "client"
                   },
                   "val": {
@@ -5056,6 +5176,33 @@
                   },
                   "val": {
                     "bytes": "0000000000000000000000000000000000000000000000000000000000000000"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "bonus_amount"
+                  },
+                  "val": {
+                    "i128": {
+                      "hi": 0,
+                      "lo": 0
+                    }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "bonus_paid"
+                  },
+                  "val": {
+                    "bool": false
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "categories"
+                  },
+                  "val": {
+                    "vec": []
                   }
                 },
                 {
@@ -5386,6 +5533,33 @@
                   },
                   "val": {
                     "bytes": "0000000000000000000000000000000000000000000000000000000000000000"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "bonus_amount"
+                  },
+                  "val": {
+                    "i128": {
+                      "hi": 0,
+                      "lo": 0
+                    }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "bonus_paid"
+                  },
+                  "val": {
+                    "bool": false
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "categories"
+                  },
+                  "val": {
+                    "vec": []
                   }
                 },
                 {

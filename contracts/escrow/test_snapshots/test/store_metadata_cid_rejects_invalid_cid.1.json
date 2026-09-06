@@ -328,6 +328,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "MaxJobsPerUser"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 50
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "NativeToken"
                             }
                           ]
@@ -1323,7 +1335,7 @@
               },
               {
                 "error": {
-                  "contract": 50
+                  "contract": 51
                 }
               }
             ],
@@ -1333,7 +1345,7 @@
                   "string": "failing with contract error"
                 },
                 {
-                  "u32": 50
+                  "u32": 51
                 }
               ]
             }
@@ -1355,7 +1367,7 @@
               },
               {
                 "error": {
-                  "contract": 50
+                  "contract": 51
                 }
               }
             ],
@@ -1380,7 +1392,7 @@
               },
               {
                 "error": {
-                  "contract": 50
+                  "contract": 51
                 }
               }
             ],
@@ -1405,7 +1417,7 @@
               },
               {
                 "error": {
-                  "contract": 50
+                  "contract": 51
                 }
               }
             ],
@@ -1450,7 +1462,7 @@
               },
               {
                 "error": {
-                  "contract": 50
+                  "contract": 51
                 }
               }
             ],

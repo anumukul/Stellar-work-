@@ -373,7 +373,7 @@ export default function HomePage() {
           try {
             // verify integrity before using stored value
             // import verify lazily to avoid SSR issues
-            // eslint-disable-next-line @typescript-eslint/no-var-requires
+             
             const { verifyHtmlMatchesHash } = await import("@/lib/crypto");
             // If verification fails, fall back to attempting IPFS fetch
             if (await verifyHtmlMatchesHash(stored, hash)) {

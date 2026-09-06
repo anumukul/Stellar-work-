@@ -98,6 +98,8 @@ pub struct Job {
     pub deadline: u64,
     pub token: Address,
     pub revision_count: u32,
+    pub bonus_amount: i128,
+    pub bonus_paid: bool,
     /// SC-121: Merkle root over the SHA-256 hashes of the job's off-chain
     /// attachments, making deliverables tamper-evident without storing them
     /// on-chain. All-zero bytes means no attachments have been committed.
@@ -669,7 +671,8 @@ impl EscrowContract {
         e.storage()
             .persistent()
             .set(&ExtKey::Approver(approver.clone()), &true);
-        e.events().publish((Symbol::new(&e, "approver_added"),), (approver.clone(),));
+        e.events()
+            .publish((Symbol::new(&e, "approver_added"),), (approver.clone(),));
         Self::record_event(&e, "approver_added", 0, &admin);
     }
 
@@ -679,8 +682,11 @@ impl EscrowContract {
         if admin != stored {
             panic_with_error!(&e, Error::UnauthorizedAdmin);
         }
-        e.storage().persistent().remove(&ExtKey::Approver(approver.clone()));
-        e.events().publish((Symbol::new(&e, "approver_removed"),), (approver.clone(),));
+        e.storage()
+            .persistent()
+            .remove(&ExtKey::Approver(approver.clone()));
+        e.events()
+            .publish((Symbol::new(&e, "approver_removed"),), (approver.clone(),));
         Self::record_event(&e, "approver_removed", 0, &admin);
     }
 
@@ -697,8 +703,11 @@ impl EscrowContract {
         if admin != stored {
             panic_with_error!(&e, Error::UnauthorizedAdmin);
         }
-        e.storage().instance().set(&ExtKey::HighValueThreshold, &amount);
-        e.events().publish((Symbol::new(&e, "high_value_threshold_set"),), (amount,));
+        e.storage()
+            .instance()
+            .set(&ExtKey::HighValueThreshold, &amount);
+        e.events()
+            .publish((Symbol::new(&e, "high_value_threshold_set"),), (amount,));
         Self::record_event(&e, "set_high_value_threshold", 0, &admin);
     }
 
@@ -817,6 +826,7 @@ impl EscrowContract {
             e.clone(),
             client.clone(),
             amount,
+            0,
             desc_hash,
             description_payload_len,
             deadline,
@@ -996,6 +1006,7 @@ impl EscrowContract {
         e: Env,
         client: Address,
         amount: i128,
+        bonus_amount: i128,
         desc_hash: BytesN<32>,
         description_payload_len: u32,
         deadline: u64,
@@ -1003,6 +1014,9 @@ impl EscrowContract {
         categories: Vec<JobCategory>,
     ) -> u64 {
         if amount <= 0 {
+            panic_with_error!(&e, Error::InvalidAmount);
+        }
+        if bonus_amount < 0 {
             panic_with_error!(&e, Error::InvalidAmount);
         }
         if desc_hash == BytesN::from_array(&e, &[0u8; 32]) {
@@ -1031,8 +1045,12 @@ impl EscrowContract {
         }
         enforce_client_active_job_limit(&e, &client);
 
+        let total_escrow = amount.checked_add(bonus_amount).unwrap_or_else(|| {
+            panic_with_error!(&e, Error::InvalidAmount);
+        });
+
         let token_client = token::Client::new(&e, &token);
-        token_client.transfer(&client, &e.current_contract_address(), &amount);
+        token_client.transfer(&client, &e.current_contract_address(), &total_escrow);
 
         let job_id = next_job_id(&e);
         let job_token = token.clone();
@@ -1042,6 +1060,8 @@ impl EscrowContract {
             freelancer: Option::None,
             amount,
             description_hash: desc_hash,
+            bonus_amount: 0,
+            bonus_paid: false,
             // SC-138: no extended metadata committed at creation.
             metadata_hash: BytesN::from_array(&e, &[0u8; 32]),
             status: JobStatus::Open,
@@ -1098,6 +1118,7 @@ impl EscrowContract {
             e,
             client,
             amount,
+            0,
             desc_hash,
             description_payload_len,
             deadline,
@@ -1281,6 +1302,48 @@ impl EscrowContract {
             bump_instance_ttl(&e);
 
             let token_client = token::Client::new(&e, &job.token);
+
+            // Early completion bonus logic
+            if job.bonus_amount > 0 && !job.bonus_paid {
+                let current_time = e.ledger().timestamp();
+                if job.deadline != 0 && current_time < job.deadline {
+                    // Calculate bonus proportion (time saved / total time)
+                    let total_time = checked_sub(&e, job.deadline.into(), job.created_at.into());
+                    let time_saved = checked_sub(&e, job.deadline.into(), current_time.into());
+
+                    if total_time > 0 {
+                        let bonus_payout =
+                            checked_mul_div(&e, job.bonus_amount, time_saved, total_time);
+                        let bonus_refund = checked_sub(&e, job.bonus_amount, bonus_payout);
+
+                        token_client.transfer(
+                            &e.current_contract_address(),
+                            &freelancer,
+                            &bonus_payout,
+                        );
+                        token_client.transfer(
+                            &e.current_contract_address(),
+                            &client,
+                            &bonus_refund,
+                        );
+                    } else {
+                        token_client.transfer(
+                            &e.current_contract_address(),
+                            &freelancer,
+                            &job.bonus_amount,
+                        );
+                    }
+                } else {
+                    // Late or on time: no bonus, refund all to client
+                    token_client.transfer(
+                        &e.current_contract_address(),
+                        &client,
+                        &job.bonus_amount,
+                    );
+                }
+                job.bonus_paid = true;
+            }
+
             token_client.transfer(&e.current_contract_address(), &freelancer, &payout);
 
             // Issue #412: credit 0.5% referral bonus on the client's first completed job.
@@ -1398,7 +1461,13 @@ impl EscrowContract {
             (Symbol::new(&e, "job_approval_recorded"),),
             (job_id, caller.clone(), approvals),
         );
-        Self::write_audit(&e, caller.clone(), "record_approval", Some(job_id), "Recorded approval");
+        Self::write_audit(
+            &e,
+            caller.clone(),
+            "record_approval",
+            Some(job_id),
+            "Recorded approval",
+        );
 
         if approvals < required {
             // Not enough approvals yet; wait for more.
@@ -1572,7 +1641,14 @@ impl EscrowContract {
         bump_instance_ttl(&e);
 
         let token_client = token::Client::new(&e, &job.token);
-        token_client.transfer(&e.current_contract_address(), &client, &job.amount);
+        let refund_amount = if job.bonus_amount > 0 && !job.bonus_paid {
+            job.amount
+                .checked_add(job.bonus_amount)
+                .unwrap_or(job.amount)
+        } else {
+            job.amount
+        };
+        token_client.transfer(&e.current_contract_address(), &client, &refund_amount);
 
         e.events().publish(
             (Symbol::new(&e, "job_cancelled"),),
@@ -2025,7 +2101,14 @@ impl EscrowContract {
         bump_instance_ttl(&e);
 
         let token_client = token::Client::new(&e, &job.token);
-        token_client.transfer(&e.current_contract_address(), &client, &job.amount);
+        let refund_amount = if job.bonus_amount > 0 && !job.bonus_paid {
+            job.amount
+                .checked_add(job.bonus_amount)
+                .unwrap_or(job.amount)
+        } else {
+            job.amount
+        };
+        token_client.transfer(&e.current_contract_address(), &client, &refund_amount);
 
         e.events().publish(
             (Symbol::new(&e, "tx_relayed"),),
@@ -2151,7 +2234,11 @@ impl EscrowContract {
 
         for i in 0..all_ids.len() {
             let id = all_ids.get(i).unwrap();
-            if let Some(job) = e.storage().persistent().get::<DataKey, Job>(&DataKey::Job(id)) {
+            if let Some(job) = e
+                .storage()
+                .persistent()
+                .get::<DataKey, Job>(&DataKey::Job(id))
+            {
                 // Scan categories for a match.
                 let mut found = false;
                 for j in 0..job.categories.len() {
@@ -2635,9 +2722,7 @@ impl EscrowContract {
         if caller != admin {
             panic_with_error!(&e, Error::Unauthorized);
         }
-        e.storage()
-            .instance()
-            .set(&DataKey::MaxJobsPerUser, &limit);
+        e.storage().instance().set(&DataKey::MaxJobsPerUser, &limit);
         bump_instance_ttl(&e);
         e.events().publish(
             (Symbol::new(&e, "max_jobs_per_user_updated"),),
@@ -3070,6 +3155,7 @@ impl EscrowContract {
             e,
             client,
             amount,
+            0,
             desc_hash,
             description_payload_len,
             deadline,
@@ -3478,10 +3564,7 @@ impl EscrowContract {
         }
 
         // Ensure archived record exists
-        let archived: Option<Job> = e
-            .storage()
-            .persistent()
-            .get(&DataKey::ArchivedJob(job_id));
+        let archived: Option<Job> = e.storage().persistent().get(&DataKey::ArchivedJob(job_id));
         if archived.is_none() {
             panic_with_error!(&e, Error::JobNotFound);
         }
@@ -3494,7 +3577,11 @@ impl EscrowContract {
 
         // Move archived job back into active storage
         e.storage().persistent().set(&DataKey::Job(job_id), &job);
-        e.storage().persistent().extend_ttl(&DataKey::Job(job_id), ACTIVE_JOB_LIFETIME_THRESHOLD, ACTIVE_JOB_BUMP_AMOUNT);
+        e.storage().persistent().extend_ttl(
+            &DataKey::Job(job_id),
+            ACTIVE_JOB_LIFETIME_THRESHOLD,
+            ACTIVE_JOB_BUMP_AMOUNT,
+        );
 
         // Re-insert into AllJobIds
         let mut all_ids: Vec<u64> = e
@@ -3504,15 +3591,26 @@ impl EscrowContract {
             .unwrap_or(Vec::new(&e));
         all_ids.push_back(job_id);
         e.storage().persistent().set(&DataKey::AllJobIds, &all_ids);
-        e.storage().persistent().extend_ttl(&DataKey::AllJobIds, INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        e.storage().persistent().extend_ttl(
+            &DataKey::AllJobIds,
+            INSTANCE_LIFETIME_THRESHOLD,
+            INSTANCE_BUMP_AMOUNT,
+        );
 
         // Remove archived record and update counters
-        e.storage().persistent().remove(&DataKey::ArchivedJob(job_id));
-        let mut count: u64 = e.storage().instance().get(&DataKey::ArchiveCount).unwrap_or(0);
+        e.storage()
+            .persistent()
+            .remove(&DataKey::ArchivedJob(job_id));
+        let mut count: u64 = e
+            .storage()
+            .instance()
+            .get(&DataKey::ArchiveCount)
+            .unwrap_or(0);
         count = count.saturating_sub(1);
         e.storage().instance().set(&DataKey::ArchiveCount, &count);
 
-        e.events().publish((Symbol::new(&e, "job_unarchived"),), (job_id,));
+        e.events()
+            .publish((Symbol::new(&e, "job_unarchived"),), (job_id,));
 
         bump_instance_ttl(&e);
     }
@@ -4084,12 +4182,7 @@ impl EscrowContract {
                 executable_after,
             ),
         );
-        Self::record_event(
-            &e,
-            "recovery_proposed",
-            job_id,
-            &admin,
-        );
+        Self::record_event(&e, "recovery_proposed", job_id, &admin);
         Self::write_audit(
             &e,
             admin,
@@ -4142,12 +4235,7 @@ impl EscrowContract {
             (Symbol::new(&e, "recovery_approved"),),
             (proposal_id, signer.clone(), proposal.approval_count),
         );
-        Self::record_event(
-            &e,
-            "recovery_approved",
-            proposal.job_id,
-            &signer,
-        );
+        Self::record_event(&e, "recovery_approved", proposal.job_id, &signer);
     }
 
     /// Execute an approved recovery proposal.
@@ -4211,12 +4299,7 @@ impl EscrowContract {
                 job.amount,
             ),
         );
-        Self::record_event(
-            &e,
-            "recovery_executed",
-            proposal.job_id,
-            &caller,
-        );
+        Self::record_event(&e, "recovery_executed", proposal.job_id, &caller);
         Self::write_audit(
             &e,
             caller,
@@ -8712,8 +8795,14 @@ mod test {
     #[test]
     fn get_metadata_hash_zero_for_fresh_job() {
         let (env, client, _, user, _, native_token) = setup();
-        let job_id =
-            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
         assert_eq!(
             client.get_metadata_hash(&job_id),
             BytesN::from_array(&env, &[0u8; 32])
@@ -8723,8 +8812,14 @@ mod test {
     #[test]
     fn update_metadata_sets_hash_and_cid_and_emits_event() {
         let (env, client, _, user, _, native_token) = setup();
-        let job_id =
-            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
 
         let metadata_hash = BytesN::from_array(&env, &[0x42; 32]);
         let cid = metadata_cid(&env);
@@ -8739,8 +8834,14 @@ mod test {
     #[test]
     fn update_metadata_without_cid_sets_hash_only() {
         let (env, client, _, user, _, native_token) = setup();
-        let job_id =
-            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
 
         let metadata_hash = BytesN::from_array(&env, &[0x99; 32]);
         client.update_metadata(&user, &job_id, &metadata_hash, &String::from_str(&env, ""));
@@ -8756,8 +8857,14 @@ mod test {
     #[should_panic(expected = "Error(Contract, #2)")]
     fn update_metadata_rejects_non_client() {
         let (env, client, _, user, freelancer, native_token) = setup();
-        let job_id =
-            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
         client.update_metadata(
             &freelancer,
             &job_id,
@@ -8770,8 +8877,14 @@ mod test {
     #[should_panic(expected = "Error(Contract, #51)")]
     fn update_metadata_rejects_zero_hash() {
         let (env, client, _, user, _, native_token) = setup();
-        let job_id =
-            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
         client.update_metadata(
             &user,
             &job_id,
@@ -8784,8 +8897,14 @@ mod test {
     #[should_panic(expected = "Error(Contract, #51)")]
     fn update_metadata_rejects_invalid_cid() {
         let (env, client, _, user, _, native_token) = setup();
-        let job_id =
-            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
         client.update_metadata(
             &user,
             &job_id,
@@ -8825,7 +8944,6 @@ mod test {
             String::from_str(&env, "")
         );
     }
-
 
     /// After a failed raise_dispute call, the job state and escrow balance
     /// must remain exactly as they were before the call.
@@ -9196,6 +9314,8 @@ mod test {
             // SC-138: a freshly posted job has no extended metadata committed.
             metadata_hash: BytesN::from_array(&env, &[0u8; 32]),
             categories: Vec::new(&env),
+            bonus_amount: 0,
+            bonus_paid: false,
         };
 
         assert_eq!(client.get_job(&job_id), expected);
@@ -9235,6 +9355,8 @@ mod test {
             // SC-138: no extended metadata committed.
             metadata_hash: BytesN::from_array(&env, &[0u8; 32]),
             categories: Vec::new(&env),
+            bonus_amount: 0,
+            bonus_paid: false,
         };
         assert_eq!(after_accept, expected_accept);
 
@@ -14888,7 +15010,8 @@ mod test {
 
     #[test]
     fn recovery_signer_configuration() {
-        let (env, client, admin, _, _, _) = setup();        let signer = Address::generate(&env);
+        let (env, client, admin, _, _, _) = setup();
+        let signer = Address::generate(&env);
 
         assert!(!client.is_recovery_signer(&signer));
         client.set_recovery_signer(&admin, &signer, &true);
@@ -14986,7 +15109,8 @@ mod test {
 
         // Advance past RECOVERY_TIMELOCK_SECS (48h) and execute.
         let t = env.ledger().timestamp();
-        env.ledger().with_mut(|li| li.timestamp = t + 48 * 60 * 60 + 1);
+        env.ledger()
+            .with_mut(|li| li.timestamp = t + 48 * 60 * 60 + 1);
         client.execute_recovery(&user, &proposal_id);
 
         let job = client.get_job(&job_id);
@@ -15038,7 +15162,8 @@ mod test {
         assert!(caught.is_err());
 
         let t = env.ledger().timestamp();
-        env.ledger().with_mut(|li| li.timestamp = t + 48 * 60 * 60 + 1);
+        env.ledger()
+            .with_mut(|li| li.timestamp = t + 48 * 60 * 60 + 1);
         client.execute_recovery(&user, &proposal_id);
 
         assert_eq!(client.get_job(&job_id).status, JobStatus::Cancelled);

@@ -106,7 +106,10 @@ export default function AdminPage() {
     for (const name of flagNames) {
       current[name] = isEnabled(name);
     }
-    setFeatureFlags(current);
+    const timer = setTimeout(() => {
+      setFeatureFlags(current);
+    }, 0);
+    return () => clearTimeout(timer);
   }, [flagNames]);
 
   const fetchAdminData = useCallback(async (walletAddress: string) => {
