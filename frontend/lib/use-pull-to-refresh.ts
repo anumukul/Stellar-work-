@@ -48,10 +48,15 @@ export function usePullToRefresh(
   const [distance, setDistance] = useState(0);
 
   const onRefreshRef = useRef(onRefresh);
-  onRefreshRef.current = onRefresh;
-
   const phaseRef = useRef<PullPhase>("idle");
-  phaseRef.current = phase;
+
+  useEffect(() => {
+    onRefreshRef.current = onRefresh;
+  }, [onRefresh]);
+
+  useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
 
   const startYRef = useRef<number | null>(null);
   const armedRef = useRef(false);

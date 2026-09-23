@@ -24,7 +24,9 @@ export default function RecentContractInteractionsWidget() {
   const [items, setItems] = useState<RecentContractInteraction[]>([]);
 
   useEffect(() => {
-    setItems(loadRecentContractInteractions());
+    const timer = setTimeout(() => {
+      setItems(loadRecentContractInteractions());
+    }, 0);
 
     const eventName = getRecentContractInteractionsEventName();
     const refresh = () => setItems(loadRecentContractInteractions());
@@ -33,6 +35,7 @@ export default function RecentContractInteractionsWidget() {
     window.addEventListener("storage", refresh);
 
     return () => {
+      clearTimeout(timer);
       window.removeEventListener(eventName, refresh);
       window.removeEventListener("storage", refresh);
     };

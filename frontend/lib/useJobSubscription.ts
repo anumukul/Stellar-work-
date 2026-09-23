@@ -24,7 +24,7 @@ export function useJobSubscription(jobId: string | undefined, onUpdate: () => vo
     let streamClose: (() => void) | null = null;
 
     let retryTimeout: NodeJS.Timeout | null = null;
-    let fallbackPollCount = 0;
+    const fallbackPollCount = 0;
 
     const startFallbackPolling = () => {
       if (!mounted) return;

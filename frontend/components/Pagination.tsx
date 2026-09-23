@@ -24,7 +24,7 @@ export default function Pagination({ page, pageSize, total, onPageChange, onPage
   const windowSize = 5;
   const half = Math.floor(windowSize / 2);
   let from = Math.max(1, page - half);
-  let to = Math.min(totalPages, from + windowSize - 1);
+  const to = Math.min(totalPages, from + windowSize - 1);
   if (to - from < windowSize - 1) {
     from = Math.max(1, to - windowSize + 1);
   }

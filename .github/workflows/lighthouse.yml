@@ -26,6 +26,9 @@ jobs:
     defaults:
       run:
         working-directory: frontend
+    env:
+      NEXT_PUBLIC_CONTRACT_ID: CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHSQ
+      NEXT_PUBLIC_NETWORK: testnet
 
     steps:
       - name: Checkout code

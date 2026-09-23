@@ -32,7 +32,7 @@ export default function GlobalError({
   });
 
   useEffect(() => {
-    // eslint-disable-next-line no-console
+     
     console.error("[StellarWork]", errorId, error);
   }, [error, errorId]);
 

@@ -245,11 +245,14 @@ export default function ConversationPage() {
   }, [wallet, peerAddress, isValidPeer, refreshUnread]);
 
   useEffect(() => {
-    loadMessages();
+    const timer = setTimeout(() => {
+      loadMessages();
+    }, 0);
 
     // Poll for new messages written by the other side (cross-tab / future relay).
     pollRef.current = setInterval(loadMessages, POLL_MS);
     return () => {
+      clearTimeout(timer);
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, [loadMessages]);

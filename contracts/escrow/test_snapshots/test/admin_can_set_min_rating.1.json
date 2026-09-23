@@ -389,6 +389,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "MaxJobsPerUser"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 50
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "NativeToken"
                             }
                           ]

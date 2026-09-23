@@ -20,6 +20,9 @@ jobs:
     defaults:
       run:
         working-directory: frontend
+    env:
+      NEXT_PUBLIC_CONTRACT_ID: ${{ secrets.SOROBAN_CONTRACT_ID }}
+      NEXT_PUBLIC_NETWORK: testnet
 
     steps:
       - name: Checkout code

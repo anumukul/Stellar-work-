@@ -24,6 +24,10 @@ jobs:
     name: Check Bundle Size
     runs-on: ubuntu-latest
 
+    env:
+      NEXT_PUBLIC_CONTRACT_ID: CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHSQ
+      NEXT_PUBLIC_NETWORK: testnet
+
     defaults:
       run:
         working-directory: frontend
