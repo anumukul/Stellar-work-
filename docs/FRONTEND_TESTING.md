@@ -142,3 +142,17 @@ The CI pipeline executes the following steps for the frontend:
 4.  **Visual Regression (Chromatic):** Runs `npm run chromatic` to build Storybook and detect visual changes in UI components.
 
 Pull Requests cannot be merged unless all CI checks, including testing and coverage thresholds, pass successfully.
+
+## Wallet Compatibility Testing
+
+For wallet-specific testing across different browsers and operating systems, refer to the [Wallet Compatibility Testing Matrix](../frontend/docs/wallet-compatibility-testing-matrix.md). This document provides:
+
+- Browser and OS compatibility matrix for Freighter, WalletConnect, and Ledger wallets
+- Manual test procedures for connect, sign, network switch, and account change flows
+- Automated smoke tests for wallet compatibility
+- Test execution schedule and results templates
+
+Wallet compatibility should be verified before releases, especially when:
+- Adding support for a new wallet
+- Updating wallet integration libraries
+- Releasing after major browser or wallet extension updates

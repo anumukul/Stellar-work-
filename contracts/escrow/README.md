@@ -2,6 +2,10 @@
 
 Soroban smart contract for a decentralized freelance escrow flow.
 
+## Documentation
+
+- [State Transition QA Checklist](./STATE_TRANSITION_QA_CHECKLIST.md) - Data integrity validation for all contract state transitions
+
 ## Implemented
 
 - `initialize(admin, native_token)`
