@@ -13,6 +13,12 @@ Index of project documentation. Start with the [root README](../README.md) for s
 | [glossary.md](./glossary.md) | Contract and frontend terminology |
 | [VIDEO_TUTORIALS.md](./VIDEO_TUTORIALS.md) | Screencast recording guide, script template, official tutorial series outline, and captioning standards |
 
+## User Guides
+
+| Document | Description |
+|----------|-------------|
+| [wallet-and-transaction-guide.md](./wallet-and-transaction-guide.md) | Non-technical guide to wallet setup, network selection, signing, and confirming job transactions |
+
 ## Architecture & Contracts
 
 | Document | Description |
