@@ -3,11 +3,20 @@ import { useEffect, type RefObject } from "react";
 const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [contenteditable="true"], [tabindex]:not([tabindex="-1"])';
 
+type ModalFocusTrapOptions = {
+  initialFocusRef?: RefObject<HTMLElement | null>;
+  shouldCloseOnEscape?: () => boolean;
+  onEscapeIgnored?: () => void;
+};
+
 export function useModalFocusTrap(
   isOpen: boolean,
   container: RefObject<HTMLElement | null>,
   onClose: () => void,
+  options: ModalFocusTrapOptions = {},
 ) {
+  const { initialFocusRef, shouldCloseOnEscape, onEscapeIgnored } = options;
+
   useEffect(() => {
     if (!isOpen || !container.current) {
       return;
@@ -19,11 +28,15 @@ export function useModalFocusTrap(
       root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
     );
 
-    (focusable[0] ?? root).focus();
+    (initialFocusRef?.current ?? focusable[0] ?? root).focus();
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
+        if (shouldCloseOnEscape && !shouldCloseOnEscape()) {
+          onEscapeIgnored?.();
+          return;
+        }
         onClose();
         return;
       }
@@ -57,7 +70,9 @@ export function useModalFocusTrap(
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
-      previousActive?.focus();
+      if (previousActive?.isConnected) {
+        previousActive.focus();
+      }
     };
-  }, [isOpen, container, onClose]);
+  }, [container, initialFocusRef, isOpen, onClose, onEscapeIgnored, shouldCloseOnEscape]);
 }

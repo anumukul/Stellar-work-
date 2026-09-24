@@ -36,6 +36,18 @@ export default function RootLayout({ children }) {
 
 ---
 
+## 5. Accessible Data Tables
+
+Data tables must preserve screen-reader relationships between headers and cells at every breakpoint.
+
+- Add a concise `<caption>` for every data table. Use `sr-only` when the page already has a visible heading.
+- Use `<th scope="col">` for column headers and `<th scope="row">` for row labels.
+- Do not duplicate header rows for mobile layouts. Prefer horizontal scrolling or stacked cards when a table cannot preserve reading order.
+- Keep the first column as the row identifier when possible so narrow screens still read each row predictably.
+- Add a component test that queries the table by its caption and asserts column and row header roles.
+
+---
+
 ## 2. WalletButton
 
 The `WalletButton` provides a quick UI to connect or disconnect a user's Freighter wallet. It operates seamlessly with the `useWallet` context.

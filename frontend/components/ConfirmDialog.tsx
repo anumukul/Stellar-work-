@@ -90,6 +90,7 @@ export default function ConfirmDialog({
   onCancel,
 }: ConfirmDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const cancelButtonRef = useRef<HTMLButtonElement>(null);
   const [dontShowAgain, setDontShowAgain] = useState(false);
   const styles = VARIANT_STYLES[variant];
 
@@ -105,7 +106,10 @@ export default function ConfirmDialog({
     onConfirm();
   }, [dontShowAgain, loading, onConfirm, suppressKey]);
 
-  useModalFocusTrap(open, dialogRef, handleCancel);
+  useModalFocusTrap(open, dialogRef, handleCancel, {
+    initialFocusRef: cancelButtonRef,
+    shouldCloseOnEscape: () => !loading,
+  });
 
   useEffect(() => {
     if (!open) return;
@@ -233,6 +237,7 @@ export default function ConfirmDialog({
         {/* ── Footer buttons ──────────────────────────────────────── */}
         <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-6 py-4">
           <button
+            ref={cancelButtonRef}
             type="button"
             onClick={handleCancel}
             disabled={loading}

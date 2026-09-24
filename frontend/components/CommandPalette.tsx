@@ -304,6 +304,7 @@ export default function CommandPalette() {
                   <button
                     type="button"
                     role="option"
+                    aria-label={command.label}
                     aria-selected={index === selectedIndex}
                     onMouseEnter={() => setSelectedIndex(index)}
                     onClick={() => executeCommand(command)}

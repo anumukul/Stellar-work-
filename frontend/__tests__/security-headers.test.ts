@@ -22,12 +22,16 @@ describe("Security Headers Configuration", () => {
       expect(cspValue).toContain("default-src 'self'");
       expect(cspValue).toContain("script-src 'self'");
       expect(cspValue).toContain("connect-src");
+      expect(cspValue).toContain("frame-ancestors 'none'");
 
       // Verify standard security headers
       expect(headersMap.get("X-Content-Type-Options")).toBe("nosniff");
       expect(headersMap.get("X-Frame-Options")).toBe("DENY");
       expect(headersMap.get("Referrer-Policy")).toBe(
         "strict-origin-when-cross-origin",
+      );
+      expect(headersMap.get("Strict-Transport-Security")).toBe(
+        "max-age=63072000; includeSubDomains; preload",
       );
     }
   });
