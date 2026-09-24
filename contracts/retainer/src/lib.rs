@@ -5,8 +5,7 @@ use soroban_sdk::{
     Vec,
 };
 
-// Keep rate-limit state alive for the whole configurable window. The values are
-// in ledgers (roughly 30 days at a five-second ledger cadence).
+
 const RATE_LIMIT_STATE_TTL_THRESHOLD: u32 = 17_280;
 const RATE_LIMIT_STATE_TTL_BUMP: u32 = 518_400;
 const MAX_RATE_LIMIT_WINDOW_SECONDS: u64 = 2_592_000;
@@ -26,7 +25,7 @@ pub enum Error {
     RateLimitExceeded = 9,
 }
 
-/// Per-address call limit. A `max_calls` value of zero disables rate limiting.
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RateLimitConfig {
@@ -104,9 +103,7 @@ fn require_admin(env: &Env, admin: &Address) -> Result<(), Error> {
     Ok(())
 }
 
-/// Counts an authenticated caller's state-changing request unless the caller is
-/// trusted or rate limiting has been disabled. State is keyed by address so one
-/// user cannot consume another user's quota.
+
 fn enforce_rate_limit(env: &Env, caller: &Address) -> Result<(), Error> {
     if env
         .storage()
@@ -325,8 +322,7 @@ impl RetainerContract {
         env.storage().persistent().get(&DataKey::CrossChainJob(cross_chain_id)).expect("Cross-chain job not found")
     }
 
-    /// Sets the maximum number of state-changing calls one untrusted address may
-    /// make during `window_seconds`. Pass `(0, 0)` to disable the limiter.
+    
     pub fn set_rate_limit(
         env: Env,
         admin: Address,
@@ -361,8 +357,7 @@ impl RetainerContract {
             })
     }
 
-    /// Trusted addresses do not consume quota. This is intentionally an
-    /// explicit administrator action rather than an implicit admin exemption.
+    
     pub fn set_trusted_address(
         env: Env,
         admin: Address,
