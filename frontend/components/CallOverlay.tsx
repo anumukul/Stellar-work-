@@ -85,7 +85,7 @@ export default function CallOverlay({
           </div>
         </div>
 
-        {/* Daily.co iframe */}
+       
         <div className="aspect-video w-full overflow-hidden rounded-xl bg-black shadow-2xl">
           <iframe
             src={dailyUrl}
