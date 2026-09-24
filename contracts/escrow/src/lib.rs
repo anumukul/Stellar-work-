@@ -18,9 +18,9 @@ const MIN_DESCRIPTION_PAYLOAD_MAX_BYTES: u32 = 32;
 const MAX_DESCRIPTION_PAYLOAD_MAX_BYTES: u32 = 65_536;
 const MAX_FEE_TIERS: u32 = 10;
 
-const DEFAULT_STUCK_THRESHOLD_SECS: u64 = 7 * 24 * 60 * 60; // 7 days
+const DEFAULT_STUCK_THRESHOLD_SECS: u64 = 7 * 24 * 60 * 60; 
 
-const RECOVERY_TIMELOCK_SECS: u64 = 48 * 60 * 60; // 48 hours
+const RECOVERY_TIMELOCK_SECS: u64 = 48 * 60 * 60; 
 
 const MAX_RECOVERY_PROPOSALS: u32 = 50;
 #[allow(dead_code)]
@@ -87,9 +87,7 @@ pub struct Job {
     pub freelancer: Option<Address>,
     pub amount: i128,
     pub description_hash: BytesN<32>,
-    /// SC-138: SHA-256 hash of the job's extended metadata document stored
-    /// off-chain on IPFS. All-zero bytes means no extended metadata has been
-    /// committed yet.
+    
     pub metadata_hash: BytesN<32>,
     pub status: JobStatus,
     pub created_at: u64,
