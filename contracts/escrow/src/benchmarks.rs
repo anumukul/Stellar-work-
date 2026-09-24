@@ -3,7 +3,7 @@
 use super::*;
 use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, vec, IntoVal};
 
-/// Benchmark result for a single operation.
+
 #[derive(Debug, Clone)]
 struct BenchmarkResult {
     operation: &'static str,
@@ -68,23 +68,9 @@ fn setup_benchmark_env() -> (Env, Address, Address, Address, Address, Address) {
     (env, admin, client, freelancer, token, contract_id)
 }
 
-/// Extract CPU instructions from Soroban test environment.
-/// The soroban-sdk testutils exposes budget info via the HostContext.
+
 fn get_cpu_instructions(env: &Env) -> u64 {
-    // Note: In Soroban 21.7.7, the budget is exposed through the environment's host context.
-    // We read the budget state via the internal Host reference that is part of Env in test mode.
-    // The test environment tracks every instruction executed.
-    // For unit tests, the exact API depends on internal soroban-sdk implementation.
-    // As a fallback, we return a placeholder that will be updated with actual values
-    // from a test run to maintain reproducibility and honesty about measurement.
     
-    // In actual Soroban test environment (testutils feature), the environment tracks:
-    // - CPU instructions
-    // - Memory allocations
-    // - Storage read/write operations
-    
-    // Since the public API for extracting these in 21.7.7 is limited, we document
-    // the measurement approach and provide a mechanism that can be filled in with
     // actual values from soroban-cli inspection or instrumentation.
     0 // Placeholder; see benchmark results from cargo test execution
 }

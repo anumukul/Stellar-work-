@@ -1,15 +1,6 @@
 "use client";
 
-/**
- * AriaLiveRegion — reusable ARIA live region for screen reader announcements.
- *
- * Usage:
- *   <AriaLiveRegion message="3 results found" />
- *   <AriaLiveRegion politeness="assertive" message={errorMessage} />
- *
- * The component is visually hidden (sr-only) by default. Pass `visible` to
- * render it inline instead.
- */
+
 
 type AriaLiveRegionProps = {
   /** The text to announce. Changing this value triggers an announcement. */
