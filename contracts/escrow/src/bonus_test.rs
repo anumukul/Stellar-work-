@@ -8,10 +8,10 @@ fn test_early_completion_bonus() {
     let amount: i128 = 100_0000000;
     let bonus: i128 = 50_0000000;
 
-    // Post job with bonus
+    
     let job_id = escrow.post_job_with_categories(&client, &amount, &bonus, &desc_hash, &100u32, &deadline, &token, &vec![&env]);
     
-    // Check escrow balance
+   
     let token_client = soroban_sdk::token::Client::new(&env, &token);
     assert_eq!(token_client.balance(&contract_id), amount + bonus);
     
