@@ -17,27 +17,26 @@ const DEFAULT_DESCRIPTION_PAYLOAD_MAX_BYTES: u32 = 4096;
 const MIN_DESCRIPTION_PAYLOAD_MAX_BYTES: u32 = 32;
 const MAX_DESCRIPTION_PAYLOAD_MAX_BYTES: u32 = 65_536;
 const MAX_FEE_TIERS: u32 = 10;
-/// Default minimum time (seconds) a job must be stuck before recovery can be proposed.
+
 const DEFAULT_STUCK_THRESHOLD_SECS: u64 = 7 * 24 * 60 * 60; // 7 days
-/// Timelock (seconds) between proposing and executing a recovery.
+
 const RECOVERY_TIMELOCK_SECS: u64 = 48 * 60 * 60; // 48 hours
-/// Maximum number of active (pending) recovery proposals.
+
 const MAX_RECOVERY_PROPOSALS: u32 = 50;
 #[allow(dead_code)]
 const XLM_STROOP: i128 = 10_000_000;
 const UPGRADE_TIMELOCK_SECS: u64 = 86_400;
 
 const DEFAULT_DISPUTE_FEE: i128 = 50_000_000;
-/// Maximum number of milestones allowed per job.
+
 const MAX_MILESTONES: u32 = 20;
 
 const MAX_BATCH_DISPUTES: u32 = 20;
-/// Default burn percentage in basis points (0% = disabled by default).
+
 const DEFAULT_BURN_BPS: i128 = 0;
-/// Default oracle fee in stroops (2 XLM).
+
 const DEFAULT_ORACLE_FEE: i128 = 20_000_000;
-/// SC-123: largest page an indexer may request in one `get_events` call.
-/// Bounded so a single call cannot exceed the contract's read budget.
+
 const MAX_EVENT_PAGE_LIMIT: u32 = 100;
 
 const MAX_ATTACHMENT_LEAVES: u32 = 256;
@@ -48,8 +47,7 @@ const INSTANCE_BUMP_AMOUNT: u32 = 518_400;
 const ACTIVE_JOB_LIFETIME_THRESHOLD: u32 = 17_280;
 const ACTIVE_JOB_BUMP_AMOUNT: u32 = 518_400;
 const ARCHIVAL_JOB_BUMP_AMOUNT: u32 = 120_960;
-/// Minimum age (ledger timestamp seconds) before a completed/cancelled job may be archived.
-/// 180 days.
+
 const ARCHIVE_THRESHOLD: u64 = 180 * 24 * 60 * 60;
 
 #[contracttype]
