@@ -55,6 +55,26 @@ const results = await axe(container, {
 | Network badge | Must convey network name via text, not colour alone |
 | Status pills | Must include text labels, not just background colour |
 | Transaction previews | Interactive elements must be keyboard-navigable |
+| Data tables | Must expose a caption plus scoped column and row headers |
+| Colour pairs | Must meet WCAG AA 4.5:1 contrast for normal text |
+
+## Approved Contrast Pairs
+
+Use these text/background pairings for badges, buttons, and themed surfaces:
+
+| Usage | Text | Background |
+|-------|------|------------|
+| Primary button | `#ffffff` | `#0f172a` |
+| Danger button | `#ffffff` | `#dc2626` |
+| Warning badge | `#92400e` | `#fffbeb` |
+| Evidence badge | `#2563eb` | `#eff6ff` |
+| Review badge | `#7c3aed` | `#f5f3ff` |
+| Resolved badge | `#065f46` | `#ecfdf5` |
+| Closed badge | `#334155` | `#f1f5f9` |
+| Light body text | `#0f172a` | `#f8fafc` |
+| Dark body text | `#f1f5f9` | `#0f172a` |
+
+`color-contrast.test.ts` audits these pairs in CI. Add new pairs there before introducing new text-on-colour combinations.
 
 ## Adding Tests for a New Component
 

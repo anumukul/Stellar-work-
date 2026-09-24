@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import LegalConsentModal, { hasAcceptedLegal, acceptLegal } from "@/components/LegalConsentModal";
 
 describe("LegalConsentModal", () => {
@@ -9,9 +10,42 @@ describe("LegalConsentModal", () => {
 
   it("renders the modal with terms and privacy links", () => {
     render(<LegalConsentModal onAccept={vi.fn()} />);
+    expect(screen.getByRole("dialog", { name: "Terms of Service" })).toHaveAttribute("aria-modal", "true");
     expect(screen.getByRole("heading", { name: "Terms of Service" })).toBeInTheDocument();
     const privacyLinks = screen.getAllByRole("link", { name: /Privacy Policy/i });
     expect(privacyLinks.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("targets initial focus and restores focus when closed", async () => {
+    function Harness() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>Open legal modal</button>
+          {open && (
+            <LegalConsentModal
+              onAccept={vi.fn()}
+              onClose={() => setOpen(false)}
+            />
+          )}
+        </>
+      );
+    }
+
+    render(<Harness />);
+    const trigger = screen.getByRole("button", { name: "Open legal modal" });
+    trigger.focus();
+    fireEvent.click(trigger);
+
+    await waitFor(() => {
+      expect(screen.getByRole("checkbox")).toHaveFocus();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Decline" }));
+
+    await waitFor(() => {
+      expect(trigger).toHaveFocus();
+    });
   });
 
   it("disables accept button until checkbox is checked", () => {

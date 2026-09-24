@@ -148,14 +148,18 @@ export default function ComparePage() {
           </p>
           <div className="overflow-x-auto rounded-lg border border-slate-200">
             <table className="w-full border-collapse text-sm">
+              <caption className="sr-only">
+                Side-by-side comparison of selected jobs by field, amount, status, deadline, participants, description hash, and token
+              </caption>
               <thead>
                 <tr>
-                  <th className="border border-slate-200 bg-slate-50 px-3 py-2 text-left text-sm font-medium text-slate-700">
+                  <th scope="col" className="border border-slate-200 bg-slate-50 px-3 py-2 text-left text-sm font-medium text-slate-700">
                     Field
                   </th>
                   {entries.map(({ id }) => (
                     <th
                       key={id}
+                      scope="col"
                       className="border border-slate-200 bg-slate-50 px-3 py-2 text-left text-sm font-medium text-slate-700"
                     >
                       <Link href={`/job/${id}`} className="text-blue-600 hover:underline">

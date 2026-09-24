@@ -88,6 +88,8 @@ describe("Command palette interactions", () => {
       />,
     );
 
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
+
     fireEvent.keyDown(document, { key: "Escape" });
     expect(onCancel).toHaveBeenCalledTimes(1);
 

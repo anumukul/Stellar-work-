@@ -32,11 +32,11 @@ type Role = "client" | "freelancer" | "admin";
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const STATUS_META: Record<DisputeStatus, { label: string; color: string; dot: string }> = {
-  Active: { label: "Active", color: "text-amber-600 bg-amber-50 ring-amber-200", dot: "bg-amber-500" },
+  Active: { label: "Active", color: "text-amber-800 bg-amber-50 ring-amber-300", dot: "bg-amber-600" },
   PendingEvidence: { label: "Evidence Needed", color: "text-blue-600 bg-blue-50 ring-blue-200", dot: "bg-blue-500" },
   UnderReview: { label: "Under Review", color: "text-violet-600 bg-violet-50 ring-violet-200", dot: "bg-violet-500" },
-  Resolved: { label: "Resolved", color: "text-emerald-600 bg-emerald-50 ring-emerald-200", dot: "bg-emerald-500" },
-  Closed: { label: "Closed", color: "text-slate-500 bg-slate-100 ring-slate-200", dot: "bg-slate-400" },
+  Resolved: { label: "Resolved", color: "text-emerald-800 bg-emerald-50 ring-emerald-300", dot: "bg-emerald-600" },
+  Closed: { label: "Closed", color: "text-slate-700 bg-slate-100 ring-slate-300", dot: "bg-slate-500" },
 };
 
 function fmtDate(iso: string) {
