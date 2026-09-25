@@ -114,13 +114,14 @@ function RaiseDisputeModal({
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
+        aria-labelledby="raise-dispute-title"
         tabIndex={-1}
         className="w-full max-w-lg rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 overflow-hidden"
       >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
           <div>
-            <h2 className="text-base font-semibold text-slate-900">Raise a Dispute</h2>
+            <h2 id="raise-dispute-title" className="text-base font-semibold text-slate-900">Raise a Dispute</h2>
             <p className="text-xs text-slate-500 mt-0.5">Funds will be held in escrow until resolved</p>
           </div>
           <button
@@ -145,8 +146,9 @@ function RaiseDisputeModal({
           <div className="px-6 py-5 space-y-4">
           {/* Job selector */}
           <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1.5">Job</label>
+            <label htmlFor="dispute-job" className="block text-xs font-medium text-slate-700 mb-1.5">Job</label>
             <select
+              id="dispute-job"
               value={jobId}
               onChange={e => setJobId(e.target.value)}
               className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
@@ -159,8 +161,9 @@ function RaiseDisputeModal({
 
           {/* Reason */}
           <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1.5">Reason <span className="text-red-500">*</span></label>
+            <label htmlFor="dispute-reason" className="block text-xs font-medium text-slate-700 mb-1.5">Reason <span className="text-red-500">*</span></label>
             <textarea
+              id="dispute-reason"
               value={reason}
               onChange={e => setReason(e.target.value)}
               rows={3}
@@ -172,8 +175,9 @@ function RaiseDisputeModal({
 
           {/* Evidence */}
           <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1.5">Supporting Evidence <span className="text-slate-400">(optional)</span></label>
+            <label htmlFor="dispute-evidence" className="block text-xs font-medium text-slate-700 mb-1.5">Supporting Evidence <span className="text-slate-400">(optional)</span></label>
             <textarea
+              id="dispute-evidence"
               value={evidence}
               onChange={e => setEvidence(e.target.value)}
               rows={2}
@@ -183,7 +187,7 @@ function RaiseDisputeModal({
           </div>
 
           {error && (
-            <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600 ring-1 ring-red-200">{error}</p>
+            <p role="alert" aria-live="assertive" className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600 ring-1 ring-red-200">{error}</p>
           )}
           </div>
 

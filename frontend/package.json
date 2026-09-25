@@ -17,6 +17,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
+    "test:e2e:a11y-critical": "playwright test e2e/critical-flows-a11y.spec.ts --project=chromium",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
     "chromatic": "chromatic --storybook-build-dir storybook-static",
@@ -46,6 +47,7 @@
     "react-dom": "19.2.4"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@chromatic-com/storybook": "^5.2.1",
     "@next/bundle-analyzer": "16.3.3",
     "@playwright/test": "^1.59.1",
