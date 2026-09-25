@@ -84,6 +84,36 @@ export interface TransactionPreviewProps {
    */
   allowSubmitWithoutSimulation?: boolean;
   onReSimulate?: () => void;
+  /**
+   * Explicit payload scope shown as a labelled summary above the fee section.
+   * Lets users see exactly what they are signing (job, amount, recipient)
+   * before they hit Confirm. All fields are optional — only provided ones
+   * render.
+   */
+  payloadScope?: PayloadScope | null;
+}
+
+/**
+ * Human-readable summary of what a signing request will commit.
+ * Displayed inside TransactionPreview so users can verify the scope
+ * (job title, token amount, recipient address, deadline) before confirming.
+ */
+export interface PayloadScope {
+  /** Short name of the operation, e.g. "Post job", "Accept job". */
+  operation: string;
+  /** Amount of tokens being escrowed or transferred, with symbol (e.g. "10 XLM"). */
+  amount?: string;
+  /**
+   * Recipient address or identifier. For `post_job` this is the client
+   * address; for `approve_work` it is the freelancer; omit when not relevant.
+   */
+  recipient?: string;
+  /** Deadline date as a locale string, e.g. "2026-12-01". */
+  deadline?: string;
+  /** Job title or other identifying label for the scope. */
+  jobTitle?: string;
+  /** Contract method being invoked (e.g. "post_job"). */
+  contractMethod?: string;
 }
 
 const STALE_THRESHOLD_MS = 30_000;
@@ -96,6 +126,7 @@ export default function TransactionPreview({
   simulationError,
   allowSubmitWithoutSimulation = false,
   onReSimulate,
+  payloadScope,
 }: TransactionPreviewProps) {
   const [showRaw, setShowRaw] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -136,6 +167,59 @@ export default function TransactionPreview({
         </p>
         <p className="text-slate-600">{details}</p>
       </div>
+
+      {/* ── Payload scope summary ──────────────────────────────────────────
+           Shows the exact fields being committed so the user can verify
+           what they are signing before the wallet prompt appears.
+      ─────────────────────────────────────────────────────────────────── */}
+      {payloadScope && (
+        <div
+          className="mt-3 rounded-md bg-white px-3 py-2 ring-1 ring-inset ring-slate-200"
+          aria-label="Signing payload scope"
+        >
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            What you are signing
+          </p>
+          <dl className="space-y-1 text-sm">
+            {payloadScope.jobTitle && (
+              <div className="flex items-start justify-between gap-4">
+                <dt className="shrink-0 text-slate-500">Job</dt>
+                <dd className="text-right font-medium text-slate-800 break-words max-w-[60%]">
+                  {payloadScope.jobTitle}
+                </dd>
+              </div>
+            )}
+            {payloadScope.contractMethod && (
+              <div className="flex items-start justify-between gap-4">
+                <dt className="shrink-0 text-slate-500">Contract method</dt>
+                <dd className="font-mono text-right text-slate-700">
+                  {payloadScope.contractMethod}
+                </dd>
+              </div>
+            )}
+            {payloadScope.amount && (
+              <div className="flex items-start justify-between gap-4">
+                <dt className="shrink-0 text-slate-500">Amount</dt>
+                <dd className="font-medium text-slate-800">{payloadScope.amount}</dd>
+              </div>
+            )}
+            {payloadScope.recipient && (
+              <div className="flex items-start justify-between gap-4">
+                <dt className="shrink-0 text-slate-500">Recipient</dt>
+                <dd className="break-all font-mono text-right text-xs text-slate-700">
+                  {payloadScope.recipient}
+                </dd>
+              </div>
+            )}
+            {payloadScope.deadline && (
+              <div className="flex items-start justify-between gap-4">
+                <dt className="shrink-0 text-slate-500">Deadline</dt>
+                <dd className="text-slate-800">{payloadScope.deadline}</dd>
+              </div>
+            )}
+          </dl>
+        </div>
+      )}
 
       {simulationError && (
         <div className="mt-3 rounded-md bg-red-50 p-3 text-red-700 ring-1 ring-inset ring-red-200">
