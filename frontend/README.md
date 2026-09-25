@@ -72,3 +72,9 @@ Copy `.env.example` to `.env.local` and fill in the values. The contract ID is p
 | `npm test` | Run unit tests (vitest) |
 | `npm run test:e2e` | Run E2E tests (Playwright, headless) |
 | `npm run test:e2e -- --headed` | Run E2E tests with browser visible |
+
+## Testing
+
+For comprehensive testing information, see:
+- [Frontend Testing Strategy](../docs/FRONTEND_TESTING.md)
+- [Wallet Compatibility Testing Matrix](docs/wallet-compatibility-testing-matrix.md) - Browser and wallet extension compatibility testing

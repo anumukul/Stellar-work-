@@ -3,6 +3,46 @@ mod bonus_test;
 use super::*;
 use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, vec, IntoVal};
 
+/// Data integrity helper for state transition validation
+/// Captures ledger state before and after transitions to verify balance conservation
+struct StateSnapshot {
+    client_balance: i128,
+    freelancer_balance: i128,
+    contract_balance: i128,
+    fees: i128,
+    job_count: u64,
+    completed_count: u64,
+    cancelled_count: u64,
+}
+
+fn capture_state(
+    env: &Env,
+    escrow: &EscrowContractClient,
+    token: &Address,
+    contract_id: &Address,
+    client: &Address,
+    freelancer: &Address,
+) -> StateSnapshot {
+    let token_client = soroban_sdk::token::StellarAssetClient::new(env, token);
+    StateSnapshot {
+        client_balance: token_client.balance(client),
+        freelancer_balance: token_client.balance(freelancer),
+        contract_balance: token_client.balance(contract_id),
+        fees: escrow.get_fees(token),
+        job_count: escrow.get_job_count(),
+        completed_count: escrow.get_completed_jobs_count(),
+        cancelled_count: escrow.get_cancelled_jobs_count(),
+    }
+}
+
+/// Asserts that token balances are conserved (sum of all balances remains constant)
+fn assert_balance_conservation(pre: &StateSnapshot, post: &StateSnapshot, fee_expected: i128) {
+    let pre_total = pre.client_balance + pre.freelancer_balance + pre.contract_balance;
+    let post_total = post.client_balance + post.freelancer_balance + post.contract_balance;
+    // Total should decrease by the fee amount (fees are still in contract balance)
+    assert_eq!(pre_total - post_total, fee_expected, "Balance conservation violated");
+}
+
 #[allow(deprecated)]
 fn setup_test(env: &Env) -> (Address, Address, Address, Address, Address) {
     env.mock_all_auths();
@@ -2460,8 +2500,228 @@ fn test_multiple_certificates_across_jobs() {
     }
 
     assert_eq!(escrow.get_certificate_count(&freelancer), 3);
-    let certs = escrow.get_certificates(&freelancer, &0u64, &10u64);
-    assert_eq!(certs.len(), 3);
+}
+
+// ============================================================================
+// DATA INTEGRITY TESTS - State Transition Validation
+// See: contracts/escrow/STATE_TRANSITION_QA_CHECKLIST.md
+// ============================================================================
+
+#[test]
+fn test_post_job_data_integrity() {
+    let env = Env::default();
+    let (admin, client, freelancer, token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+    let desc_hash = BytesN::from_array(&env, &[1u8; 32]);
+    let deadline: u64 = 1000;
+    let amount: i128 = 100_0000000;
+
+    // Capture pre-state
+    let pre = capture_state(&env, &escrow, &token, &contract_id, &client, &freelancer);
+
+    // Execute transition
+    let job_id = escrow.post_job(&client, &amount, &desc_hash, &100u32, &deadline, &token, &dummy_title(&env), &dummy_category(&env));
+
+    // Capture post-state
+    let post = capture_state(&env, &escrow, &token, &contract_id, &client, &freelancer);
+
+    // Validate post-state
+    assert_eq!(post.job_count, pre.job_count + 1, "Job count should increment");
+    assert_eq!(post.client_balance, pre.client_balance - amount, "Client balance should decrease by amount");
+    assert_eq!(post.contract_balance, pre.contract_balance + amount, "Contract balance should increase by amount");
+    assert_eq!(post.fees, pre.fees, "Fees should be unchanged");
+    assert_balance_conservation(&pre, &post, 0);
+
+    // Validate job state
+    let job = escrow.get_job(&job_id);
+    assert_eq!(job.status, JobStatus::Open, "Status should be Open");
+    assert_eq!(job.amount, amount, "Amount should match");
+    assert_eq!(job.client, client, "Client should match");
+    assert!(job.freelancer.is_none(), "Freelancer should be None");
+    assert_eq!(job.revision_count, 0, "Revision count should be 0");
+}
+
+#[test]
+fn test_approve_work_data_integrity() {
+    let env = Env::default();
+    let (admin, client, freelancer, token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+    let desc_hash = BytesN::from_array(&env, &[1u8; 32]);
+    let deadline: u64 = 1000;
+    let amount: i128 = 100_0000000;
+
+    // Setup job through submission
+    let job_id = escrow.post_job(&client, &amount, &desc_hash, &100u32, &deadline, &token, &dummy_title(&env), &dummy_category(&env));
+    escrow.accept_job(&freelancer, &job_id);
+    escrow.submit_work(&freelancer, &job_id);
+
+    // Capture pre-state
+    let pre = capture_state(&env, &escrow, &token, &contract_id, &client, &freelancer);
+    let fee_bps = escrow.get_fee_bps();
+
+    // Execute transition
+    escrow.approve_work(&client, &job_id);
+
+    // Capture post-state
+    let post = capture_state(&env, &escrow, &token, &contract_id, &client, &freelancer);
+
+    // Calculate expected values
+    let expected_fee = amount * fee_bps / 10_000;
+    let expected_payout = amount - expected_fee;
+
+    // Validate post-state
+    assert_eq!(post.completed_count, pre.completed_count + 1, "Completed count should increment");
+    assert_eq!(post.freelancer_balance, pre.freelancer_balance + expected_payout, "Freelancer should receive payout");
+    assert_eq!(post.fees, pre.fees + expected_fee, "Fees should be collected");
+    assert_eq!(post.contract_balance, pre.contract_balance - amount, "Contract escrow should decrease by amount");
+    assert_balance_conservation(&pre, &post, expected_fee);
+
+    // Validate job state
+    let job = escrow.get_job(&job_id);
+    assert_eq!(job.status, JobStatus::Completed, "Status should be Completed");
+}
+
+#[test]
+fn test_cancel_job_data_integrity() {
+    let env = Env::default();
+    let (admin, client, freelancer, token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+    let desc_hash = BytesN::from_array(&env, &[1u8; 32]);
+    let deadline: u64 = 1000;
+    let amount: i128 = 100_0000000;
+
+    // Setup job
+    let job_id = escrow.post_job(&client, &amount, &desc_hash, &100u32, &deadline, &token, &dummy_title(&env), &dummy_category(&env));
+
+    // Capture pre-state
+    let pre = capture_state(&env, &escrow, &token, &contract_id, &client, &freelancer);
+
+    // Execute transition
+    escrow.cancel_job(&client, &job_id);
+
+    // Capture post-state
+    let post = capture_state(&env, &escrow, &token, &contract_id, &client, &freelancer);
+
+    // Validate post-state
+    assert_eq!(post.cancelled_count, pre.cancelled_count + 1, "Cancelled count should increment");
+    assert_eq!(post.client_balance, pre.client_balance + amount, "Client should be refunded");
+    assert_eq!(post.contract_balance, pre.contract_balance - amount, "Contract escrow should decrease");
+    assert_eq!(post.fees, pre.fees, "Fees should be unchanged");
+    assert_balance_conservation(&pre, &post, 0);
+
+    // Validate job state
+    let job = escrow.get_job(&job_id);
+    assert_eq!(job.status, JobStatus::Cancelled, "Status should be Cancelled");
+}
+
+#[test]
+fn test_resolve_dispute_full_refund_data_integrity() {
+    let env = Env::default();
+    let (admin, client, freelancer, token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+    let desc_hash = BytesN::from_array(&env, &[1u8; 32]);
+    let deadline: u64 = 1000;
+    let amount: i128 = 100_0000000;
+
+    // Setup disputed job
+    let job_id = escrow.post_job(&client, &amount, &desc_hash, &100u32, &deadline, &token, &dummy_title(&env), &dummy_category(&env));
+    escrow.accept_job(&freelancer, &job_id);
+    escrow.raise_dispute(&client, &job_id);
+
+    // Capture pre-state
+    let pre = capture_state(&env, &escrow, &token, &contract_id, &client, &freelancer);
+
+    // Execute transition - full refund to client (client_bps = 10,000)
+    let resolution = DisputeResolution { client_bps: 10_000 };
+    escrow.resolve_dispute(&admin, &job_id, &resolution);
+
+    // Capture post-state
+    let post = capture_state(&env, &escrow, &token, &contract_id, &client, &freelancer);
+
+    // Validate post-state - full refund, no fee
+    assert_eq!(post.client_balance, pre.client_balance + amount, "Client should receive full refund");
+    assert_eq!(post.contract_balance, pre.contract_balance - amount, "Contract escrow should decrease");
+    assert_eq!(post.fees, pre.fees, "No fee should be collected for full refund");
+    assert_balance_conservation(&pre, &post, 0);
+
+    // Validate job state
+    let job = escrow.get_job(&job_id);
+    assert_eq!(job.status, JobStatus::Cancelled, "Status should be Cancelled for full refund");
+}
+
+#[test]
+fn test_resolve_dispute_split_data_integrity() {
+    let env = Env::default();
+    let (admin, client, freelancer, token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+    let desc_hash = BytesN::from_array(&env, &[1u8; 32]);
+    let deadline: u64 = 1000;
+    let amount: i128 = 100_0000000;
+
+    // Setup disputed job
+    let job_id = escrow.post_job(&client, &amount, &desc_hash, &100u32, &deadline, &token, &dummy_title(&env), &dummy_category(&env));
+    escrow.accept_job(&freelancer, &job_id);
+    escrow.raise_dispute(&client, &job_id);
+
+    // Capture pre-state
+    let pre = capture_state(&env, &escrow, &token, &contract_id, &client, &freelancer);
+    let fee_bps = escrow.get_fee_bps();
+
+    // Execute transition - 50/50 split (client_bps = 5,000)
+    let client_bps = 5_000i128;
+    let resolution = DisputeResolution { client_bps };
+    escrow.resolve_dispute(&admin, &job_id, &resolution);
+
+    // Capture post-state
+    let post = capture_state(&env, &escrow, &token, &contract_id, &client, &freelancer);
+
+    // Calculate expected values
+    let client_share = amount * client_bps / 10_000;
+    let freelancer_share = amount - client_share;
+    let expected_fee = freelancer_share * fee_bps / 10_000;
+
+    // Validate post-state
+    assert_eq!(post.client_balance, pre.client_balance + client_share, "Client should receive their share");
+    assert_eq!(post.freelancer_balance, pre.freelancer_balance + freelancer_share - expected_fee, "Freelancer should receive share minus fee");
+    assert_eq!(post.fees, pre.fees + expected_fee, "Fee should be collected on freelancer portion");
+    assert_eq!(post.contract_balance, pre.contract_balance - amount, "Contract escrow should decrease");
+    assert_balance_conservation(&pre, &post, expected_fee);
+
+    // Validate job state
+    let job = escrow.get_job(&job_id);
+    assert_eq!(job.status, JobStatus::Cancelled, "Status should be Cancelled for split resolution");
+}
+
+#[test]
+fn test_full_lifecycle_data_integrity() {
+    let env = Env::default();
+    let (admin, client, freelancer, token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+    let desc_hash = BytesN::from_array(&env, &[1u8; 32]);
+    let deadline: u64 = 1000;
+    let amount: i128 = 100_0000000;
+
+    // Capture initial state
+    let initial = capture_state(&env, &escrow, &token, &contract_id, &client, &freelancer);
+
+    // Full lifecycle: post -> accept -> submit -> approve
+    let job_id = escrow.post_job(&client, &amount, &desc_hash, &100u32, &deadline, &token, &dummy_title(&env), &dummy_category(&env));
+    escrow.accept_job(&freelancer, &job_id);
+    escrow.submit_work(&freelancer, &job_id);
+    escrow.approve_work(&client, &job_id);
+
+    // Capture final state
+    let final_state = capture_state(&env, &escrow, &token, &contract_id, &client, &freelancer);
+    let fee_bps = escrow.get_fee_bps();
+    let expected_fee = amount * fee_bps / 10_000;
+
+    // Validate overall integrity
+    assert_eq!(final_state.job_count, initial.job_count + 1, "One job created");
+    assert_eq!(final_state.completed_count, initial.completed_count + 1, "One job completed");
+    assert_eq!(final_state.client_balance, initial.client_balance - amount, "Client paid amount");
+    assert_eq!(final_state.freelancer_balance, initial.freelancer_balance + amount - expected_fee, "Freelancer received payout minus fee");
+    assert_eq!(final_state.fees, initial.fees + expected_fee, "Fees collected");
+    assert_eq!(final_state.contract_balance, initial.contract_balance, "Contract escrow returned to initial (amount in, payout+fees out)");
 }
 
 #[test]

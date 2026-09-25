@@ -5,6 +5,7 @@ Use this checklist before creating a release tag.
 ## Contract
 
 - Run contract tests: `cd contracts/escrow && cargo test`
+- Review data integrity test results for state transitions (see [State Transition QA Checklist](../contracts/escrow/STATE_TRANSITION_QA_CHECKLIST.md))
 - Build contract artifact: `cd contracts/escrow && soroban contract build`
 - Confirm expected wasm exists at `contracts/escrow/target/wasm32-unknown-unknown/release/escrow.wasm`
 
