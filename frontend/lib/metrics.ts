@@ -149,6 +149,22 @@ const jobViews = counter(
   "Job detail page views reported by browsers.",
 );
 
+const fontTiming = histogram(
+  "stellarwork_font_load_milliseconds",
+  "Time from navigation start to font woff2 response end, in milliseconds.",
+  [0, 50, 100, 200, 400, 800, 1600, 3000, 6000],
+);
+
+const fontCacheHits = counter(
+  "stellarwork_font_cache_hits_total",
+  "Font woff2 requests served from browser cache (transferSize === 0).",
+);
+
+const fontCacheMisses = counter(
+  "stellarwork_font_cache_misses_total",
+  "Font woff2 requests that required a network fetch.",
+);
+
 // ── recording API ───────────────────────────────────────────────────────────
 
 /** Keeps label values low-cardinality and safe to render in the exposition format. */
@@ -210,6 +226,24 @@ export function recordActiveSession() {
 
 export function recordJobView(jobId: string) {
   incCounter(jobViews, { job_id: sanitizeLabel(jobId) });
+}
+
+export function recordFontTiming(
+  name: string,
+  durationMs: number,
+  cached: boolean,
+  path: string,
+) {
+  const labels = {
+    font: sanitizeLabel(name),
+    path: sanitizeLabel(path, "/"),
+  };
+  observe(fontTiming, labels, durationMs);
+  if (cached) {
+    incCounter(fontCacheHits, { font: sanitizeLabel(name) });
+  } else {
+    incCounter(fontCacheMisses, { font: sanitizeLabel(name) });
+  }
 }
 
 /** Test hook — drops every recorded sample. */

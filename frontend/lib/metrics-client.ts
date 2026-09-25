@@ -21,7 +21,19 @@ export type MetricSample =
   | { type: "rpc_error"; kind: string; network: string }
   | { type: "client_error"; kind: string; path: string }
   | { type: "job_view"; jobId: string }
-  | { type: "session_ping" };
+  | { type: "session_ping" }
+  | {
+      /** Font resource timing — how long the woff2 took to fetch, and whether
+       *  it was served from cache. Emitted once per font file per page load.  */
+      type: "font_timing";
+      /** The last segment of the font URL, e.g. "geist-abc123.woff2". */
+      name: string;
+      /** Total fetch duration in ms (responseEnd − startTime). */
+      durationMs: number;
+      /** True when transferSize === 0, meaning the browser used a cache hit. */
+      cached: boolean;
+      path: string;
+    };
 
 let queue: MetricSample[] = [];
 let timer: ReturnType<typeof setTimeout> | null = null;
