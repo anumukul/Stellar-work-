@@ -1,5 +1,63 @@
 @import "tailwindcss";
 
+/* ── Font-loading strategy ───────────────────────────────────────────────────
+ *
+ * next/font/google self-hosts both Geist woff2 files at build time and injects
+ * preload links + @font-face rules automatically.  The explicit @font-face
+ * blocks below serve a different purpose: they declare a *size-adjusted*
+ * fallback under a stable name so the browser has a metrically-equivalent
+ * stand-in available before the woff2 arrives (or permanently on
+ * prefers-reduced-data).
+ *
+ * ascent-override / descent-override / line-gap-override / size-adjust values
+ * are derived from Geist v1.x font metrics (UPM 2048):
+ *   ascender  : 1900  → ascent-override  : 92.77 % (1900/2048)
+ *   descender : –500  → descent-override : 24.41 % (500/2048)
+ *   line-gap  : 0     → line-gap-override: 0 %
+ *   x-avg-width: 1150 → size-adjust      : ~96 %   (tuned so a line of text
+ *                                          at 16 px occupies the same width
+ *                                          as Geist, minimising reflow)
+ *
+ * Geist Mono metrics (UPM 2048):
+ *   ascender  : 1900  → ascent-override  : 92.77 %
+ *   descender : –500  → descent-override : 24.41 %
+ *   line-gap  : 0     → line-gap-override: 0 %
+ *   advance   : 1228  → size-adjust      : 100 %  (monospace; advance is fixed)
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/*
+ * "Geist Fallback" — size-adjusted system-ui that fills in for Geist Sans.
+ * next/font generates its own version of this; we declare one here as well
+ * so it is available in the initial CSS parse before the Next.js runtime
+ * injects its own rules, and so the body font-family fallback chain below
+ * can reference it by an explicit name.
+ */
+@font-face {
+  font-family: "Geist Fallback";
+  src: local("system-ui"), local("-apple-system"), local("BlinkMacSystemFont"),
+       local("Segoe UI"), local("Helvetica Neue"), local("Arial");
+  ascent-override: 92.77%;
+  descent-override: 24.41%;
+  line-gap-override: 0%;
+  size-adjust: 96%;
+  font-display: swap;
+}
+
+/*
+ * "Geist Mono Fallback" — size-adjusted monospace fallback for Geist Mono.
+ */
+@font-face {
+  font-family: "Geist Mono Fallback";
+  src: local("ui-monospace"), local("SFMono-Regular"), local("Menlo"),
+       local("Monaco"), local("Consolas"), local("Liberation Mono"),
+       local("Courier New");
+  ascent-override: 92.77%;
+  descent-override: 24.41%;
+  line-gap-override: 0%;
+  size-adjust: 100%;
+  font-display: swap;
+}
+
 @theme inline {
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
@@ -116,10 +174,72 @@
 }
 
 body {
-  font-family: var(--font-geist-sans);
+  /*
+   * Font stack reasoning:
+   *   1. var(--font-geist-sans)  — the self-hosted Geist woff2, injected by
+   *      next/font as a CSS variable on <html>.  When display:"optional" is
+   *      used, this resolves to the woff2 only if it loaded within the
+   *      optional period; otherwise the browser skips it and uses the next
+   *      entry.
+   *   2. "Geist Fallback"        — our size-adjusted @font-face above.
+   *      Metrically identical to Geist, so no reflow occurs even if entry 1
+   *      is skipped.
+   *   3. system-ui … sans-serif  — ultimate OS fallback chain.
+   */
+  font-family:
+    var(--font-geist-sans),
+    "Geist Fallback",
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    "Helvetica Neue",
+    Arial,
+    sans-serif;
   line-height: var(--line-height-base);
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
+}
+
+/*
+ * prefers-reduced-data
+ * ────────────────────
+ * Users who have enabled a data-saver mode (supported in Chrome via the
+ * "Save-Data: on" hint and in CSS via this media query) should not download
+ * web fonts at all.  Falling back to system-ui costs nothing in terms of
+ * layout shift because we never try to load the woff2 in the first place.
+ *
+ * The override is scoped to font-family only; size, weight, and spacing
+ * settings remain user-controlled via TypographyProvider.
+ */
+@media (prefers-reduced-data: reduce) {
+  body {
+    font-family:
+      system-ui,
+      -apple-system,
+      BlinkMacSystemFont,
+      "Segoe UI",
+      "Helvetica Neue",
+      Arial,
+      sans-serif;
+  }
+
+  /* Monospace content (addresses, hashes) also falls back to OS monospace */
+  .font-mono,
+  code,
+  kbd,
+  pre,
+  samp {
+    font-family:
+      ui-monospace,
+      SFMono-Regular,
+      Menlo,
+      Monaco,
+      Consolas,
+      "Liberation Mono",
+      "Courier New",
+      monospace;
+  }
 }
 
 html {

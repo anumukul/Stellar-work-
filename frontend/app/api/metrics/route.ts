@@ -3,6 +3,7 @@ import {
   recordActiveSession,
   recordClientError,
   recordContractTx,
+  recordFontTiming,
   recordJobView,
   recordLayoutShift,
   recordPageView,
@@ -88,6 +89,17 @@ function ingest(sample: Sample) {
     case "session_ping":
       recordActiveSession();
       return;
+    case "font_timing": {
+      const durationMs = num(sample.durationMs);
+      if (durationMs === null) return;
+      recordFontTiming(
+        str(sample.name),
+        durationMs,
+        Boolean(sample.cached),
+        str(sample.path),
+      );
+      return;
+    }
     default:
       return;
   }
