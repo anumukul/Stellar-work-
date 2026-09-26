@@ -22,6 +22,9 @@ const MIN_DESCRIPTION_PAYLOAD_MAX_BYTES: u32 = 32;
 /// before it checks the configured budget, and `set_desc_payload_max` refuses to
 /// configure anything above it.
 pub const MAX_DESC_LEN: u32 = 65_536;
+
+/// SC-156 (#984): length of a job slug in characters, all lowercase hex.
+pub const SLUG_LEN: u32 = 16;
 const MAX_DESCRIPTION_PAYLOAD_MAX_BYTES: u32 = MAX_DESC_LEN;
 const MAX_FEE_TIERS: u32 = 10;
 
@@ -288,6 +291,21 @@ pub struct RecoveryProposal {
     pub approval_count: u32,
 }
 
+/// SC-156 (#984): the two slug indexes, kept in their own contract type.
+///
+/// `DataKey` is already a 52-case union, and the SDK's `contracttype` derive
+/// refuses to go past the case limit it can encode, so a second small union is
+/// the way to add keys at this point — it also keeps the slug index
+/// self-contained.
+#[contracttype]
+#[derive(Clone)]
+pub enum SlugKey {
+    /// Slug -> job id, so a shareable URL resolves to its job.
+    SlugToJob(String),
+    /// Job id -> slug, so a job's slug can be read directly.
+    JobSlug(u64),
+}
+
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
@@ -456,6 +474,8 @@ pub enum Error {
     /// SC-154 (#982): content that the contract refuses to store, because it is
     /// empty or larger than the byte budget the contract can enforce.
     InvalidContent = 53,
+    /// SC-156 (#984): every candidate slug for a job was taken.
+    SlugSpaceExhausted = 54,
     BatchTooLarge = 33,
     AttestationNotFound = 34,
     OracleNotFound = 37,
@@ -1105,6 +1125,10 @@ impl EscrowContract {
         };
 
         set_job(&e, job_id, &job);
+        // SC-156 (#984): give the job its slug, indexing it both ways and
+        // emitting `job_slug_assigned`. Done before the escrow balance so a job
+        // can never exist without the slug its URL needs.
+        assign_job_slug(&e, job_id, &job.description_hash);
         set_escrow_balance(&e, job_id, amount);
 
         let mut all_ids: Vec<u64> = e
@@ -2405,6 +2429,23 @@ impl EscrowContract {
 
     pub fn get_desc_payload_max(e: Env) -> u32 {
         get_description_payload_max_bytes_storage(&e)
+    }
+
+    /// SC-156 (#984): resolve a slug back to its job id — the shareable-URL half
+    /// of the feature.
+    pub fn get_job_by_slug(e: Env, slug: String) -> u64 {
+        e.storage()
+            .persistent()
+            .get(&SlugKey::SlugToJob(slug))
+            .unwrap_or_else(|| panic_with_error!(&e, Error::JobNotFound))
+    }
+
+    /// SC-156 (#984): the slug assigned to a job.
+    pub fn get_job_slug(e: Env, job_id: u64) -> String {
+        e.storage()
+            .persistent()
+            .get(&SlugKey::JobSlug(job_id))
+            .unwrap_or_else(|| panic_with_error!(&e, Error::JobNotFound))
     }
 
     /// SC-154 (#982): every content budget the contract enforces, in one read.
@@ -4885,6 +4926,74 @@ fn get_jobs_count(e: &Env) -> u64 {
         .unwrap_or(0)
 }
 
+/// SC-156 (#984): one hex character for a nibble.
+fn hex_char(value: u8) -> u8 {
+    match value {
+        0..=9 => b'0' + value,
+        _ => b'a' + (value - 10),
+    }
+}
+
+/// SC-156 (#984): the slug for a given attempt.
+///
+/// `SLUG_LEN - 2` characters come from the job's content hash, so a slug is
+/// deterministic and reproducible from the content itself. The final two carry a
+/// disambiguating counter: two jobs posted with identical content would
+/// otherwise produce the same slug, and the counter is what keeps the second one
+/// addressable. Fixed width is deliberate — it means no concatenation, and a
+/// shareable URL is always the same shape.
+fn slug_for_attempt(e: &Env, desc_hash: &BytesN<32>, attempt: u32) -> String {
+    let bytes = desc_hash.to_array();
+    let content_chars = (SLUG_LEN - 2) as usize;
+    let mut buf = [0u8; SLUG_LEN as usize];
+
+    for (i, slot) in buf.iter_mut().enumerate().take(content_chars) {
+        let byte = bytes[i / 2];
+        let nibble = if i % 2 == 0 { byte >> 4 } else { byte & 0x0f };
+        *slot = hex_char(nibble);
+    }
+
+    let counter = (attempt % 256) as u8;
+    buf[content_chars] = hex_char(counter >> 4);
+    buf[content_chars + 1] = hex_char(counter & 0x0f);
+
+    String::from_bytes(e, &buf)
+}
+
+/// SC-156 (#984): assign a job its slug, resolving collisions by counter.
+///
+/// Returns the slug that was stored, and indexes it both ways so a URL can be
+/// resolved to a job and a job to its slug.
+fn assign_job_slug(e: &Env, job_id: u64, desc_hash: &BytesN<32>) -> String {
+    let mut attempt: u32 = 0;
+    loop {
+        let slug = slug_for_attempt(e, desc_hash, attempt);
+        if !e
+            .storage()
+            .persistent()
+            .has(&SlugKey::SlugToJob(slug.clone()))
+        {
+            e.storage()
+                .persistent()
+                .set(&SlugKey::SlugToJob(slug.clone()), &job_id);
+            e.storage()
+                .persistent()
+                .set(&SlugKey::JobSlug(job_id), &slug);
+            e.events().publish(
+                (Symbol::new(e, "job_slug_assigned"),),
+                (job_id, slug.clone()),
+            );
+            return slug;
+        }
+        // A collision means identical content hashes; the counter byte moves the
+        // last two characters, so 256 attempts is the whole space.
+        attempt += 1;
+        if attempt >= 256 {
+            panic_with_error!(e, Error::SlugSpaceExhausted);
+        }
+    }
+}
+
 fn next_job_id(e: &Env) -> u64 {
     let count = get_jobs_count(e);
     let next = count + 1;
@@ -6902,6 +7011,85 @@ mod test {
             &native_token,
         );
         assert_eq!(job_id, 1);
+    }
+
+    /// SC-156 (#984): the slug the contract must produce for a given attempt —
+    /// the first seven bytes of the test's content hash as lowercase hex, then
+    /// the counter byte. Written out here so the expected value is independent of
+    /// the contract's own code.
+    fn expected_slug(env: &Env, attempt: u8) -> String {
+        let bytes = hash(env).to_array();
+        let mut hex = std::string::String::new();
+        for byte in bytes.iter().take(7) {
+            hex.push_str(&format!("{byte:02x}"));
+        }
+        hex.push_str(&format!("{attempt:02x}"));
+        String::from_str(env, &hex)
+    }
+
+    /// SC-156 (#984): a slug is fixed-width lowercase hex, so a shareable link
+    /// always has the same shape, and it resolves back to its job.
+    #[test]
+    fn job_slug_is_fixed_width_hex_and_resolves_back_to_its_job() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+
+        let slug = client.get_job_slug(&job_id);
+        assert_eq!(slug.len(), SLUG_LEN);
+        // Exact value, not just a shape: the first seven bytes of the content
+        // hash as lowercase hex, then the disambiguating counter (`00` first).
+        assert_eq!(slug, expected_slug(&env, 0));
+        assert_eq!(client.get_job_by_slug(&slug), job_id);
+    }
+
+    /// SC-156 (#984): identical content hashes collide, and the disambiguating
+    /// pair is what keeps every job reachable — including its own URL.
+    #[test]
+    fn jobs_with_identical_content_get_distinct_slugs() {
+        let (env, client, _, user, _, native_token) = setup();
+        let first = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        let second = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+
+        let first_slug = client.get_job_slug(&first);
+        let second_slug = client.get_job_slug(&second);
+        assert_ne!(first_slug, second_slug);
+        assert_eq!(client.get_job_by_slug(&first_slug), first);
+        assert_eq!(client.get_job_by_slug(&second_slug), second);
+
+        // Only the counter pair differs: the second job keeps the same content
+        // prefix and is disambiguated by the trailing `01`, which is what makes
+        // slugs reproducible from the content and still unique.
+        assert_eq!(first_slug, expected_slug(&env, 0));
+        assert_eq!(second_slug, expected_slug(&env, 1));
+    }
+
+    /// SC-156 (#984): a slug that was never assigned must not resolve to a job.
+    #[test]
+    #[should_panic(expected = "Error(Contract, #1)")]
+    fn unknown_slug_does_not_resolve() {
+        let (env, client, _, _, _, _) = setup();
+        client.get_job_by_slug(&String::from_str(&env, "0000000000000000"));
     }
 
     /// SC-154 (#982): the reader exists so a frontend can render counters and
