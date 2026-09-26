@@ -15,7 +15,14 @@ const MAX_REVISIONS: u32 = 3;
 const CONTRACT_VERSION: u32 = 1;
 const DEFAULT_DESCRIPTION_PAYLOAD_MAX_BYTES: u32 = 4096;
 const MIN_DESCRIPTION_PAYLOAD_MAX_BYTES: u32 = 32;
-const MAX_DESCRIPTION_PAYLOAD_MAX_BYTES: u32 = 65_536;
+/// SC-154 (#982): hard ceiling on the description payload, in bytes.
+///
+/// This one cannot be raised by configuration, so an oversized description can
+/// never be pushed through by moving the admin knob: `post_job` checks this
+/// before it checks the configured budget, and `set_desc_payload_max` refuses to
+/// configure anything above it.
+pub const MAX_DESC_LEN: u32 = 65_536;
+const MAX_DESCRIPTION_PAYLOAD_MAX_BYTES: u32 = MAX_DESC_LEN;
 const MAX_FEE_TIERS: u32 = 10;
 
 const DEFAULT_STUCK_THRESHOLD_SECS: u64 = 7 * 24 * 60 * 60; 
@@ -102,6 +109,24 @@ pub struct Job {
     pub attachments_root: BytesN<32>,
     /// Categories for the job. Multiple allowed.
     pub categories: Vec<JobCategory>,
+}
+
+/// SC-154 (#982): every content budget the contract enforces, in one read, so a
+/// frontend can render counters and refuse submissions without hardcoding the
+/// numbers.
+///
+/// `max_desc_len` is the hard ceiling and never changes; `desc_payload_max_bytes`
+/// is the admin-configured budget, which is the tighter of the two by default.
+/// Titles are not stored on-chain (jobs are content-addressed), so there is no
+/// title length to report.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContentLimits {
+    pub max_desc_len: u32,
+    pub min_desc_payload_max_bytes: u32,
+    pub desc_payload_max_bytes: u32,
+    pub max_categories: u32,
+    pub max_attachment_leaves: u32,
 }
 
 /// SC-123: one lifecycle event, recorded in a sequence an indexer can page.
@@ -428,6 +453,9 @@ pub enum Error {
     NoPendingTransfer = 30,
     NotPendingAdmin = 31,
     BatchSizeMismatch = 32,
+    /// SC-154 (#982): content that the contract refuses to store, because it is
+    /// empty or larger than the byte budget the contract can enforce.
+    InvalidContent = 53,
     BatchTooLarge = 33,
     AttestationNotFound = 34,
     OracleNotFound = 37,
@@ -1025,6 +1053,12 @@ impl EscrowContract {
         require_active_access(&e, &client);
         if deadline != 0 && e.ledger().timestamp() > deadline {
             panic_with_error!(&e, Error::InvalidDeadline);
+        }
+        // (#982) The hard ceiling first: the configured budget is admin-editable,
+        // this one is not, so a mis-set configuration cannot open the door to an
+        // unbounded payload.
+        if description_payload_len > MAX_DESC_LEN {
+            panic_with_error!(&e, Error::InvalidContent);
         }
         if description_payload_len > get_description_payload_max_bytes_storage(&e) {
             panic_with_error!(&e, Error::DescriptionPayloadTooLarge);
@@ -2371,6 +2405,17 @@ impl EscrowContract {
 
     pub fn get_desc_payload_max(e: Env) -> u32 {
         get_description_payload_max_bytes_storage(&e)
+    }
+
+    /// SC-154 (#982): every content budget the contract enforces, in one read.
+    pub fn get_content_limits(e: Env) -> ContentLimits {
+        ContentLimits {
+            max_desc_len: MAX_DESC_LEN,
+            min_desc_payload_max_bytes: MIN_DESCRIPTION_PAYLOAD_MAX_BYTES,
+            desc_payload_max_bytes: get_description_payload_max_bytes_storage(&e),
+            max_categories: MAX_CATEGORIES,
+            max_attachment_leaves: MAX_ATTACHMENT_LEAVES,
+        }
     }
 
     pub fn set_desc_payload_max(e: Env, caller: Address, max_bytes: u32) {
@@ -6857,6 +6902,85 @@ mod test {
             &native_token,
         );
         assert_eq!(job_id, 1);
+    }
+
+    /// SC-154 (#982): the reader exists so a frontend can render counters and
+    /// refuse submissions without hardcoding any of these numbers.
+    #[test]
+    fn get_content_limits_reports_the_enforced_budgets() {
+        let (_, client, admin, _, _, _) = setup();
+        let limits = client.get_content_limits();
+        assert_eq!(limits.max_desc_len, MAX_DESC_LEN);
+        assert_eq!(
+            limits.min_desc_payload_max_bytes,
+            MIN_DESCRIPTION_PAYLOAD_MAX_BYTES
+        );
+        assert_eq!(
+            limits.desc_payload_max_bytes,
+            DEFAULT_DESCRIPTION_PAYLOAD_MAX_BYTES
+        );
+        assert_eq!(limits.max_categories, MAX_CATEGORIES);
+        assert_eq!(limits.max_attachment_leaves, MAX_ATTACHMENT_LEAVES);
+
+        // It follows the configuration too, because the configured budget is the
+        // tighter of the two and the one `post_job` compares against first.
+        client.set_desc_payload_max(&admin, &1024u32);
+        assert_eq!(client.get_content_limits().desc_payload_max_bytes, 1024);
+    }
+
+    /// SC-154 (#982): the hard ceiling is the whole point — it holds even when
+    /// the configurable budget has been raised all the way to it, so no
+    /// configuration can push a payload past `MAX_DESC_LEN`.
+    #[test]
+    #[should_panic(expected = "Error(Contract, #53)")]
+    fn post_job_rejects_content_above_the_hard_cap_even_when_the_config_allows_it() {
+        let (env, client, admin, user, _, native_token) = setup();
+        client.set_desc_payload_max(&admin, &MAX_DESC_LEN);
+
+        client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &(MAX_DESC_LEN + 1),
+            &0u64,
+            &native_token,
+        );
+    }
+
+    /// Boundary: exactly at the ceiling is accepted, so the check is a ceiling
+    /// and not an off-by-one rejection.
+    #[test]
+    fn post_job_accepts_content_exactly_at_the_hard_cap() {
+        let (env, client, admin, user, _, native_token) = setup();
+        client.set_desc_payload_max(&admin, &MAX_DESC_LEN);
+
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &MAX_DESC_LEN,
+            &0u64,
+            &native_token,
+        );
+        assert_eq!(job_id, 1);
+    }
+
+    /// The configured budget is the tighter of the two by default and keeps its
+    /// own error, so a caller can tell "too large for the current setting"
+    /// (an admin can raise it) from "too large for the contract" (nobody can).
+    #[test]
+    #[should_panic(expected = "Error(Contract, #17)")]
+    fn post_job_rejects_content_above_the_configured_budget_with_its_own_error() {
+        let (env, client, _, user, _, native_token) = setup();
+
+        client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &(DEFAULT_DESCRIPTION_PAYLOAD_MAX_BYTES + 1),
+            &0u64,
+            &native_token,
+        );
     }
 
     #[test]
