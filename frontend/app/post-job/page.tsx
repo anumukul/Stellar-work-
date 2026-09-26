@@ -10,12 +10,14 @@ import {
 import { estimateTransactionFee, type FeeEstimate } from "@/lib/fee-estimator";
 import TransactionPreview, {
   feeEstimateToSimulation,
+  type PayloadScope,
 } from "@/components/TransactionPreview";
+import SigningOriginWarning from "@/components/SigningOriginWarning";
 import { uploadToIpfs } from "@/lib/ipfs-service";
 import ErrorBanner from "@/components/ErrorBanner";
 import ContractRetryBanner from "@/components/ContractRetryBanner";
 import dynamic from "next/dynamic";
-import { getExplorerTxUrl, isValidStellarAddress, parseContractError, getNativeBalance, retryQueuedWrites } from "@/lib/stellar";
+import { getExplorerTxUrl, isValidStellarAddress, parseContractError, getNativeBalance, retryQueuedWrites, getCurrentOriginResult, type OriginValidationResult } from "@/lib/stellar";
 import { useWallet } from "@/lib/wallet-context";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState } from "react";
@@ -318,6 +320,9 @@ export default function PostJobPage() {
     cooldownEndsAt: null,
     isLimited: false,
   });
+  // Origin validation — computed once on mount so the SigningOriginWarning
+  // banner can be displayed before the user clicks Confirm.
+  const [originResult, setOriginResult] = useState<OriginValidationResult | null>(null);
   const [tags, setTags] = useState<string[]>([]);
   const [advancedOpen, setAdvancedOpen] = useState(() => {
     if (typeof window === "undefined") return false;
@@ -401,6 +406,13 @@ export default function PostJobPage() {
       setEstimating(false);
     }
   }, [wallet]);
+
+  // Compute the origin validation result once on mount (client-side only).
+  // This is synchronous and does not touch the wallet or network.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setOriginResult(getCurrentOriginResult());
+  }, []);
 
   useEffect(() => {
     void getDescPayloadMax()
@@ -982,7 +994,21 @@ export default function PostJobPage() {
               simulating={estimating}
               simulationError={estimateError ?? undefined}
               allowSubmitWithoutSimulation
+              payloadScope={{
+                operation: "Post job",
+                contractMethod: "post_job",
+                jobTitle: title.trim() || undefined,
+                amount: amount ? `${amount} XLM` : undefined,
+                recipient: wallet ?? undefined,
+                deadline: deadline || undefined,
+              }}
             />
+            {originResult && (
+              <SigningOriginWarning
+                originResult={originResult}
+                suppress={originResult.isPlatformOrigin}
+              />
+            )}
             <div className="flex items-center gap-2">
               <button
                 type="button"
