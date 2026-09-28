@@ -96,7 +96,7 @@ jobs:
             "contracts/escrow/target/wasm32-unknown-unknown/release/escrow.wasm"
 
       - name: Upload WASM artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: escrow-wasm-${{ steps.wasm_hash.outputs.hash }}
           path: contracts/escrow/target/wasm32-unknown-unknown/release/escrow.wasm
