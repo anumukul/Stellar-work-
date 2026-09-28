@@ -73,7 +73,7 @@ jobs:
       - name: Weekly repo hygiene report
         run: |
           gh api "repos/$GITHUB_REPOSITORY/branches?per_page=100" --jq '.[].name' > stale-branches.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: weekly-hygiene-report
           path: stale-branches.txt
