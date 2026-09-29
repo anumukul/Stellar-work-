@@ -46,7 +46,7 @@ export default function CommandPalette() {
         setRecentIds(JSON.parse(stored));
       }
     } catch (e) {
-      // Ignore
+      
     }
   }, []);
 
@@ -181,7 +181,7 @@ export default function CommandPalette() {
     const normalized = query.trim().toLowerCase();
     
     if (!normalized) {
-      // Show recent commands first if no query
+      
       const recent = commands.filter((c) => recentIds.includes(c.id))
         .sort((a, b) => recentIds.indexOf(a.id) - recentIds.indexOf(b.id));
       const others = commands.filter((c) => !recentIds.includes(c.id));
@@ -207,7 +207,7 @@ export default function CommandPalette() {
         try {
           localStorage.setItem(RECENT_COMMANDS_KEY, JSON.stringify(newRecent));
         } catch (e) {
-          // Ignore
+          
         }
         return newRecent;
       });
