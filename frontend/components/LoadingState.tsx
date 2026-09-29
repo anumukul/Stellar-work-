@@ -5,9 +5,9 @@ import Spinner from "@/components/Spinner";
 type LoadingStateProps = {
   text: string;
   className?: string;
-  /** Spinner size. Defaults to `"sm"`. */
+  
   size?: "sm" | "md" | "lg" | number;
-  /** Spinner color. Defaults to the surrounding text color. */
+  
   color?: string;
 };
 
