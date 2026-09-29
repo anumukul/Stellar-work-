@@ -7,6 +7,7 @@ import {
   adminGetAllJobs,
   adminGetJobCount,
   getJobStatusCounts,
+  getPlatformFeeRate,
   setWhitelistMode,
   addToBlacklist,
   removeFromBlacklist,
@@ -46,12 +47,22 @@ import {
 } from "@/lib/feature-flags";
 
 const TX_LOG_KEY = "stellarwork:admin-withdrawals";
+// #1050 — platform fee change history stored locally
+const FEE_HISTORY_KEY = "stellarwork:admin-fee-history";
 
 interface WithdrawalTx {
   id: string;
   amount: string;
   timestamp: number;
   status: "completed";
+}
+
+interface FeeChangeRecord {
+  id: string;
+  feeBps: number;
+  note: string;
+  timestamp: number;
+  changedBy: string;
 }
 
 const STATUS_LABELS: Record<JobStatus, string> = {
@@ -100,6 +111,12 @@ export default function AdminPage() {
 
   const [featureFlags, setFeatureFlags] = useState<Record<string, boolean>>({});
   const flagNames = useMemo(() => getAllFlagNames(), []);
+
+  // #1050 — platform fee history
+  const [feeHistory, setFeeHistory] = useState<FeeChangeRecord[]>([]);
+  const [feeChangeNote, setFeeChangeNote] = useState("");
+  const [liveFeeRateBps, setLiveFeeRateBps] = useState<number | null>(null);
+  const [recordingFee, setRecordingFee] = useState(false);
 
   useEffect(() => {
     initFeatureFlags();
@@ -191,11 +208,23 @@ export default function AdminPage() {
           setAnnouncementType(parsed.type);
           setAnnouncementEnabled(parsed.enabled);
         }
+
+        // #1050 — load fee change history
+        const rawFeeHist = localStorage.getItem(FEE_HISTORY_KEY);
+        if (rawFeeHist) setFeeHistory(JSON.parse(rawFeeHist) as FeeChangeRecord[]);
       } catch {
         /* ignore */
       }
     }
   }, []);
+
+  // #1050 — fetch live platform fee rate when admin data loads
+  useEffect(() => {
+    if (!wallet) return;
+    getPlatformFeeRate()
+      .then((bps) => { if (bps !== null) setLiveFeeRateBps(bps); })
+      .catch(() => {});
+  }, [wallet]);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -672,6 +701,81 @@ export default function AdminPage() {
           onCancel={() => setShowWithdrawConfirm(false)}
         />
       )}
+
+      {/* #1050 — Platform Fee Change History */}
+      <SectionCard title="Platform Fee History">
+        <div className="mt-3 space-y-4">
+          {liveFeeRateBps !== null && (
+            <p className="text-sm text-slate-700">
+              Current on-chain fee rate:{" "}
+              <strong className="font-semibold">{(liveFeeRateBps / 100).toFixed(2)}%</strong>
+            </p>
+          )}
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+            <div className="flex-1">
+              <label className="block text-sm font-medium text-slate-700" htmlFor="fee-change-note">
+                Record a fee change note
+              </label>
+              <input
+                id="fee-change-note"
+                type="text"
+                className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+                placeholder={`e.g. Increased fee to ${liveFeeRateBps !== null ? (liveFeeRateBps / 100).toFixed(2) : "2.50"}% — market adjustment`}
+                value={feeChangeNote}
+                onChange={(e) => setFeeChangeNote(e.target.value)}
+                maxLength={200}
+              />
+            </div>
+            <button
+              className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={!feeChangeNote.trim() || recordingFee}
+              onClick={() => {
+                if (!wallet || !feeChangeNote.trim()) return;
+                setRecordingFee(true);
+                const entry: FeeChangeRecord = {
+                  id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                  feeBps: liveFeeRateBps ?? 250,
+                  note: feeChangeNote.trim(),
+                  timestamp: Date.now(),
+                  changedBy: wallet,
+                };
+                setFeeHistory((prev) => {
+                  const next = [entry, ...prev].slice(0, 50);
+                  try { localStorage.setItem(FEE_HISTORY_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+                  return next;
+                });
+                setFeeChangeNote("");
+                setRecordingFee(false);
+              }}
+            >
+              Record
+            </button>
+          </div>
+          {feeHistory.length === 0 ? (
+            <p className="text-sm text-slate-400 italic">No fee change records yet. Use the form above to log a fee adjustment.</p>
+          ) : (
+            <div className="divide-y divide-slate-100 rounded-md border border-slate-200">
+              {feeHistory.map((entry) => (
+                <div key={entry.id} className="flex items-start justify-between px-4 py-3 text-sm">
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium text-slate-900 truncate">{entry.note}</p>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Rate at time: <strong>{(entry.feeBps / 100).toFixed(2)}%</strong>{" • "}
+                      {new Date(entry.timestamp).toLocaleDateString("en-GB", {
+                        day: "numeric", month: "short", year: "numeric",
+                        hour: "2-digit", minute: "2-digit",
+                      })}
+                    </p>
+                  </div>
+                  <span className="ml-4 shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                    {(entry.feeBps / 100).toFixed(2)}%
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </SectionCard>
 
       {withdrawals.length > 0 && (
         <SectionCard title="Withdrawal History">

@@ -661,6 +661,27 @@ export async function getJobStatusCounts(): Promise<JobStatusCounts> {
   };
 }
 
+/**
+ * Fetch the current platform fee rate in basis points (bps) from the contract.
+ * Returns null when the contract method is not available (e.g. older deployment),
+ * so callers can fall back to the hard-coded default of 250 bps (2.5 %).
+ */
+export async function getPlatformFeeRate(): Promise<number | null> {
+  try {
+    const response = await callContract(
+      getActiveContractId(),
+      "get_platform_fee",
+      [],
+      { readOnly: true },
+    );
+    const raw = response.data;
+    if (raw == null) return null;
+    return Number(raw);
+  } catch {
+    return null;
+  }
+}
+
 export async function relayCancelJob(relayer: string, client: string, jobId: string) {
   return callContract(getActiveContractId(), "relay_cancel_job", [
     nativeToScVal(relayer, { type: "address" }),

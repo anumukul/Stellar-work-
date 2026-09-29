@@ -12,6 +12,7 @@ import NetworkSwitcher from "@/components/NetworkSwitcher";
 import NotificationInbox from "@/components/NotificationInbox";
 import WalletMenu from "@/components/WalletMenu";
 import VoiceNav from "@/components/VoiceNav";
+import { useNotifications } from "@/lib/notifications-context";
 
 const ThemeToggle = memo(function ThemeToggle() {
   const { theme, setTheme } = useTheme();
@@ -71,12 +72,24 @@ export const Navigation = memo(function Navigation() {
   const pathname = usePathname();
   const { wallet } = useWallet();
   const { unreadCount } = useMessaging();
-  const [notificationUnreadCount] = useState(0);
+  // #1049 — wire up real notification unread count (job status updates)
+  const { unreadCount: notificationUnreadCount } = useNotifications();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const firstLinkRef = useRef<HTMLAnchorElement>(null);
   const lastLinkRef = useRef<HTMLAnchorElement>(null);
+
+  // #1049 — update document.title to reflect unread job update notifications
+  useEffect(() => {
+    const base = "StellarWork";
+    const total = notificationUnreadCount + unreadCount;
+    if (total > 0) {
+      document.title = `(${total > 99 ? "99+" : total}) ${base}`;
+    } else {
+      document.title = base;
+    }
+  }, [notificationUnreadCount, unreadCount]);
 
   useEffect(() => {
     setMenuOpen(false);
