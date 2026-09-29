@@ -56,7 +56,7 @@ fn setup_benchmark_env() -> (Env, Address, Address, Address, Address, Address) {
     
     let token = env.register_stellar_asset_contract(client.clone());
     let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token);
-    // Mint large amount to avoid transfer failures during benchmarks
+   
     token_admin.mint(&client, &1_000_000_000_000_000_000i128);
 
     let contract_id = env.register_contract(None, EscrowContract);
@@ -116,7 +116,7 @@ fn measure_accept_job(
     let escrow = EscrowContractClient::new(env, contract_id);
     let token = env.register_stellar_asset_contract(client.clone());
     
-    // Setup: post a job first
+   
     let admin = Address::generate(env);
     escrow.initialize(&admin, &token);
     escrow.add_allowed_token(&admin, &token);
@@ -125,7 +125,7 @@ fn measure_accept_job(
     let deadline: u64 = 10000;
     let job_id = escrow.post_job(client, &amount, &desc_hash, &100u32, &deadline, &token);
 
-    // Measure accept_job
+    
     let cpu_before = 0u64;
     escrow.accept_job(freelancer, &job_id);
     let cpu_after = 0u64;
@@ -133,10 +133,10 @@ fn measure_accept_job(
     BenchmarkResult::new(
         "accept_job",
         amount,
-        cpu_after - cpu_before, // CPU instructions
-        250, // Ledger read bytes (Job read, deadline check)
-        280, // Ledger write bytes (Job write, SLAAcceptedAt write)
-        896, // Memory
+        cpu_after - cpu_before, 
+        250, 
+        280, 
+        896, 
     )
 }
 
@@ -150,7 +150,7 @@ fn measure_submit_work(
     let escrow = EscrowContractClient::new(env, contract_id);
     let token = env.register_stellar_asset_contract(client.clone());
     
-    // Setup: post and accept first
+    
     let admin = Address::generate(env);
     escrow.initialize(&admin, &token);
     escrow.add_allowed_token(&admin, &token);
