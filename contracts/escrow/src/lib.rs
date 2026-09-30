@@ -29,6 +29,9 @@ const UPGRADE_TIMELOCK_SECS: u64 = 86_400;
 
 const DEFAULT_DISPUTE_FEE: i128 = 50_000_000;
 
+const DEFAULT_DISPUTE_COOLDOWN_LEDGER: u64 = 0;
+const MAX_DISPUTE_COOLDOWN_LEDGER: u64 = 30 * 24 * 60 * 60;
+
 const MAX_MILESTONES: u32 = 20;
 
 const MAX_BATCH_DISPUTES: u32 = 20;
@@ -373,6 +376,10 @@ pub enum DataKey {
     ArchivedJob(u64),
     /// SC-82: number of jobs moved to archive storage.
     ArchiveCount,
+    /// SC-159: ledger timestamp of the last dispute resolution for a job.
+    DisputeCooldownLedger(u64),
+    /// SC-159: configurable cooldown window (seconds) after a dispute resolution.
+    DisputeCooldownWindow,
     Oracle(Address),
     OracleEnabled,
     OracleAssignment(u64),
