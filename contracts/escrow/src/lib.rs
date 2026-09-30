@@ -448,6 +448,14 @@ pub enum ExtKey {
     /// Per-client cap on concurrently active jobs. `0` (the default) disables
     /// the cap. Stored in instance storage.
     MaxJobsPerClient,
+    /// Ordered list of job IDs posted by a client address.
+    ClientJobIds(Address),
+    /// Ordered list of job IDs accepted by a freelancer address.
+    FreelancerJobIds(Address),
+    /// Ordered list of job IDs that are disputed, indexed per party
+    /// (client or freelancer).  Both parties share the same key pattern so
+    /// either party can look up disputes they are involved in.
+    DisputesByAddress(Address),
 }
 
 #[contracterror]
@@ -1279,6 +1287,9 @@ impl EscrowContract {
         set_job(&e, job_id, &job);
         set_escrow_balance(&e, job_id, amount);
 
+        // Index the new job under the client's address so get_client_jobs is O(1).
+        push_address_job_index(&e, &ExtKey::ClientJobIds(client.clone()), job_id);
+
         let mut all_ids: Vec<u64> = e
             .storage()
             .persistent()
@@ -1368,6 +1379,10 @@ impl EscrowContract {
         job.status = JobStatus::InProgress;
         set_job(&e, job_id, &job);
         bump_instance_ttl(&e);
+
+        // Index the accepted job under the freelancer's address so
+        // get_freelancer_jobs is O(1).
+        push_address_job_index(&e, &ExtKey::FreelancerJobIds(freelancer.clone()), job_id);
 
         e.events().publish(
             (Symbol::new(&e, "job_accepted"),),
@@ -2110,6 +2125,21 @@ impl EscrowContract {
         set_job(&e, job_id, &job);
         bump_instance_ttl(&e);
 
+        // Index this dispute under both parties so get_disputes_for_address
+        // can serve either the client or the freelancer without a full scan.
+        push_address_job_index(
+            &e,
+            &ExtKey::DisputesByAddress(job.client.clone()),
+            job_id,
+        );
+        if let Some(ref fl) = job.freelancer {
+            push_address_job_index(
+                &e,
+                &ExtKey::DisputesByAddress(fl.clone()),
+                job_id,
+            );
+        }
+
         let oracle_enabled: bool = e
             .storage()
             .instance()
@@ -2458,6 +2488,78 @@ impl EscrowContract {
         }
 
         matches
+    }
+
+    /// Return all job IDs posted by `client` as an ordered `Vec<u64>`.
+    ///
+    /// The list is built incrementally as jobs are posted, so this call is
+    /// O(1) in storage reads — no full-set scan is required.
+    pub fn get_client_jobs(e: Env, client: Address) -> Vec<u64> {
+        e.storage()
+            .persistent()
+            .get::<ExtKey, Vec<u64>>(&ExtKey::ClientJobIds(client))
+            .unwrap_or(Vec::new(&e))
+    }
+
+    /// Return all job IDs accepted by `freelancer` as an ordered `Vec<u64>`.
+    ///
+    /// The list is built incrementally as jobs are accepted, so this call is
+    /// O(1) in storage reads — no full-set scan is required.
+    pub fn get_freelancer_jobs(e: Env, freelancer: Address) -> Vec<u64> {
+        e.storage()
+            .persistent()
+            .get::<ExtKey, Vec<u64>>(&ExtKey::FreelancerJobIds(freelancer))
+            .unwrap_or(Vec::new(&e))
+    }
+
+    /// Return a paginated slice of disputed `Job` structs for `viewer`.
+    ///
+    /// Both the client and the freelancer of a disputed job are indexed, so
+    /// either party can call this function and see the dispute.  The index is
+    /// built at dispute-raise time, so no full-set scan is needed.
+    ///
+    /// Pagination follows the same convention as `get_jobs_batch`:
+    /// - `start` is a **1-based position** into the address's dispute list
+    ///   (i.e. pass `1` to start from the beginning).
+    /// - `limit` caps the number of `Job` structs returned.
+    /// - Passing `start = 0` or `limit = 0` returns an empty list.
+    /// - A `start` beyond the end of the list also returns an empty list.
+    ///
+    /// The returned vector contains full `Job` structs, matching the shape
+    /// returned by the other read paths, to keep client-side decoding simple.
+    pub fn get_disputes_for_address(e: Env, viewer: Address, start: u64, limit: u32) -> Vec<Job> {
+        let mut result = Vec::new(&e);
+        if start == 0 || limit == 0 {
+            return result;
+        }
+        let ids: Vec<u64> = e
+            .storage()
+            .persistent()
+            .get::<ExtKey, Vec<u64>>(&ExtKey::DisputesByAddress(viewer))
+            .unwrap_or(Vec::new(&e));
+        let total = ids.len() as u64;
+        if start > total {
+            return result;
+        }
+        // `start` is 1-based; convert to a 0-based index.
+        let begin = (start - 1) as u32;
+        let end = core::cmp::min(
+            total as u32,
+            begin.saturating_add(limit),
+        );
+        let mut cursor = begin;
+        while cursor < end {
+            let job_id = ids.get(cursor).unwrap();
+            if let Some(job) = e
+                .storage()
+                .persistent()
+                .get::<DataKey, Job>(&DataKey::Job(job_id))
+            {
+                result.push_back(job);
+            }
+            cursor = cursor.saturating_add(1);
+        }
+        result
     }
 
     pub fn get_admin(e: Env) -> Address {
@@ -5097,6 +5199,25 @@ fn next_job_id(e: &Env) -> u64 {
     let next = count + 1;
     e.storage().instance().set(&DataKey::JobsCount, &next);
     next
+}
+
+/// Append `job_id` to the persistent `Vec<u64>` stored under `key`.
+/// Used to maintain per-address indexes (client jobs, freelancer jobs,
+/// dispute jobs) without touching `DataKey`, which is at Soroban's 50-case
+/// limit.
+fn push_address_job_index(e: &Env, key: &ExtKey, job_id: u64) {
+    let mut ids: Vec<u64> = e
+        .storage()
+        .persistent()
+        .get(key)
+        .unwrap_or(Vec::new(e));
+    ids.push_back(job_id);
+    e.storage().persistent().set(key, &ids);
+    e.storage().persistent().extend_ttl(
+        key,
+        INSTANCE_LIFETIME_THRESHOLD,
+        INSTANCE_BUMP_AMOUNT,
+    );
 }
 
 fn load_native_token(e: &Env) -> Address {
