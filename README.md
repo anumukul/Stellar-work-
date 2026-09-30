@@ -259,8 +259,10 @@ Copy `frontend/.env.example` to `frontend/.env.local` and set the required varia
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `NEXT_PUBLIC_CONTRACT_ID` | Yes | — | Deployed escrow contract ID |
-| `NEXT_PUBLIC_NETWORK` | No | `testnet` | `testnet` or `mainnet` |
+| `NEXT_PUBLIC_NETWORK` | No | `testnet` | `testnet`, `futurenet`, or `mainnet` |
 | `NEXT_PUBLIC_SOROBAN_RPC` | No | `https://soroban-testnet.stellar.org` | Soroban RPC endpoint |
+| `NEXT_PUBLIC_CONTRACT_ID_TESTNET` | No | — | Per-network contract ID; takes precedence over `NEXT_PUBLIC_CONTRACT_ID` |
+| `NEXT_PUBLIC_SOROBAN_RPC_FUTURENET` | No | `https://rpc-futurenet.stellar.org` | Soroban RPC endpoint for futurenet |
 | `NEXT_PUBLIC_NATIVE_TOKEN` | No | — | Default token address for post-job form |
 | `NEXT_PUBLIC_ADMIN_ADDRESS` | No | — | Admin wallet for UI access control |
 | `NEXT_PUBLIC_IPFS_GATEWAY_URL` | No | `https://dweb.link/ipfs/` | IPFS gateway for descriptions |
