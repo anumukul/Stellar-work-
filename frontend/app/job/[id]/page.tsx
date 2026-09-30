@@ -28,6 +28,7 @@ import {
   getJob,
   getJobEscrowBalance,
   getJobViews,
+  getPlatformFeeRate,
   recordJobView,
   storeDescriptionCid,
   submitWork,
@@ -176,6 +177,8 @@ function JobDetailPageContent() {
   const [topUpAmountXlm, setTopUpAmountXlm] = useState("");
   const [topUpStroops, setTopUpStroops] = useState<string | null>(null);
   const [showCelebrationModal, setShowCelebrationModal] = useState(false);
+  // #1052 — live platform fee rate (basis points). Default 250 = 2.5%.
+  const [platformFeeRateBps, setPlatformFeeRateBps] = useState<number>(250);
   const lastActionRef = useRef<{
     action: () => Promise<{ hash?: string }>;
     successMessage: string;
@@ -317,6 +320,13 @@ useEffect(() => {
       .catch(() => {
         if (!cancelled) setFiatRates(getCachedXlmFiatRates());
       });
+
+    // #1052 — fetch the live platform fee rate so the approval dialog is never stale.
+    getPlatformFeeRate()
+      .then((bps) => {
+        if (!cancelled && bps !== null) setPlatformFeeRateBps(bps);
+      })
+      .catch(() => { /* keep default 250 bps */ });
 
     return () => {
       cancelled = true;
@@ -634,13 +644,13 @@ useEffect(() => {
     approveWork: {
       title: "Approve and release payment?",
       description:
-        "Approving the submitted work releases the escrowed funds to the freelancer minus the platform fee. This action is final and cannot be reversed.",
+        `Approving the submitted work releases the escrowed funds to the freelancer minus the platform fee (${(platformFeeRateBps / 100).toFixed(2)}%). This action is final and cannot be reversed.`,
       consequences: [
         "The job will move to Completed status permanently.",
         "You will not be able to request changes after approval.",
-        "Platform fee (2.5%) will be deducted before transfer.",
+        `Platform fee (${(platformFeeRateBps / 100).toFixed(2)}%) will be deducted before transfer.`,
       ],
-      impactLine: `${amountXlm} (minus 2.5% fee) will be released to the freelancer`,
+      impactLine: `${amountXlm} (minus ${(platformFeeRateBps / 100).toFixed(2)}% fee) will be released to the freelancer`,
       confirmLabel: "Yes, approve & pay",
       variant: "primary",
       suppressKey: CONFIRM_KEYS.approveWork,
@@ -855,6 +865,44 @@ useEffect(() => {
         <h3 className="text-lg font-medium text-slate-800 mb-4">Job Progress</h3>
         <JobStatusTimeline job={job} />
       </div>
+
+      {/* #1051 — Escrow top-up callout for in-progress jobs */}
+      {isClient && job.status === "InProgress" && (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 flex items-start gap-3">
+          <svg
+            className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+            aria-hidden="true"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+            />
+          </svg>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-emerald-800">Job In Progress — Add More Funds</p>
+            <p className="mt-0.5 text-xs text-emerald-700">
+              You can top up this job&apos;s escrow balance at any time while it is in progress.
+              The freelancer will be paid the total escrowed amount (minus the platform fee) when you approve their work.
+            </p>
+            <button
+              type="button"
+              className="mt-2 inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 transition-colors"
+              onClick={() => setShowTopUpForm(true)}
+              data-testid="inprogress-topup-btn"
+            >
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+              </svg>
+              Add Funds to Escrow
+            </button>
+          </div>
+        </div>
+      )}
 
       <article className="space-y-2 rounded-lg border border-slate-200 bg-white p-5 text-sm">
         <div className="flex items-center justify-between gap-2">
