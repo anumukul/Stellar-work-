@@ -2771,3 +2771,190 @@ fn test_two_step_admin_ownership_handover() {
     assert!(escrow.try_accept_ownership(&admin).is_err(), "Old admin cannot accept a second time");
     assert!(escrow.try_set_required_approvals(&admin, &1u32).is_err(), "Old admin lost access");
 }
+
+// ── [SC-159] Dispute cooldown period tests ────────────────────────────────────
+//
+// Verifies the configurable cooldown window that must elapse after a dispute
+// is resolved before the same job can be disputed again.
+
+/// SC-159-01: Admin can set and read the dispute cooldown window.
+#[test]
+fn test_set_and_get_dispute_cooldown() {
+    let env = Env::default();
+    let (admin, _client, _freelancer, _token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+
+    // Default cooldown is 0 (disabled).
+    assert_eq!(escrow.get_dispute_cooldown_ledgers(), 0);
+
+    escrow.set_dispute_cooldown(&admin, &100u32);
+    assert_eq!(escrow.get_dispute_cooldown_ledgers(), 100);
+}
+
+/// SC-159-02: Admin setter rejects a cooldown above the maximum bound.
+#[test]
+#[should_panic]
+fn test_set_dispute_cooldown_above_max_panics() {
+    let env = Env::default();
+    let (admin, _client, _freelancer, _token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+
+    // MAX_DISPUTE_COOLDOWN_LEDGERS + 1 must be rejected.
+    escrow.set_dispute_cooldown(&admin, &(MAX_DISPUTE_COOLDOWN_LEDGERS + 1));
+}
+
+/// SC-159-03: Non-admin cannot change the dispute cooldown.
+#[test]
+#[should_panic]
+fn test_set_dispute_cooldown_unauthorized_panics() {
+    let env = Env::default();
+    let (_admin, client, _freelancer, _token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+
+    escrow.set_dispute_cooldown(&client, &50u32);
+}
+
+/// SC-159-04: Re-disputing before the cooldown elapses is blocked.
+#[test]
+fn test_raise_dispute_blocked_during_cooldown() {
+    let env = Env::default();
+    let (admin, client, freelancer, token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+    let desc_hash = BytesN::from_array(&env, &[0u8; 32]);
+    let deadline: u64 = 10_000;
+    let amount: i128 = 100_0000000;
+
+    escrow.set_dispute_cooldown(&admin, &100u32);
+
+    let job_id = escrow.post_job(&client, &amount, &desc_hash, &100u32, &deadline, &token);
+    escrow.accept_job(&freelancer, &job_id);
+    escrow.raise_dispute(&client, &job_id);
+    escrow.resolve_dispute(&admin, &job_id, &client);
+
+    // Advance partway into the cooldown window.
+    let resolved_at = env.ledger().sequence();
+    env.ledger().set_sequence_number(resolved_at + 50);
+
+    // Remaining cooldown must be positive.
+    let remaining = escrow.get_dispute_cooldown_remaining(&job_id);
+    assert!(remaining > 0, "cooldown should still be active");
+
+    // Attempting to re-dispute must panic with DisputeCooldownActive.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        escrow.raise_dispute(&client, &job_id);
+    }));
+    assert!(result.is_err(), "raise_dispute must be blocked during cooldown");
+}
+
+/// SC-159-05: Boundary — re-disputing at exactly the cooldown boundary succeeds.
+#[test]
+fn test_raise_dispute_allowed_at_exact_cooldown_boundary() {
+    let env = Env::default();
+    let (admin, client, freelancer, token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+    let desc_hash = BytesN::from_array(&env, &[0u8; 32]);
+    let deadline: u64 = 10_000;
+    let amount: i128 = 100_0000000;
+
+    let cooldown: u32 = 100;
+    escrow.set_dispute_cooldown(&admin, &cooldown);
+
+    let job_id = escrow.post_job(&client, &amount, &desc_hash, &100u32, &deadline, &token);
+    escrow.accept_job(&freelancer, &job_id);
+    escrow.raise_dispute(&client, &job_id);
+    escrow.resolve_dispute(&admin, &job_id, &client);
+
+    let resolved_at = env.ledger().sequence();
+    // Advance to exactly the cooldown boundary.
+    env.ledger().set_sequence_number(resolved_at + cooldown);
+
+    // Remaining cooldown must be zero at the boundary.
+    assert_eq!(escrow.get_dispute_cooldown_remaining(&job_id), 0);
+
+    // Re-dispute must succeed at the exact boundary.
+    escrow.raise_dispute(&client, &job_id);
+    assert_eq!(escrow.get_job(&job_id).status, JobStatus::Disputed);
+}
+
+/// SC-159-06: Disabled cooldown (0) allows immediate re-dispute.
+#[test]
+fn test_raise_dispute_allowed_when_cooldown_disabled() {
+    let env = Env::default();
+    let (admin, client, freelancer, token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+    let desc_hash = BytesN::from_array(&env, &[0u8; 32]);
+    let deadline: u64 = 10_000;
+    let amount: i128 = 100_0000000;
+
+    // Cooldown defaults to 0 (disabled).
+    assert_eq!(escrow.get_dispute_cooldown_ledgers(), 0);
+
+    let job_id = escrow.post_job(&client, &amount, &desc_hash, &100u32, &deadline, &token);
+    escrow.accept_job(&freelancer, &job_id);
+    escrow.raise_dispute(&client, &job_id);
+    escrow.resolve_dispute(&admin, &job_id, &client);
+
+    // No ledger advance needed — re-dispute must succeed immediately.
+    assert_eq!(escrow.get_dispute_cooldown_remaining(&job_id), 0);
+    escrow.raise_dispute(&client, &job_id);
+    assert_eq!(escrow.get_job(&job_id).status, JobStatus::Disputed);
+}
+
+/// SC-159-07: get_dispute_cooldown_remaining returns 0 for a never-disputed job.
+#[test]
+fn test_get_dispute_cooldown_remaining_never_disputed() {
+    let env = Env::default();
+    let (admin, client, _freelancer, token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+    let desc_hash = BytesN::from_array(&env, &[0u8; 32]);
+    let deadline: u64 = 10_000;
+    let amount: i128 = 100_0000000;
+
+    escrow.set_dispute_cooldown(&admin, &100u32);
+
+    let job_id = escrow.post_job(&client, &amount, &desc_hash, &100u32, &deadline, &token);
+    // Job has never been disputed → no cooldown active.
+    assert_eq!(escrow.get_dispute_cooldown_remaining(&job_id), 0);
+}
+
+/// SC-159-08: Admin update emits DisputeCooldownUpdated event.
+#[test]
+fn test_set_dispute_cooldown_emits_event() {
+    let env = Env::default();
+    let (admin, _client, _freelancer, _token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+
+    let pre_events = env.events().all().len();
+    escrow.set_dispute_cooldown(&admin, &250u32);
+    let post_events = env.events().all().len();
+
+    assert!(
+        post_events > pre_events,
+        "setting the dispute cooldown must emit an event"
+    );
+}
+
+/// SC-159-09: Cooldown is per-job and does not affect other jobs.
+#[test]
+fn test_dispute_cooldown_is_per_job() {
+    let env = Env::default();
+    let (admin, client, freelancer, token, contract_id) = setup_test(&env);
+    let escrow = new_escrow(&env, &contract_id);
+    let desc_hash = BytesN::from_array(&env, &[0u8; 32]);
+    let deadline: u64 = 10_000;
+    let amount: i128 = 100_0000000;
+
+    escrow.set_dispute_cooldown(&admin, &100u32);
+
+    let job1 = escrow.post_job(&client, &amount, &desc_hash, &100u32, &deadline, &token);
+    escrow.accept_job(&freelancer, &job1);
+    escrow.raise_dispute(&client, &job1);
+    escrow.resolve_dispute(&admin, &job1, &client);
+
+    // A second, unrelated job must not be affected by job1's cooldown.
+    let job2 = escrow.post_job(&client, &amount, &desc_hash, &100u32, &deadline, &token);
+    escrow.accept_job(&freelancer, &job2);
+    assert_eq!(escrow.get_dispute_cooldown_remaining(&job2), 0);
+    escrow.raise_dispute(&client, &job2);
+    assert_eq!(escrow.get_job(&job2).status, JobStatus::Disputed);
+}

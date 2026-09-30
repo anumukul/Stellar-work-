@@ -29,6 +29,9 @@ const UPGRADE_TIMELOCK_SECS: u64 = 86_400;
 
 const DEFAULT_DISPUTE_FEE: i128 = 50_000_000;
 
+const DEFAULT_DISPUTE_COOLDOWN_LEDGER: u64 = 0;
+const MAX_DISPUTE_COOLDOWN_LEDGER: u64 = 30 * 24 * 60 * 60;
+
 const MAX_MILESTONES: u32 = 20;
 
 const MAX_BATCH_DISPUTES: u32 = 20;
@@ -373,6 +376,10 @@ pub enum DataKey {
     ArchivedJob(u64),
     /// SC-82: number of jobs moved to archive storage.
     ArchiveCount,
+    /// SC-159: ledger timestamp of the last dispute resolution for a job.
+    DisputeCooldownLedger(u64),
+    /// SC-159: configurable cooldown window (seconds) after a dispute resolution.
+    DisputeCooldownWindow,
     Oracle(Address),
     OracleEnabled,
     OracleAssignment(u64),
@@ -456,6 +463,10 @@ pub enum ExtKey {
     /// (client or freelancer).  Both parties share the same key pattern so
     /// either party can look up disputes they are involved in.
     DisputesByAddress(Address),
+    /// JobHold: per-job hold flag set by admin. True = job is on hold.
+    JobHeld(u64),
+    /// JobHold: sorted list of all currently held job IDs.
+    HeldJobs,
 }
 
 #[contracterror]
@@ -524,6 +535,8 @@ pub enum Error {
     BonusNotConfigured = 54,
     /// Issue #986: the target module is currently paused.
     ModulePaused = 53,
+    /// JobHold: the job is currently on hold by admin; state changes are blocked.
+    JobOnHold = 55,
 }
 
 #[contract]
@@ -563,6 +576,107 @@ impl EscrowContract {
     pub fn is_module_paused(e: Env, module: u32) -> bool {
         let key = module_paused_key(&e, module);
         e.storage().instance().get(&key).unwrap_or(false)
+    }
+
+    // ── JobHold: admin-controlled per-job hold ────────────────────────────────
+
+    /// Place or release a single job on hold. Admin only.
+    ///
+    /// When `held` is `true` the job is frozen: any call that would transition
+    /// its state (accept, submit, approve, reject, cancel, top-up) panics with
+    /// `Error::JobOnHold`.  When `held` is `false` the hold is lifted and
+    /// normal operation resumes.  `reason` is stored in the audit log.
+    pub fn set_job_hold(e: Env, admin: Address, job_id: u64, held: bool, reason: String) {
+        admin.require_auth();
+        let stored_admin = load_admin(&e);
+        if admin != stored_admin {
+            panic_with_error!(&e, Error::UnauthorizedAdmin);
+        }
+        // Verify job exists.
+        let _ = get_job_or_panic(&e, job_id);
+
+        let already_held: bool = e
+            .storage()
+            .persistent()
+            .get(&ExtKey::JobHeld(job_id))
+            .unwrap_or(false);
+
+        if held == already_held {
+            // Idempotent: no-op when state already matches.
+            return;
+        }
+
+        if held {
+            // Mark the job held.
+            e.storage()
+                .persistent()
+                .set(&ExtKey::JobHeld(job_id), &true);
+            e.storage().persistent().extend_ttl(
+                &ExtKey::JobHeld(job_id),
+                ACTIVE_JOB_LIFETIME_THRESHOLD,
+                INSTANCE_BUMP_AMOUNT,
+            );
+
+            // Add to the held-jobs list.
+            let mut held_jobs: Vec<u64> = e
+                .storage()
+                .instance()
+                .get(&ExtKey::HeldJobs)
+                .unwrap_or_else(|| Vec::new(&e));
+            if !held_jobs.contains(&job_id) {
+                held_jobs.push_back(job_id);
+            }
+            e.storage().instance().set(&ExtKey::HeldJobs, &held_jobs);
+
+            e.events()
+                .publish((Symbol::new(&e, "JobHoldSet"),), (job_id, reason.clone()));
+            Self::record_event(&e, "job_hold_set", job_id, &admin);
+            Self::write_audit(&e, admin.clone(), "set_job_hold", Some(job_id), "Job placed on hold");
+        } else {
+            // Remove the hold flag.
+            e.storage()
+                .persistent()
+                .remove(&ExtKey::JobHeld(job_id));
+
+            // Remove from the held-jobs list.
+            let held_jobs: Vec<u64> = e
+                .storage()
+                .instance()
+                .get(&ExtKey::HeldJobs)
+                .unwrap_or_else(|| Vec::new(&e));
+            let mut new_list: Vec<u64> = Vec::new(&e);
+            for i in 0..held_jobs.len() {
+                let id = held_jobs.get_unchecked(i);
+                if id != job_id {
+                    new_list.push_back(id);
+                }
+            }
+            e.storage().instance().set(&ExtKey::HeldJobs, &new_list);
+
+            e.events()
+                .publish((Symbol::new(&e, "JobHoldCleared"),), (job_id, reason.clone()));
+            Self::record_event(&e, "job_hold_cleared", job_id, &admin);
+            Self::write_audit(&e, admin.clone(), "set_job_hold", Some(job_id), "Job hold lifted");
+        }
+
+        bump_instance_ttl(&e);
+    }
+
+    /// Return `true` if the job with `job_id` is currently on hold.
+    pub fn is_job_held(e: Env, job_id: u64) -> bool {
+        e.storage()
+            .persistent()
+            .get(&ExtKey::JobHeld(job_id))
+            .unwrap_or(false)
+    }
+
+    /// Return the IDs of all jobs that are currently on hold.
+    /// Useful for the admin panel to list held jobs at a glance.
+    pub fn get_held_jobs(e: Env) -> Vec<u64> {
+        e.storage()
+            .instance()
+            .get(&ExtKey::HeldJobs)
+            .unwrap_or_else(|| Vec::new(&e))
     }
 
     pub fn get_audit_entry(e: Env, id: u64) -> Option<AuditEntry> {
@@ -1347,6 +1461,8 @@ impl EscrowContract {
         require_active_access(&e, &freelancer);
         enforce_user_active_job_limit(&e, &freelancer);
 
+        require_job_not_held(&e, job_id);
+
         if job.status != JobStatus::Open {
             panic_with_error!(&e, Error::InvalidStatus);
         }
@@ -1398,6 +1514,8 @@ impl EscrowContract {
         freelancer.require_auth();
         require_active_access(&e, &freelancer);
 
+        require_job_not_held(&e, job_id);
+
         if job.status != JobStatus::InProgress {
             panic_with_error!(&e, Error::InvalidStatus);
         }
@@ -1447,6 +1565,8 @@ impl EscrowContract {
         let mut job = get_job_or_panic(&e, job_id);
         caller.require_auth();
         require_active_access(&e, &caller);
+
+        require_job_not_held(&e, job_id);
 
         if job.status != JobStatus::SubmittedForReview {
             panic_with_error!(&e, Error::InvalidStatus);
@@ -1818,6 +1938,8 @@ impl EscrowContract {
         client.require_auth();
         require_active_access(&e, &client);
 
+        require_job_not_held(&e, job_id);
+
         if job.status != JobStatus::SubmittedForReview {
             panic_with_error!(&e, Error::InvalidStatus);
         }
@@ -1844,6 +1966,8 @@ impl EscrowContract {
         let mut job = get_job_or_panic(&e, job_id);
         client.require_auth();
         require_active_access(&e, &client);
+
+        require_job_not_held(&e, job_id);
 
         if job.status != JobStatus::Open {
             panic_with_error!(&e, Error::InvalidStatus);
@@ -1885,6 +2009,8 @@ impl EscrowContract {
         let mut job = get_job_or_panic(&e, job_id);
         client.require_auth();
         require_active_access(&e, &client);
+
+        require_job_not_held(&e, job_id);
 
         if job.client != client {
             panic_with_error!(&e, Error::Unauthorized);
@@ -5158,6 +5284,21 @@ fn remove_job_id_from_all_ids(e: &Env, job_id: u64) {
 fn set_job(e: &Env, job_id: u64, job: &Job) {
     e.storage().persistent().set(&DataKey::Job(job_id), job);
     bump_job_ttl(e, job_id, job);
+}
+
+/// Panic with `Error::JobOnHold` if the job is currently on hold.
+///
+/// Insert this call immediately after `get_job_or_panic` in every method that
+/// transitions job state, so held jobs are completely frozen.
+fn require_job_not_held(e: &Env, job_id: u64) {
+    let held: bool = e
+        .storage()
+        .persistent()
+        .get(&ExtKey::JobHeld(job_id))
+        .unwrap_or(false);
+    if held {
+        panic_with_error!(e, Error::JobOnHold);
+    }
 }
 
 fn bump_job_ttl(e: &Env, job_id: u64, job: &Job) {
