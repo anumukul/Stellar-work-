@@ -15,6 +15,7 @@ Day-to-day operational procedures for StellarWork in production: monitoring, bac
 4. [Emergency Contract Upgrade](#4-emergency-contract-upgrade)
 5. [Fund Recovery Procedures](#5-fund-recovery-procedures)
 6. [Regular Maintenance Tasks](#6-regular-maintenance-tasks)
+7. [Alert Response Playbooks](#7-alert-response-playbooks)
 
 ---
 
@@ -561,6 +562,176 @@ cargo update
 cargo test
 ```
 
+
+## 7. Alert Response Playbooks
+
+This section contains detailed runbooks for each Prometheus alert defined in `monitoring/prometheus/alerts.yml`.
+
+### 7.1 FrontendTargetDown
+
+**What it means:** Prometheus has not been able to scrape the frontend metrics target for 5 minutes. The app may be down or the /api/metrics route is failing.
+
+**Likely causes:** Frontend application crashed, network issues preventing scraping, or the /api/metrics endpoint is not responding.
+
+**First links and commands to check:**
+- Check the frontend deployment status in Vercel Dashboard.
+- Run: `curl -s -o /dev/null -w "%{http_code}\n" https://stellarwork.app` to verify HTTP status.
+- Check the frontend logs for errors.
+- Verify the /api/metrics endpoint is accessible: `curl -s https://stellarwork.app/api/metrics`
+
+**Immediate action:**
+1. Verify frontend is returning HTTP 200 on the root path.
+2. If not, check Vercel Dashboard for deployment status and roll back if necessary.
+3. If the frontend is up but /api/metrics is failing, check the Next.js server logs and ensure the metrics route is working.
+
+**Escalation/verification path:**
+- If the issue persists, escalate to the frontend team.
+- Verify recovery by checking that the frontend target is up in Prometheus (targets page) and that the alert stops firing.
+
+### 7.2 SyntheticProbeFailing
+
+**What it means:** The blackbox probe for a frontend instance has failed for 5 minutes, indicating the frontend is not reachable or not returning expected responses.
+
+**Likely causes:** Frontend downtime, network connectivity issues, DNS problems, or the frontend instance is not serving traffic.
+
+**First links and commands to check:**
+- Check the blackbox-exporter targets in Prometheus.
+- Run: `curl -s -o /dev/null -w "%{http_code}\n" https://stellarwork.app` from multiple locations.
+- Check DNS resolution for stellarwork.app.
+- Verify Vercel deployment status.
+
+**Immediate action:**
+1. Confirm frontend accessibility via curl or browser.
+2. If down, check Vercel Dashboard and roll back the deployment if recent.
+3. If Vercel is healthy, investigate network or DNS issues.
+
+**Escalation/verification path:**
+- Escalate to DevOps if infrastructure-related.
+- Verify recovery by ensuring probe_success metric returns 1 and the alert stops firing.
+
+### 7.3 ContractTxFailureRateHigh
+
+**What it means:** More than 10% of Soroban invocations have failed over the last 10 minutes.
+
+**Likely causes:** RPC health issues, escrow contract state problems, wallet errors, or network congestion.
+
+**First links and commands to check:**
+- Check Stellar network status: https://status.stellar.org
+- Test RPC endpoint directly: `curl -s https://soroban-rpc.stellar.org -H "Content-Type: application/json" -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getLatestLedger\",\"params\":{}}" | jq .result.sequence`
+- Check the contract state via soroban CLI: `soroban contract invoke --id $CONTRACT_ID --network mainnet -- get_job_count`
+- Check wallet errors in Sentry or frontend logs.
+
+**Immediate action:**
+1. Verify Stellar network is healthy.
+2. If RPC is degraded, update NEXT_PUBLIC_SOROBAN_RPC in Vercel to a backup provider and redeploy.
+3. If contract state is suspected, check the contract storage via soroban CLI calls.
+
+**Escalation/verification path:**
+- Escalate to backend team if contract or RPC issues persist.
+- Verify recovery by checking that the failure rate drops below 10% and the alert stops firing.
+
+### 7.4 ContractTxLatencyHigh
+
+**What it means:** The p95 contract transaction latency is above 20 seconds for 15 minutes.
+
+**Likely causes:** RPC congestion, network issues, or inefficient contract methods.
+
+**First links and commands to check:**
+- Check RPC latency: `time curl -s https://soroban-rpc.stellar.org -H "Content-Type: application/json" -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getLatestLedger\",\"params\":{}}"`
+- Check the StellarWork Overview dashboard in Grafana for RPC latency panels.
+- Check for recent changes in contract methods or wallet integration.
+
+**Immediate action:**
+1. Monitor RPC latency and consider switching to a backup RPC if latency remains high.
+2. Check for any ongoing Stellar network incidents.
+3. Review recent contract changes for performance regressions.
+
+**Escalation/verification path:**
+- Escalate to backend team if latency does not improve.
+- Verify recovery by checking that p95 latency drops below 20s and the alert stops firing.
+
+### 7.5 RpcErrorSpike
+
+**What it means:** Elevated Stellar RPC error rate (>0.5 errors/sec over the last 5 minutes).
+
+**Likely causes:** Stellar network issues, RPC provider problems, or malformed requests from the frontend.
+
+**First links and commands to check:**
+- Check Stellar network status: https://status.stellar.org
+- Check the RPC errors panel in the StellarWork Overview dashboard (grouped by kind).
+- Check frontend logs for RPC error messages.
+- Test the RPC endpoint with a simple request to see if it returns errors.
+
+**Immediate action:**
+1. If network-wide incident, wait for resolution.
+2. If isolated to our RPC endpoint, update NEXT_PUBLIC_SOROBAN_RPC in Vercel to a backup provider and redeploy.
+3. Check frontend code for malformed RPC requests and fix if necessary.
+
+**Escalation/verification path:**
+- Escalate to backend team if errors persist after switching RPC.
+- Verify recovery by checking that the RPC error rate drops below 0.5 errors/sec and the alert stops firing.
+
+### 7.6 LcpRegression
+
+**What it means:** The p75 Largest Contentful Paint (LCP) is above 2.5 seconds for 30 minutes, indicating degraded loading performance.
+
+**Likely causes:** Slow server response, render-blocking resources, large images, or client-side rendering delays.
+
+**First links and commands to check:**
+- Check the Core Web Vitals dashboard in Grafana for LCP trends.
+- Run Lighthouse on the frontend URL to get performance insights.
+- Check the Network tab in browser DevTools for waterfall analysis.
+- Verify asset optimization and caching headers.
+
+**Immediate action:**
+1. Optimize images and enable compression.
+2. Review recent frontend changes for performance impact.
+3. Check server response times and consider CDN or caching improvements.
+
+**Escalation/verification path:**
+- Escalate to frontend team if LCP does not improve.
+- Verify recovery by checking that p75 LCP drops below 2.5s and the alert stops firing.
+
+### 7.7 InpRegression
+
+**What it means:** The p75 Interaction to Next Paint (INP) is above 200ms for 30 minutes, indicating degraded interactivity.
+
+**Likely causes:** Long-running JavaScript tasks, slow event handlers, or blocked main thread.
+
+**First links and commands to check:**
+- Check the Core Web Vitals dashboard in Grafana for INP trends.
+- Use Chrome DevTools Performance panel to identify long tasks.
+- Check for expensive render updates or layout thrashing.
+
+**Immediate action:**
+1. Optimize JavaScript execution and break up long tasks.
+2. Review recent frontend changes for interactivity impact.
+3. Use requestIdleCallback or requestAnimationFrame for non-urgent work.
+
+**Escalation/verification path:**- Escalate to frontend team if INP does not improve.- Verify recovery by checking that p75 INP drops below 200ms and the alert stops firing.
+### 7.8 ClientErrorSpike
+
+**What it means:** Elevated unhandled frontend error rate (>1 error/sec over the last 5 minutes).
+
+**Likely causes:** Uncaught exceptions in frontend code, API errors, or third-party script failures.
+
+**First links and commands to check:**- Check Sentry or error tracking for new exceptions.- Check the frontend console for errors.- Verify API endpoints are returning expected responses.- Check for recent frontend deployments that may have introduced bugs.
+**Immediate action:**1. Check Sentry for new errors and prioritize fixing them.2. Roll back recent frontend changes if they correlate with the error spike.3. Ensure error boundaries are in place to catch unexpected errors.
+**Escalation/verification path:**- Escalate to frontend team if errors persist.- Verify recovery by checking that the client error rate drops below 1 error/sec and the alert stops firing.
+### 7.9 HttpErrorRateHigh
+
+**What it means:** HTTP error rate above 1% (4xx/5xx status codes) over the last 10 minutes.
+**Likely causes:** Broken API routes, client sending malformed requests, or server errors.
+**First links and commands to check:**- Check the HTTP errors panel in the StellarWork Overview dashboard (broken down by route).- Check server logs for 500 errors.- Verify API routes are correctly implemented and handle edge cases.- Check for recent changes in API code or routing.
+**Immediate action:**1. Identify the route(s) returning 4xx/5xx errors and fix the underlying issue.2. If client-induced, consider adding validation or rate limiting.3. Check server health and restart if necessary.
+**Escalation/verification path:**- Escalate to backend team if errors persist.- Verify recovery by checking that the HTTP error rate drops below 1% and the alert stops firing.
+### 7.10 HttpLatencyHigh
+
+**What it means:** The p95 HTTP request latency is above 3 seconds for 15 minutes.
+**Likely causes:** Slow API routes, upstream Stellar RPC latency, or server resource exhaustion.
+**First links and commands to check:**- Check the HTTP request latency panel in the StellarWork Overview dashboard.- Check Stellar network status and RPC latency.- Profile slow API routes to identify bottlenecks.- Check server CPU, memory, and disk I/O.
+**Immediate action:**1. Optimize slow API routes (e.g., add caching, optimize database queries).2. If upstream RPC latency is high, consider switching to a backup RPC provider.3. Scale server resources if necessary.
+**Escalation/verification path:**- Escalate to backend team if latency does not improve.- Verify recovery by checking that p95 HTTP latency drops below 3s and the alert stops firing.
 ---
 
 *Related: [DEPLOYMENT.md](./DEPLOYMENT.md) · [PRODUCTION_CHECKLIST.md](./PRODUCTION_CHECKLIST.md) · [production-escalation.md](./production-escalation.md) · [release-checklist.md](./release-checklist.md)*
