@@ -11,22 +11,23 @@ interface ErrorBoundaryProps {
 interface ErrorBoundaryState {
   hasError: boolean;
   error: Error | null;
+  referenceId: string | null;
 }
 
 export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   constructor(props: ErrorBoundaryProps) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.state = { hasError: false, error: null, referenceId: null };
   }
 
   static getDerivedStateFromError(error: Error): ErrorBoundaryState {
-    return { hasError: true, error };
+    return { hasError: true, error, referenceId: null };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
     // Report to Sentry with the React component stack so the Sentry event
     // points to the exact component that threw, not just the generic boundary.
-    Sentry.captureException(error, {
+    const referenceId = Sentry.captureException(error, {
       tags: { errorBoundary: "inline" },
       extra: {
         // componentStack shows the React tree path to the failing component.
@@ -34,11 +35,13 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
       },
     });
 
-    console.error("ErrorBoundary caught:", error, info.componentStack);
+    this.setState({ referenceId });
+
+    console.error("ErrorBoundary caught", { referenceId });
   }
 
   handleRetry = () => {
-    this.setState({ hasError: false, error: null });
+    this.setState({ hasError: false, error: null, referenceId: null });
   };
 
   render() {
@@ -54,8 +57,14 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
             </p>
             <h1 className="text-2xl font-semibold text-slate-900">Something went wrong</h1>
             <p className="max-w-xl text-sm leading-6 text-slate-600">
-              {this.state.error?.message ?? "An unexpected error occurred."}
+              We could not display this section. Please retry, or contact support if the problem
+              continues.
             </p>
+            {this.state.referenceId && (
+              <p className="font-mono text-xs text-slate-500">
+                Reference: {this.state.referenceId}
+              </p>
+            )}
           </div>
           <button
             type="button"
