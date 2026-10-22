@@ -1,7 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { useState } from "react";
+
+const REPOSITORY_URL = "https://github.com/anumukul/Stellar-work-";
 
 const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION ?? "0.1.0";
 const BUILD_TIME = process.env.NEXT_PUBLIC_BUILD_TIME ?? "";
@@ -158,21 +159,23 @@ export default function AppFooter({
             className="flex flex-wrap justify-center gap-8 text-sm font-medium text-slate-600 dark:text-slate-400"
           >
             <a
-              href="https://github.com/anoncon/Stellar-work-"
+              href={REPOSITORY_URL}
               target="_blank"
               rel="noopener noreferrer"
               className="transition-colors hover:text-blue-600 dark:hover:text-blue-400"
             >
               {messages.github}
             </a>
-            <Link
-              href="/docs"
+            <a
+              href={`${REPOSITORY_URL}/blob/main/docs/README.md`}
+              target="_blank"
+              rel="noopener noreferrer"
               className="transition-colors hover:text-blue-600 dark:hover:text-blue-400"
             >
               {messages.documentation}
-            </Link>
+            </a>
             <a
-              href="https://github.com/anoncon/Stellar-work-/blob/main/docs/TOKENOMICS.md"
+              href={`${REPOSITORY_URL}/blob/main/docs/TOKENOMICS.md`}
               target="_blank"
               rel="noopener noreferrer"
               className="transition-colors hover:text-blue-600 dark:hover:text-blue-400"
@@ -180,7 +183,7 @@ export default function AppFooter({
               {messages.tokenomics}
             </a>
             <a
-              href="/LICENSE"
+              href={`${REPOSITORY_URL}/blob/main/LICENSE`}
               target="_blank"
               rel="noopener noreferrer"
               className="transition-colors hover:text-blue-600 dark:hover:text-blue-400"
