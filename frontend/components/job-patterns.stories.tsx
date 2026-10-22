@@ -1,109 +1,111 @@
 import type { Meta, StoryObj } from "@storybook/nextjs-vite";
+import { DndContext } from "@dnd-kit/core";
+import { SortableContext } from "@dnd-kit/sortable";
+import { useState } from "react";
+import JobCardComponent from "./JobCard";
+import JobCardSkeleton from "./JobCardSkeleton";
+import JobFilterPanel, { DEFAULT_FILTERS, type JobFilters } from "./JobFilterPanel";
 import StatusPill from "./StatusPill";
+import type { Job } from "@/lib/types";
 
 const meta = {
   title: "Domain/Jobs",
-  parameters: {
-    layout: "padded",
-  },
+  parameters: { layout: "padded" },
   tags: ["autodocs"],
 } satisfies Meta;
 
 export default meta;
-type Story = StoryObj;
+type Story = StoryObj<typeof meta>;
 
-export const JobCard: Story = {
-  args: {
-    title: "Build a Stellar escrow dashboard",
-    amount: "250 XLM",
-    client: "GCLIE...7Q4A",
-    deadline: "7 days",
-  },
-  argTypes: {
-    title: { control: "text" },
-    amount: { control: "text" },
-    client: { control: "text" },
-    deadline: { control: "text" },
-  },
-  render: (args: Record<string, unknown>) => (
-    <article className="interactive-card max-w-md rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-            Job #{42}
-          </p>
-          <h3 className="mt-1 text-lg font-semibold text-slate-900">
-            {args.title as string}
-          </h3>
+const baseJob: Job = {
+  client: "GCLIENTABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQ",
+  freelancer: null,
+  amount: "2500000000",
+  description_hash: "bafybeigdyrzt-representative-job-description",
+  status: "Open",
+  created_at: "1761120000",
+  deadline: "1761724800",
+  token: "CDLZFC3SYJYDZY2B4FKOM2CPCD7JQDO5KHVK7Y5LZJH5QXRQNF7JXABC",
+  revision_count: 0,
+  submitted_at: "0",
+  title: "Build a Stellar escrow dashboard",
+  category: "Development",
+};
+
+function JobFixture({ job = baseJob, isLoading = false }: { job?: Job; isLoading?: boolean }) {
+  return (
+    <DndContext>
+      <SortableContext items={[42]}>
+        <div className="max-w-md">
+          <JobCardComponent
+            id={42}
+            job={job}
+            wallet={job.client}
+            role="client"
+            isLoading={isLoading}
+            onAction={async () => undefined}
+            onRequestAction={() => undefined}
+          />
         </div>
-        <StatusPill status="Open" />
-      </div>
-      <dl className="mt-4 grid gap-3 text-sm text-slate-600">
-        <div className="flex justify-between gap-3">
-          <dt>Escrow</dt>
-          <dd className="font-semibold text-slate-900">{args.amount as string}</dd>
-        </div>
-        <div className="flex justify-between gap-3">
-          <dt>Client</dt>
-          <dd className="font-mono text-xs text-slate-900">{args.client as string}</dd>
-        </div>
-        <div className="flex justify-between gap-3">
-          <dt>Deadline</dt>
-          <dd className="font-medium text-slate-900">{args.deadline as string}</dd>
-        </div>
-      </dl>
-      <div className="mt-5 flex flex-wrap gap-2">
-        <button className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white">
-          View details
-        </button>
-        <button className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700">
-          Bookmark
-        </button>
-      </div>
-    </article>
+      </SortableContext>
+    </DndContext>
+  );
+}
+
+function FilterFixture({ initial = DEFAULT_FILTERS, resultCount = 0 }: { initial?: JobFilters; resultCount?: number }) {
+  const [filters, setFilters] = useState(initial);
+  return <JobFilterPanel filters={filters} onChange={setFilters} resultCount={resultCount} />;
+}
+
+export const JobCard: Story = { render: () => <JobFixture /> };
+
+export const Loading: Story = { render: () => <JobCardSkeleton /> };
+
+export const EmptyResults: Story = { render: () => <FilterFixture resultCount={0} /> };
+
+export const LongContent: Story = {
+  render: () => (
+    <JobFixture
+      job={{
+        ...baseJob,
+        title: "Design and implement a comprehensive cross-border escrow experience with extensive compliance requirements",
+        token: "CABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ2",
+      }}
+    />
   ),
 };
 
-export const ActivityTimeline: Story = {
-  render: () => {
-    const events = [
-      ["Posted", "Client funded escrow and published the job."],
-      ["Accepted", "Freelancer accepted the work on-chain."],
-      ["Submitted", "Work was submitted for review."],
-      ["Completed", "Client released escrow to the freelancer."],
-    ];
-
-    return (
-      <ol className="w-full max-w-xl space-y-4">
-        {events.map(([title, description], index) => (
-          <li key={title} className="flex gap-3">
-            <span className="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-900 text-xs font-semibold text-white">
-              {index + 1}
-            </span>
-            <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <h3 className="font-semibold text-slate-900">{title}</h3>
-              <p className="mt-1 text-sm text-slate-600">{description}</p>
-            </div>
-          </li>
-        ))}
-      </ol>
-    );
-  },
+export const Disputed: Story = {
+  render: () => (
+    <JobFixture
+      job={{
+        ...baseJob,
+        status: "Disputed",
+        freelancer: "GFREELANCER234567ABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFG",
+      }}
+    />
+  ),
 };
 
-export const AnnouncementBanner: Story = {
-  args: {
-    message: "3 new open jobs are available.",
-  },
-  argTypes: {
-    message: { control: "text" },
-  },
-  render: (args: Record<string, unknown>) => (
-    <div
-      role="status"
-      className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900"
-    >
-      {args.message as string}
+export const DisabledAction: Story = {
+  render: () => (
+    <div className="space-y-3">
+      <JobFixture job={{ ...baseJob, status: "SubmittedForReview" }} isLoading />
+      <StatusPill status="SubmittedForReview" isLoading />
     </div>
+  ),
+};
+
+export const ActiveFilters: Story = {
+  render: () => (
+    <FilterFixture
+      resultCount={3}
+      initial={{
+        ...DEFAULT_FILTERS,
+        minAmount: "100",
+        dateRange: "7d",
+        freelancerStatus: "unassigned",
+      }}
+    />
   ),
 };
