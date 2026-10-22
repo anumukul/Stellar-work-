@@ -45,7 +45,7 @@ export default function JobCard({
       style={style}
       className={`interactive-card h-full p-4 ${isSelected ? 'ring-2 ring-emerald-400' : ''}`}
     >
-      {/* Drag handle – visible on hover */}
+     
       <span
         {...attributes}
         {...listeners}
@@ -77,7 +77,7 @@ export default function JobCard({
           <h3 className="font-medium">Job #{id}</h3>
           <StatusPill status={job.status} />
         </div>
-        {/* Action buttons omitted for brevity; reuse existing logic elsewhere */}
+      
       </div>
       <div className="mt-2 space-y-1 text-sm text-slate-600">
         <p className="flex min-w-0 items-baseline gap-1">
@@ -87,7 +87,7 @@ export default function JobCard({
           <span className="shrink-0">XLM</span>
         </p>
         <p>{job.token ? `Token: ${job.token.slice(0, 8)}...${job.token.slice(-4)}` : 'Token: N/A'}</p>
-        {/* Deadline rendering could be added similar to original component */}
+       
       </div>
     </article>
   );
