@@ -228,12 +228,18 @@ impl RetainerContract {
 
     pub fn renew_retainer(env: Env, caller: Address, retainer_id: u64) -> Result<u64, Error> {
         caller.require_auth();
-        enforce_rate_limit(&env, &caller)?;
         let mut retainer: Retainer = env
             .storage()
             .persistent()
             .get(&DataKey::Retainer(retainer_id))
             .ok_or(Error::NotFound)?;
+        // Renewal is intentionally limited to the two parties that accepted
+        // the retainer. A permissionless keeper must use a separately funded
+        // flow rather than advancing another user's agreement.
+        if caller != retainer.client && caller != retainer.freelancer {
+            return Err(Error::Unauthorized);
+        }
+        enforce_rate_limit(&env, &caller)?;
         if retainer.status != RetainerStatus::Active {
             return Err(Error::InvalidStatus);
         }
@@ -753,6 +759,41 @@ mod test {
             client.cancel_retainer(&user, &rid);
         }));
         assert!(cancel_again.is_err());
+    }
+
+    #[test]
+    fn test_unrelated_caller_cannot_renew_retainer() {
+        let (env, client, _, user, freelancer) = setup();
+        let token = Address::generate(&env);
+        let stranger = Address::generate(&env);
+        let rid = client.create_retainer(&user, &freelancer, &100_000i128, &10u64, &3u32, &token);
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = 50;
+        });
+        let renewal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.renew_retainer(&stranger, &rid);
+        }));
+
+        assert!(renewal.is_err());
+        let retainer = client.get_retainer(&rid);
+        assert_eq!(retainer.current_renewal, 0);
+        assert_eq!(retainer.last_renewed_at, 0);
+        assert_eq!(retainer.status, RetainerStatus::Active);
+    }
+
+    #[test]
+    fn test_freelancer_can_renew_retainer() {
+        let (env, client, _, user, freelancer) = setup();
+        let token = Address::generate(&env);
+        let rid = client.create_retainer(&user, &freelancer, &100_000i128, &10u64, &3u32, &token);
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = 50;
+        });
+        client.renew_retainer(&freelancer, &rid);
+
+        assert_eq!(client.get_retainer(&rid).current_renewal, 1);
     }
 
     #[test]
