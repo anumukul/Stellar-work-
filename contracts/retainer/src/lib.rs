@@ -195,6 +195,9 @@ impl RetainerContract {
     ) -> Result<u64, Error> {
         client.require_auth();
         enforce_rate_limit(&env, &client)?;
+        if max_renewals == 0 {
+            return Err(Error::MaxRenewalsReached);
+        }
         let count: u64 = env
             .storage()
             .instance()
@@ -248,18 +251,13 @@ impl RetainerContract {
             return Err(Error::IntervalNotPassed);
         }
         if retainer.current_renewal >= retainer.max_renewals {
-            retainer.status = RetainerStatus::Completed;
-            env.storage()
-                .persistent()
-                .set(&DataKey::Retainer(retainer_id), &retainer);
-            env.events().publish(
-                (symbol_short!("ret_cmpl"),),
-                (retainer_id, retainer.client, retainer.freelancer),
-            );
-            return Ok(retainer_id);
+            return Err(Error::MaxRenewalsReached);
         }
         retainer.current_renewal += 1;
         retainer.last_renewed_at = now;
+        if retainer.current_renewal >= retainer.max_renewals {
+            retainer.status = RetainerStatus::Completed;
+        }
         env.storage()
             .persistent()
             .set(&DataKey::Retainer(retainer_id), &retainer);
@@ -267,11 +265,17 @@ impl RetainerContract {
             (symbol_short!("ret_rnwd"),),
             (
                 retainer_id,
-                retainer.client,
-                retainer.freelancer,
+                retainer.client.clone(),
+                retainer.freelancer.clone(),
                 retainer.amount,
             ),
         );
+        if retainer.status == RetainerStatus::Completed {
+            env.events().publish(
+                (symbol_short!("ret_cmpl"),),
+                (retainer_id, retainer.client, retainer.freelancer),
+            );
+        }
         Ok(retainer_id)
     }
 
@@ -863,5 +867,39 @@ mod test {
             client.renew_retainer(&user, &rid);
         }));
         assert!(further_renew.is_err());
+    }
+
+    #[test]
+    fn test_single_renewal_retainer_completes_immediately_and_blocks_further_renewals() {
+        let (env, client, _, user, freelancer) = setup();
+        let token = Address::generate(&env);
+        let rid = client.create_retainer(&user, &freelancer, &500_000i128, &10u64, &1u32, &token);
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = 100;
+        });
+        client.renew_retainer(&user, &rid);
+
+        let retainer = client.get_retainer(&rid);
+        assert_eq!(retainer.current_renewal, 1);
+        assert_eq!(retainer.status, RetainerStatus::Completed);
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = 200;
+        });
+        assert_eq!(
+            client.try_renew_retainer(&user, &rid),
+            Err(Ok(Error::InvalidStatus))
+        );
+    }
+
+    #[test]
+    fn test_create_retainer_rejects_zero_max_renewals() {
+        let (env, client, _, user, freelancer) = setup();
+        let token = Address::generate(&env);
+        assert_eq!(
+            client.try_create_retainer(&user, &freelancer, &500_000i128, &10u64, &0u32, &token),
+            Err(Ok(Error::MaxRenewalsReached))
+        );
     }
 }
