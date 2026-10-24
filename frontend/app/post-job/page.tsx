@@ -44,6 +44,7 @@ const REDIRECT_DELAY_MS = 1500;
 
 interface DraftData {
   amount: string;
+  bonusAmount: string;
   description: string;
   deadline: string;
   tokenAddress: string;
@@ -260,7 +261,18 @@ function loadDraft(walletAddress: string | null): DraftData | null {
   try {
     const raw = localStorage.getItem(getDraftKey(walletAddress));
     if (!raw) return null;
-    return JSON.parse(raw) as DraftData;
+    const parsed = JSON.parse(raw) as Partial<DraftData>;
+    return {
+      amount: parsed.amount ?? "",
+      bonusAmount: parsed.bonusAmount ?? "",
+      description: parsed.description ?? "",
+      deadline: parsed.deadline ?? "",
+      tokenAddress: parsed.tokenAddress ?? "",
+      title: parsed.title ?? "",
+      category: parsed.category ?? "development",
+      language: parsed.language ?? "en",
+      savedAt: parsed.savedAt ?? Date.now(),
+    };
   } catch {
     return null;
   }
@@ -349,6 +361,7 @@ export default function PostJobPage() {
     if (draft) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setAmount(draft.amount);
+      setBonusAmount(draft.bonusAmount || "");
       setDescription(draft.description);
       setDeadline(draft.deadline);
       setTokenAddress(
@@ -372,6 +385,7 @@ export default function PostJobPage() {
     if (prevWalletRef.current === wallet) return;
     prevWalletRef.current = wallet;
     setAmount("");
+    setBonusAmount("");
     setDescription("");
     setDeadline("");
     setTokenAddress(process.env.NEXT_PUBLIC_NATIVE_TOKEN ?? "");
@@ -383,6 +397,7 @@ export default function PostJobPage() {
     if (draft) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setAmount(draft.amount);
+      setBonusAmount(draft.bonusAmount || "");
       setDescription(draft.description);
       setDeadline(draft.deadline);
       setTokenAddress(
@@ -455,13 +470,17 @@ export default function PostJobPage() {
       clearTimeout(debounceTimerRef.current);
     }
     const isEmpty =
-      !amount.trim() && !htmlToPlainText(description).trim() && !deadline;
+      !amount.trim() &&
+      !bonusAmount.trim() &&
+      !htmlToPlainText(description).trim() &&
+      !deadline;
     if (isEmpty) return;
 
     debounceTimerRef.current = setTimeout(() => {
       const now = Date.now();
       saveDraft(wallet, {
         amount,
+        bonusAmount,
         description,
         deadline,
         tokenAddress,
@@ -479,12 +498,15 @@ export default function PostJobPage() {
         clearTimeout(debounceTimerRef.current);
       }
     };
-  }, [amount, description, deadline, tokenAddress, title, category, language, wallet]);
+  }, [amount, bonusAmount, description, deadline, tokenAddress, title, category, language, wallet]);
 
   // Warn on navigation away when unsaved changes exist
   useEffect(() => {
     const hasContent =
-      amount.trim() || htmlToPlainText(description).trim() || deadline;
+      amount.trim() ||
+      bonusAmount.trim() ||
+      htmlToPlainText(description).trim() ||
+      deadline;
     if (!hasContent) return;
 
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -493,11 +515,12 @@ export default function PostJobPage() {
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [amount, description, deadline]);
+  }, [amount, bonusAmount, description, deadline]);
 
   function handleClearDraft() {
     clearDraft(wallet);
     setAmount("");
+    setBonusAmount("");
     setDescription("");
     setDeadline("");
     setTokenAddress(process.env.NEXT_PUBLIC_NATIVE_TOKEN ?? "");
@@ -690,6 +713,7 @@ export default function PostJobPage() {
       // Clear form and draft after successful submission.
       clearDraft(wallet);
       setAmount("");
+      setBonusAmount("");
       setDescription("");
       setDeadline("");
       setTitle("");
