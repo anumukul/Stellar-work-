@@ -97,4 +97,60 @@ describe("Post-job form: draft saving (FE-71)", () => {
     render(<PostJobPage />);
     expect(screen.queryByText("Clear draft")).not.toBeInTheDocument();
   });
+
+  it("restores bonusAmount from a saved draft and migrates legacy drafts without bonusAmount", () => {
+    const walletKey =
+      "stellarwork:post-job-draft:GWALLET000000000000000000000000000000000000000000000000000";
+    localStorage.setItem(
+      walletKey,
+      JSON.stringify({
+        amount: "10",
+        bonusAmount: "2.5",
+        description: "<p>Draft with bonus</p>",
+        deadline: "2027-01-01",
+        tokenAddress: "GNATIVE",
+        savedAt: Date.now(),
+      }),
+    );
+
+    const { unmount } = render(<PostJobPage />);
+    const bonusInput = screen.getByLabelText(/Bonus Amount \(XLM\)/) as HTMLInputElement;
+    expect(bonusInput.value).toBe("2.5");
+    unmount();
+
+    // Legacy draft without bonusAmount defaults to empty string
+    localStorage.setItem(
+      walletKey,
+      JSON.stringify({
+        amount: "10",
+        description: "<p>Legacy draft</p>",
+        deadline: "",
+        tokenAddress: "GNATIVE",
+        savedAt: Date.now(),
+      }),
+    );
+
+    render(<PostJobPage />);
+    const migratedBonusInput = screen.getByLabelText(/Bonus Amount \(XLM\)/) as HTMLInputElement;
+    expect(migratedBonusInput.value).toBe("");
+  });
+
+  it("autosaves bonusAmount when only the bonus field is edited", async () => {
+    const walletKey =
+      "stellarwork:post-job-draft:GWALLET000000000000000000000000000000000000000000000000000";
+    render(<PostJobPage />);
+
+    const bonusInput = screen.getByLabelText(/Bonus Amount \(XLM\)/);
+    fireEvent.change(bonusInput, { target: { value: "3.75" } });
+
+    await waitFor(
+      () => {
+        const raw = localStorage.getItem(walletKey);
+        expect(raw).not.toBeNull();
+        const saved = JSON.parse(raw!);
+        expect(saved.bonusAmount).toBe("3.75");
+      },
+      { timeout: 2000 },
+    );
+  });
 });
