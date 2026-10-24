@@ -594,6 +594,8 @@ pub enum Error {
     JobOnHold = 55,
     /// SC-168: token is currently held in active escrow jobs and cannot be removed.
     TokenInUse = 56,
+    /// BUG-41: oracle verdict winner is neither the job's client nor its assigned freelancer.
+    InvalidWinner = 57,
 }
 
 #[contract]
@@ -4597,6 +4599,10 @@ impl EscrowContract {
             Option::Some(addr) => addr,
             Option::None => panic_with_error!(&e, Error::InvalidStatus),
         };
+
+        if winner != job.client && winner != freelancer {
+            panic_with_error!(&e, Error::InvalidWinner);
+        }
 
         let client_wins = winner == job.client;
 
@@ -11974,5 +11980,52 @@ mod test {
         client.add_to_whitelist(&admin, &vip);
         let vip_summary = client.get_user_profile_summary(&vip);
         assert_eq!(vip_summary.access_status, AccessStatus::Whitelisted);
+    }
+
+    #[test]
+    fn test_submit_verdict_rejects_unrelated_winner() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+        let token_client = token::Client::new(&env, &native_token);
+
+        let oracle = Address::generate(&env);
+        let unrelated = Address::generate(&env);
+        client.register_oracle(
+            &admin,
+            &oracle,
+            &String::from_str(&env, "PrimaryOracle"),
+            &String::from_str(&env, "https://oracle.example.com"),
+        );
+        client.set_oracle_enabled(&admin, &true);
+
+        let job_amount = 100_000_000i128;
+        let job_id = client.post_job(
+            &user,
+            &job_amount,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+        client.raise_dispute(&user, &job_id);
+
+        let assigned_before = client.get_assigned_oracle(&job_id);
+        assert!(assigned_before.is_some());
+        let escrow_before = client.get_job_escrow_balance(&job_id);
+        let contract_bal_before = token_client.balance(&client.address);
+        let oracle_bal_before = token_client.balance(&oracle);
+        let user_bal_before = token_client.balance(&user);
+        let freelancer_bal_before = token_client.balance(&freelancer);
+
+        let res = client.try_submit_verdict(&oracle, &job_id, &unrelated, &hash(&env));
+        assert_eq!(res, Err(Ok(Error::InvalidWinner)));
+
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Disputed);
+        assert_eq!(client.get_assigned_oracle(&job_id), assigned_before);
+        assert_eq!(client.get_job_escrow_balance(&job_id), escrow_before);
+        assert_eq!(token_client.balance(&client.address), contract_bal_before);
+        assert_eq!(token_client.balance(&oracle), oracle_bal_before);
+        assert_eq!(token_client.balance(&user), user_bal_before);
+        assert_eq!(token_client.balance(&freelancer), freelancer_bal_before);
     }
 }
