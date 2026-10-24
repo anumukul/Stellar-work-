@@ -1478,6 +1478,16 @@ impl EscrowContract {
         set_job(&e, job_id, &job);
         set_escrow_balance(&e, job_id, amount);
 
+        let desc_owner_key = (Symbol::new(&e, "desc_own"), job.description_hash.clone());
+        if !e.storage().persistent().has(&desc_owner_key) {
+            e.storage().persistent().set(&desc_owner_key, &client);
+            e.storage().persistent().extend_ttl(
+                &desc_owner_key,
+                ACTIVE_JOB_LIFETIME_THRESHOLD,
+                INSTANCE_BUMP_AMOUNT,
+            );
+        }
+
         // Index the new job under the client's address so get_client_jobs is O(1).
         push_address_job_index(&e, &ExtKey::ClientJobIds(client.clone()), job_id);
 
@@ -3117,8 +3127,24 @@ impl EscrowContract {
     pub fn store_description_cid(e: Env, caller: Address, desc_hash: BytesN<32>, cid: String) {
         caller.require_auth();
         require_active_access(&e, &caller);
-        if cid.is_empty() {
+        if desc_hash == BytesN::from_array(&e, &[0u8; 32])
+            || cid.is_empty()
+            || !is_valid_cid_v1(&cid)
+        {
             panic_with_error!(&e, Error::InvalidDescriptionHash);
+        }
+        let owner_key = (Symbol::new(&e, "desc_own"), desc_hash.clone());
+        if let Some(owner) = e.storage().persistent().get::<_, Address>(&owner_key) {
+            if owner != caller {
+                panic_with_error!(&e, Error::Unauthorized);
+            }
+        } else {
+            e.storage().persistent().set(&owner_key, &caller);
+            e.storage().persistent().extend_ttl(
+                &owner_key,
+                ACTIVE_JOB_LIFETIME_THRESHOLD,
+                INSTANCE_BUMP_AMOUNT,
+            );
         }
         e.storage()
             .persistent()
@@ -9951,7 +9977,7 @@ mod test {
     fn store_and_get_description_cid_round_trip() {
         let (env, client, _, user, _, _) = setup();
         let desc_hash = BytesN::from_array(&env, &[0xAB; 32]);
-        let cid = String::from_str(&env, "QmTest123456789CIDValue");
+        let cid = metadata_cid(&env);
 
         client.store_description_cid(&user, &desc_hash, &cid);
 
@@ -9972,14 +9998,52 @@ mod test {
     fn store_description_cid_updates_existing() {
         let (env, client, _, user, _, _) = setup();
         let desc_hash = BytesN::from_array(&env, &[0xAB; 32]);
-        let cid1 = String::from_str(&env, "QmFirstCID123456789");
-        let cid2 = String::from_str(&env, "QmSecondCID987654321");
+        let cid1 = metadata_cid(&env);
+        let cid2 = String::from_str(
+            &env,
+            "bafybeihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku",
+        );
 
         client.store_description_cid(&user, &desc_hash, &cid1);
         client.store_description_cid(&user, &desc_hash, &cid2);
 
         let retrieved = client.get_description_cid(&desc_hash);
         assert_eq!(retrieved, cid2);
+    }
+
+    #[test]
+    fn store_description_cid_rejects_overwrite_by_another_caller() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let desc_hash = BytesN::from_array(&env, &[0xAC; 32]);
+        let cid1 = metadata_cid(&env);
+        let cid2 = String::from_str(
+            &env,
+            "bafybeihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku",
+        );
+
+        client.post_job(
+            &user,
+            &1_000_000i128,
+            &desc_hash,
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.store_description_cid(&user, &desc_hash, &cid1);
+
+        let res = client.try_store_description_cid(&freelancer, &desc_hash, &cid2);
+        assert_eq!(res, Err(Ok(Error::Unauthorized)));
+        assert_eq!(client.get_description_cid(&desc_hash), cid1);
+    }
+
+    #[test]
+    fn store_description_cid_rejects_invalid_cid() {
+        let (env, client, _, user, _, _) = setup();
+        let desc_hash = BytesN::from_array(&env, &[0xAD; 32]);
+        let bad_cid = String::from_str(&env, "not-a-valid-cidv1");
+
+        let res = client.try_store_description_cid(&user, &desc_hash, &bad_cid);
+        assert_eq!(res, Err(Ok(Error::InvalidDescriptionHash)));
     }
 
     // ── SC-138: job extended metadata IPFS hash storage ──────────────────────
