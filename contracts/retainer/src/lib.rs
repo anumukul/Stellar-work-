@@ -8,6 +8,9 @@ use soroban_sdk::{
 const RATE_LIMIT_STATE_TTL_THRESHOLD: u32 = 17_280;
 const RATE_LIMIT_STATE_TTL_BUMP: u32 = 518_400;
 const MAX_RATE_LIMIT_WINDOW_SECONDS: u64 = 2_592_000;
+/// Schema version for `CrossChainJob` records that explicitly separate
+/// `origin_contract`/`source_chain` from `target_contract`/`target_chain`.
+pub const CROSS_CHAIN_JOB_SCHEMA_VERSION: u32 = 2;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -61,12 +64,20 @@ pub struct Retainer {
     pub last_renewed_at: u64,
 }
 
+/// Versioned cross-chain job record.
+///
+/// Schema v2 (`CROSS_CHAIN_JOB_SCHEMA_VERSION = 2`) records `origin_contract`
+/// as the exporting contract address on `source_chain` and persists both
+/// `target_chain` and `target_contract` for destination reconstruction.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CrossChainJob {
+    pub schema_version: u32,
     pub source_chain: String,
     pub source_job_id: u64,
     pub origin_contract: Address,
+    pub target_chain: String,
+    pub target_contract: Address,
     pub freelancer: Address,
     pub amount: i128,
     pub token: Address,
@@ -248,18 +259,13 @@ impl RetainerContract {
             return Err(Error::IntervalNotPassed);
         }
         if retainer.current_renewal >= retainer.max_renewals {
-            retainer.status = RetainerStatus::Completed;
-            env.storage()
-                .persistent()
-                .set(&DataKey::Retainer(retainer_id), &retainer);
-            env.events().publish(
-                (symbol_short!("ret_cmpl"),),
-                (retainer_id, retainer.client, retainer.freelancer),
-            );
-            return Ok(retainer_id);
+            return Err(Error::MaxRenewalsReached);
         }
         retainer.current_renewal += 1;
         retainer.last_renewed_at = now;
+        if retainer.current_renewal >= retainer.max_renewals {
+            retainer.status = RetainerStatus::Completed;
+        }
         env.storage()
             .persistent()
             .set(&DataKey::Retainer(retainer_id), &retainer);
@@ -267,11 +273,17 @@ impl RetainerContract {
             (symbol_short!("ret_rnwd"),),
             (
                 retainer_id,
-                retainer.client,
-                retainer.freelancer,
+                retainer.client.clone(),
+                retainer.freelancer.clone(),
                 retainer.amount,
             ),
         );
+        if retainer.status == RetainerStatus::Completed {
+            env.events().publish(
+                (symbol_short!("ret_cmpl"),),
+                (retainer_id, retainer.client, retainer.freelancer),
+            );
+        }
         Ok(retainer_id)
     }
 
@@ -327,10 +339,14 @@ impl RetainerContract {
         env.storage()
             .instance()
             .set(&DataKey::CrossChainJobCount, &cc_id);
+        let origin_contract = env.current_contract_address();
         let cross = CrossChainJob {
+            schema_version: CROSS_CHAIN_JOB_SCHEMA_VERSION,
             source_chain: String::from_str(&env, "stellar"),
             source_job_id,
-            origin_contract: target_contract,
+            origin_contract: origin_contract.clone(),
+            target_chain: target_chain.clone(),
+            target_contract: target_contract.clone(),
             freelancer: freelancer.clone(),
             amount,
             token: token.clone(),
@@ -342,7 +358,15 @@ impl RetainerContract {
             .set(&DataKey::CrossChainJob(cc_id), &cross);
         env.events().publish(
             (symbol_short!("j_xport"),),
-            (cc_id, source_job_id, freelancer, amount, target_chain),
+            (
+                cc_id,
+                source_job_id,
+                origin_contract,
+                freelancer,
+                amount,
+                target_chain,
+                target_contract,
+            ),
         );
         Ok(cc_id)
     }
@@ -863,5 +887,51 @@ mod test {
             client.renew_retainer(&user, &rid);
         }));
         assert!(further_renew.is_err());
+    }
+
+    #[test]
+    fn test_export_job_preserves_distinct_origin_and_target_metadata() {
+        let (env, client, admin, _, freelancer) = setup();
+        let token = Address::generate(&env);
+        let target_contract_1 = Address::generate(&env);
+        let target_contract_2 = Address::generate(&env);
+        let target_chain_1 = String::from_str(&env, "futurenet");
+        let target_chain_2 = String::from_str(&env, "ethereum");
+
+        let cc_id_1 = client.export_job(
+            &admin,
+            &10u64,
+            &freelancer,
+            &1_000_000i128,
+            &token,
+            &target_chain_1,
+            &target_contract_1,
+        );
+        let cc_id_2 = client.export_job(
+            &admin,
+            &20u64,
+            &freelancer,
+            &2_500_000i128,
+            &token,
+            &target_chain_2,
+            &target_contract_2,
+        );
+
+        let job_1 = client.get_cross_chain_job(&cc_id_1);
+        assert_eq!(job_1.schema_version, CROSS_CHAIN_JOB_SCHEMA_VERSION);
+        assert_eq!(job_1.source_chain, String::from_str(&env, "stellar"));
+        assert_eq!(job_1.origin_contract, client.address);
+        assert_eq!(job_1.target_chain, target_chain_1);
+        assert_eq!(job_1.target_contract, target_contract_1);
+        assert_ne!(job_1.origin_contract, job_1.target_contract);
+
+        let job_2 = client.get_cross_chain_job(&cc_id_2);
+        assert_eq!(job_2.schema_version, CROSS_CHAIN_JOB_SCHEMA_VERSION);
+        assert_eq!(job_2.source_chain, String::from_str(&env, "stellar"));
+        assert_eq!(job_2.origin_contract, client.address);
+        assert_eq!(job_2.target_chain, target_chain_2);
+        assert_eq!(job_2.target_contract, target_contract_2);
+        assert_ne!(job_1.target_contract, job_2.target_contract);
+        assert_ne!(job_1.target_chain, job_2.target_chain);
     }
 }
