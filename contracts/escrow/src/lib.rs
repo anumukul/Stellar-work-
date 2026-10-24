@@ -5883,6 +5883,13 @@ fn checked_mul_div(e: &Env, left: i128, mul: i128, div: i128) -> i128 {
         .unwrap_or_else(|| panic_with_error!(e, Error::InsufficientFunds))
 }
 
+/// Select the fee rate (in basis points) for `amount` from configured fee tiers.
+///
+/// Among all qualifying tiers (`amount >= tier.min_amount`), the tier with the
+/// greatest `min_amount` is selected. If multiple qualifying tiers share the
+/// same highest `min_amount`, the lower `fee_bps` wins so that tie resolution
+/// is also independent of tier index order. When no tier qualifies (or none are
+/// configured), the fallback rate from `get_fee_bps_storage(e)` is returned.
 fn calculate_fee_for_amount(e: &Env, amount: i128) -> i128 {
     let tier_count = e
         .storage()
@@ -5895,6 +5902,7 @@ fn calculate_fee_for_amount(e: &Env, amount: i128) -> i128 {
     }
 
     let mut matched_bps: i128 = get_fee_bps_storage(e);
+    let mut best_min_amount: Option<i128> = None;
 
     for i in 0..tier_count {
         if let Some(tier) = e
@@ -5903,7 +5911,22 @@ fn calculate_fee_for_amount(e: &Env, amount: i128) -> i128 {
             .get::<DataKey, FeeTier>(&DataKey::FeeTier(i))
         {
             if amount >= tier.min_amount {
-                matched_bps = tier.fee_bps;
+                match best_min_amount {
+                    None => {
+                        best_min_amount = Some(tier.min_amount);
+                        matched_bps = tier.fee_bps;
+                    }
+                    Some(prev_min) if tier.min_amount > prev_min => {
+                        best_min_amount = Some(tier.min_amount);
+                        matched_bps = tier.fee_bps;
+                    }
+                    Some(prev_min)
+                        if tier.min_amount == prev_min && tier.fee_bps < matched_bps =>
+                    {
+                        matched_bps = tier.fee_bps;
+                    }
+                    _ => {}
+                }
             }
         }
     }
@@ -9073,6 +9096,70 @@ mod test {
             client.update_fee_tier(&user, &0, &100i128, &300i128);
         }));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn fee_tier_unsorted_indices_select_highest_qualifying_threshold() {
+        let (_env_a, client_a, admin_a, _, _, token_a) = setup();
+        // Higher threshold placed at lower index (0), lower threshold at higher index (1)
+        client_a.update_fee_tier(&admin_a, &0, &(500 * XLM_STROOP), &150i128);
+        client_a.update_fee_tier(&admin_a, &1, &(100 * XLM_STROOP), &250i128);
+
+        let (_env_b, client_b, admin_b, _, _, token_b) = setup();
+        // Swapped indices with identical thresholds and rates
+        client_b.update_fee_tier(&admin_b, &0, &(100 * XLM_STROOP), &250i128);
+        client_b.update_fee_tier(&admin_b, &1, &(500 * XLM_STROOP), &150i128);
+
+        let amount_above_both = 600 * XLM_STROOP;
+        let quote_a = client_a.estimate_fee(&amount_above_both, &token_a);
+        let quote_b = client_b.estimate_fee(&amount_above_both, &token_b);
+        assert_eq!(quote_a.platform_fee_bps, 150);
+        assert_eq!(quote_b.platform_fee_bps, 150);
+        assert_eq!(quote_a.platform_fee, quote_b.platform_fee);
+
+        // Exact boundary at 500 XLM and 100 XLM
+        assert_eq!(
+            client_a
+                .estimate_fee(&(500 * XLM_STROOP), &token_a)
+                .platform_fee_bps,
+            150
+        );
+        assert_eq!(
+            client_a
+                .estimate_fee(&(100 * XLM_STROOP), &token_a)
+                .platform_fee_bps,
+            250
+        );
+
+        // Below all configured thresholds falls back to default fee_bps
+        let default_bps = client_a.get_fee_bps();
+        assert_eq!(
+            client_a
+                .estimate_fee(&(50 * XLM_STROOP), &token_a)
+                .platform_fee_bps,
+            default_bps
+        );
+    }
+
+    #[test]
+    fn fee_tier_equal_thresholds_resolve_deterministically() {
+        let (_env_a, client_a, admin_a, _, _, token_a) = setup();
+        client_a.update_fee_tier(&admin_a, &0, &(200 * XLM_STROOP), &250i128);
+        client_a.update_fee_tier(&admin_a, &1, &(200 * XLM_STROOP), &175i128);
+
+        let (_env_b, client_b, admin_b, _, _, token_b) = setup();
+        client_b.update_fee_tier(&admin_b, &0, &(200 * XLM_STROOP), &175i128);
+        client_b.update_fee_tier(&admin_b, &1, &(200 * XLM_STROOP), &250i128);
+
+        let amount = 200 * XLM_STROOP;
+        assert_eq!(
+            client_a.estimate_fee(&amount, &token_a).platform_fee_bps,
+            175
+        );
+        assert_eq!(
+            client_b.estimate_fee(&amount, &token_b).platform_fee_bps,
+            175
+        );
     }
     // ── cancel_job after accept tests (issue #269) ────────────────────────────
     //
