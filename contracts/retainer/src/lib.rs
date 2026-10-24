@@ -22,6 +22,8 @@ pub enum Error {
     NotInitialized = 7,
     InvalidRateLimitConfig = 8,
     RateLimitExceeded = 9,
+    AlreadyImported = 10,
+    CrossChainMetadataMismatch = 11,
 }
 
 #[contracttype]
@@ -86,6 +88,7 @@ pub enum DataKey {
     RateLimitConfig,
     RateLimitState(Address),
     TrustedAddress(Address),
+    ImportedSourceJob(String, Address, u64),
 }
 
 fn require_admin(env: &Env, admin: &Address) -> Result<(), Error> {
@@ -248,18 +251,13 @@ impl RetainerContract {
             return Err(Error::IntervalNotPassed);
         }
         if retainer.current_renewal >= retainer.max_renewals {
-            retainer.status = RetainerStatus::Completed;
-            env.storage()
-                .persistent()
-                .set(&DataKey::Retainer(retainer_id), &retainer);
-            env.events().publish(
-                (symbol_short!("ret_cmpl"),),
-                (retainer_id, retainer.client, retainer.freelancer),
-            );
-            return Ok(retainer_id);
+            return Err(Error::MaxRenewalsReached);
         }
         retainer.current_renewal += 1;
         retainer.last_renewed_at = now;
+        if retainer.current_renewal >= retainer.max_renewals {
+            retainer.status = RetainerStatus::Completed;
+        }
         env.storage()
             .persistent()
             .set(&DataKey::Retainer(retainer_id), &retainer);
@@ -267,11 +265,17 @@ impl RetainerContract {
             (symbol_short!("ret_rnwd"),),
             (
                 retainer_id,
-                retainer.client,
-                retainer.freelancer,
+                retainer.client.clone(),
+                retainer.freelancer.clone(),
                 retainer.amount,
             ),
         );
+        if retainer.status == RetainerStatus::Completed {
+            env.events().publish(
+                (symbol_short!("ret_cmpl"),),
+                (retainer_id, retainer.client, retainer.freelancer),
+            );
+        }
         Ok(retainer_id)
     }
 
@@ -363,7 +367,31 @@ impl RetainerContract {
             .persistent()
             .get(&DataKey::CrossChainJob(cross_chain_id))
             .ok_or(Error::NotFound)?;
+        if cross.imported {
+            return Err(Error::AlreadyImported);
+        }
+        if cross.source_job_id != source_job_id
+            || cross.freelancer != freelancer
+            || cross.amount != amount
+            || cross.token != token
+        {
+            return Err(Error::CrossChainMetadataMismatch);
+        }
+        let replay_key = DataKey::ImportedSourceJob(
+            source_chain.clone(),
+            cross.origin_contract.clone(),
+            source_job_id,
+        );
+        if env
+            .storage()
+            .persistent()
+            .get::<_, bool>(&replay_key)
+            .unwrap_or(false)
+        {
+            return Err(Error::AlreadyImported);
+        }
         cross.imported = true;
+        env.storage().persistent().set(&replay_key, &true);
         env.storage()
             .persistent()
             .set(&DataKey::CrossChainJob(cross_chain_id), &cross);
@@ -863,5 +891,92 @@ mod test {
             client.renew_retainer(&user, &rid);
         }));
         assert!(further_renew.is_err());
+    }
+
+    #[test]
+    fn test_import_job_rejects_replay_and_duplicate_source_identity() {
+        let (env, client, admin, _, freelancer) = setup();
+        let token = Address::generate(&env);
+        let origin_contract = Address::generate(&env);
+        let chain = String::from_str(&env, "futurenet");
+
+        let cc_id = client.export_job(
+            &admin,
+            &42u64,
+            &freelancer,
+            &1_000_000i128,
+            &token,
+            &chain,
+            &origin_contract,
+        );
+        client.import_job(
+            &admin,
+            &cc_id,
+            &chain,
+            &42u64,
+            &freelancer,
+            &1_000_000i128,
+            &token,
+        );
+
+        // Replaying import on the same cross_chain_id fails with AlreadyImported
+        assert_eq!(
+            client.try_import_job(
+                &admin,
+                &cc_id,
+                &chain,
+                &42u64,
+                &freelancer,
+                &1_000_000i128,
+                &token,
+            ),
+            Err(Ok(Error::AlreadyImported))
+        );
+
+        // Duplicated source identity across a second export is also rejected
+        let dup_cc_id = client.export_job(
+            &admin,
+            &42u64,
+            &freelancer,
+            &1_000_000i128,
+            &token,
+            &chain,
+            &origin_contract,
+        );
+        assert_eq!(
+            client.try_import_job(
+                &admin,
+                &dup_cc_id,
+                &chain,
+                &42u64,
+                &freelancer,
+                &1_000_000i128,
+                &token,
+            ),
+            Err(Ok(Error::AlreadyImported))
+        );
+
+        // Mismatched metadata is rejected before marking imported
+        let other_cc_id = client.export_job(
+            &admin,
+            &99u64,
+            &freelancer,
+            &1_000_000i128,
+            &token,
+            &chain,
+            &origin_contract,
+        );
+        assert_eq!(
+            client.try_import_job(
+                &admin,
+                &other_cc_id,
+                &chain,
+                &99u64,
+                &freelancer,
+                &2_000_000i128,
+                &token,
+            ),
+            Err(Ok(Error::CrossChainMetadataMismatch))
+        );
     }
 }
