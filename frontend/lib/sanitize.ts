@@ -1,6 +1,7 @@
 "use client";
 
 import DOMPurify from "dompurify";
+import { StrKey } from "@stellar/stellar-sdk";
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
@@ -236,7 +237,12 @@ export function sanitizeAnnouncementMessage(raw: string): string {
 // ─── Stellar contract address validation ───────────────────────────────────────
 
 export function validateTokenAddress(raw: string): string | null {
-  const addr = validateStellarAddress(raw);
-  if (!addr) return "Token address must be a valid Stellar contract address (G...).";
+  if (typeof raw !== "string") {
+    return "Token address must be a valid Stellar contract address (C...).";
+  }
+  const trimmed = raw.trim().toUpperCase();
+  if (!trimmed || !StrKey.isValidContract(trimmed)) {
+    return "Token address must be a valid Stellar contract address (C...).";
+  }
   return null;
 }
