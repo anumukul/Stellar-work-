@@ -52,13 +52,18 @@ pub struct Retainer {
     pub client: Address,
     pub freelancer: Address,
     pub amount: i128,
+    /// Minimum number of ledgers (`env.ledger().sequence()`) that must elapse between renewals.
     pub interval_ledgers: u64,
     pub max_renewals: u32,
     pub current_renewal: u32,
     pub status: RetainerStatus,
+    /// Creation Unix timestamp in seconds (`env.ledger().timestamp()`).
     pub created_at: u64,
     pub token: Address,
+    /// Last renewal Unix timestamp in seconds (`env.ledger().timestamp()`).
     pub last_renewed_at: u64,
+    /// Last renewal ledger sequence number (`env.ledger().sequence()`).
+    pub last_renewed_ledger: u32,
 }
 
 #[contracttype]
@@ -204,6 +209,8 @@ impl RetainerContract {
         env.storage()
             .instance()
             .set(&DataKey::RetainerCount, &retainer_id);
+        let now = env.ledger().timestamp();
+        let current_ledger = env.ledger().sequence();
         let retainer = Retainer {
             client: client.clone(),
             freelancer: freelancer.clone(),
@@ -212,9 +219,10 @@ impl RetainerContract {
             max_renewals,
             current_renewal: 0,
             status: RetainerStatus::Active,
-            created_at: env.ledger().timestamp(),
+            created_at: now,
             token: token.clone(),
-            last_renewed_at: env.ledger().timestamp(),
+            last_renewed_at: now,
+            last_renewed_ledger: current_ledger,
         };
         env.storage()
             .persistent()
@@ -244,7 +252,10 @@ impl RetainerContract {
             return Err(Error::InvalidStatus);
         }
         let now = env.ledger().timestamp();
-        if now < retainer.last_renewed_at + retainer.interval_ledgers {
+        let current_ledger = env.ledger().sequence();
+        if u64::from(current_ledger)
+            < u64::from(retainer.last_renewed_ledger).saturating_add(retainer.interval_ledgers)
+        {
             return Err(Error::IntervalNotPassed);
         }
         if retainer.current_renewal >= retainer.max_renewals {
@@ -260,6 +271,10 @@ impl RetainerContract {
         }
         retainer.current_renewal += 1;
         retainer.last_renewed_at = now;
+        retainer.last_renewed_ledger = current_ledger;
+        if retainer.current_renewal >= retainer.max_renewals {
+            retainer.status = RetainerStatus::Completed;
+        }
         env.storage()
             .persistent()
             .set(&DataKey::Retainer(retainer_id), &retainer);
@@ -450,7 +465,7 @@ impl RetainerContract {
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::{Address as _, Ledger as _};
     use soroban_sdk::{Address, Env};
 
     fn setup() -> (
@@ -494,6 +509,7 @@ mod test {
 
         env.ledger().with_mut(|li| {
             li.timestamp = 100;
+            li.sequence_number = 10;
         });
         client.renew_retainer(&user, &rid);
         let retainer = client.get_retainer(&rid);
@@ -501,6 +517,7 @@ mod test {
 
         env.ledger().with_mut(|li| {
             li.timestamp = 200;
+            li.sequence_number = 20;
         });
         client.renew_retainer(&user, &rid);
         let retainer = client.get_retainer(&rid);
@@ -515,11 +532,13 @@ mod test {
 
         env.ledger().with_mut(|li| {
             li.timestamp = 100;
+            li.sequence_number = 10;
         });
         client.renew_retainer(&user, &rid);
 
         env.ledger().with_mut(|li| {
             li.timestamp = 200;
+            li.sequence_number = 20;
         });
         client.renew_retainer(&user, &rid);
 
@@ -545,6 +564,7 @@ mod test {
         let rid = client.create_retainer(&user, &freelancer, &500_000i128, &10u64, &1u32, &token);
         env.ledger().with_mut(|li| {
             li.timestamp = 100;
+            li.sequence_number = 10;
         });
         client.renew_retainer(&user, &rid);
         client.cancel_retainer(&user, &rid);
@@ -588,6 +608,7 @@ mod test {
         let rid = client.create_retainer(&user, &freelancer, &500_000i128, &100u64, &12u32, &token);
         env.ledger().with_mut(|li| {
             li.timestamp = 10;
+            li.sequence_number = 10;
         });
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             client.renew_retainer(&user, &rid);
@@ -748,6 +769,7 @@ mod test {
         // Renewing cancelled retainer fails
         env.ledger().with_mut(|li| {
             li.timestamp = 50;
+            li.sequence_number = 50;
         });
         let renew_cancelled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             client.renew_retainer(&user, &rid);
@@ -770,6 +792,7 @@ mod test {
 
         env.ledger().with_mut(|li| {
             li.timestamp = 50;
+            li.sequence_number = 50;
         });
         let renewal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             client.renew_retainer(&stranger, &rid);
@@ -779,6 +802,7 @@ mod test {
         let retainer = client.get_retainer(&rid);
         assert_eq!(retainer.current_renewal, 0);
         assert_eq!(retainer.last_renewed_at, 0);
+        assert_eq!(retainer.last_renewed_ledger, 0);
         assert_eq!(retainer.status, RetainerStatus::Active);
     }
 
@@ -790,6 +814,7 @@ mod test {
 
         env.ledger().with_mut(|li| {
             li.timestamp = 50;
+            li.sequence_number = 50;
         });
         client.renew_retainer(&freelancer, &rid);
 
@@ -818,11 +843,12 @@ mod test {
 
     #[test]
     fn test_state_assertions_across_lifecycle() {
-        let (env, client, admin, user, freelancer) = setup();
+        let (env, client, _admin, user, freelancer) = setup();
         let token = Address::generate(&env);
 
         env.ledger().with_mut(|li| {
             li.timestamp = 1000;
+            li.sequence_number = 100;
         });
         let rid = client.create_retainer(&user, &freelancer, &250_000i128, &100u64, &2u32, &token);
         let r_created = client.get_retainer(&rid);
@@ -835,21 +861,25 @@ mod test {
         assert_eq!(r_created.status, RetainerStatus::Active);
         assert_eq!(r_created.created_at, 1000);
         assert_eq!(r_created.last_renewed_at, 1000);
+        assert_eq!(r_created.last_renewed_ledger, 100);
         assert_eq!(r_created.token, token);
 
-        // First renewal at timestamp 1100
+        // First renewal at timestamp 1100, ledger 200
         env.ledger().with_mut(|li| {
             li.timestamp = 1100;
+            li.sequence_number = 200;
         });
         client.renew_retainer(&user, &rid);
         let r_renewed1 = client.get_retainer(&rid);
         assert_eq!(r_renewed1.current_renewal, 1);
         assert_eq!(r_renewed1.last_renewed_at, 1100);
+        assert_eq!(r_renewed1.last_renewed_ledger, 200);
         assert_eq!(r_renewed1.status, RetainerStatus::Active);
 
-        // Second renewal at timestamp 1205 completes retainer
+        // Second renewal at timestamp 1205, ledger 305 completes retainer
         env.ledger().with_mut(|li| {
             li.timestamp = 1205;
+            li.sequence_number = 305;
         });
         client.renew_retainer(&user, &rid);
         let r_completed = client.get_retainer(&rid);
@@ -858,10 +888,45 @@ mod test {
         // Further renewals fail
         env.ledger().with_mut(|li| {
             li.timestamp = 1350;
+            li.sequence_number = 450;
         });
         let further_renew = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             client.renew_retainer(&user, &rid);
         }));
         assert!(further_renew.is_err());
+    }
+
+    #[test]
+    fn test_renew_retainer_uses_ledger_sequence_not_unix_timestamp() {
+        let (env, client, _, user, freelancer) = setup();
+        let token = Address::generate(&env);
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1_000;
+            li.sequence_number = 50;
+        });
+        let rid = client.create_retainer(&user, &freelancer, &500_000i128, &20u64, &3u32, &token);
+
+        // Advance Unix timestamp far beyond 20 seconds, but keep ledger sequence < 70
+        env.ledger().with_mut(|li| {
+            li.timestamp = 10_000;
+            li.sequence_number = 69;
+        });
+        assert_eq!(
+            client.try_renew_retainer(&user, &rid),
+            Err(Ok(Error::IntervalNotPassed))
+        );
+
+        // Advance ledger sequence to 70 without changing Unix timestamp
+        env.ledger().with_mut(|li| {
+            li.timestamp = 10_000;
+            li.sequence_number = 70;
+        });
+        assert_eq!(client.renew_retainer(&user, &rid), rid);
+
+        let retainer = client.get_retainer(&rid);
+        assert_eq!(retainer.current_renewal, 1);
+        assert_eq!(retainer.last_renewed_ledger, 70);
+        assert_eq!(retainer.last_renewed_at, 10_000);
     }
 }
