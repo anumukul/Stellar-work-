@@ -86,12 +86,12 @@ export default function AnnouncementBanner() {
     }
   };
 
-  if (!isVisible || !config) return null;
-
   const sanitizedMessage = useMemo(
-    () => sanitizeAnnouncementMessage(config.message),
-    [config.message],
+    () => (config ? sanitizeAnnouncementMessage(config.message) : String()),
+    [config],
   );
+
+  if (!isVisible || !config) return null;
 
   const bgColors = {
     info: "bg-blue-600 text-white",
