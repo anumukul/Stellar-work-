@@ -567,6 +567,7 @@ pub enum Error {
     OracleNotFound = 37,
     OracleNotActive = 38,
     OracleNotAssigned = 39,
+    InvalidOracleWinner = 40,
     InsufficientBurnPool = 41,
     InvalidBurnPercentage = 42,
     /// SC-122: this client already submitted a job with this nonce.
@@ -4597,6 +4598,10 @@ impl EscrowContract {
             Option::Some(addr) => addr,
             Option::None => panic_with_error!(&e, Error::InvalidStatus),
         };
+
+        if winner != job.client && winner != freelancer {
+            panic_with_error!(&e, Error::InvalidOracleWinner);
+        }
 
         let client_wins = winner == job.client;
 
@@ -11974,5 +11979,71 @@ mod test {
         client.add_to_whitelist(&admin, &vip);
         let vip_summary = client.get_user_profile_summary(&vip);
         assert_eq!(vip_summary.access_status, AccessStatus::Whitelisted);
+    }
+
+    #[test]
+    fn test_oracle_submit_verdict_rejects_unrelated_winner_and_preserves_state() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+        let oracle_addr = Address::generate(&env);
+        let unrelated_winner = Address::generate(&env);
+        let token_client = token::Client::new(&env, &native_token);
+        let token_admin = token::StellarAssetClient::new(&env, &native_token);
+        token_admin.mint(&user, &500_000_000i128);
+
+        client.register_oracle(
+            &admin,
+            &oracle_addr,
+            &String::from_str(&env, "PrimaryOracle"),
+            &String::from_str(&env, "https://oracle.example.com"),
+        );
+        client.set_oracle_enabled(&admin, &true);
+
+        let job_amount = 100_000_000i128;
+        let job_id = client.post_job(
+            &user,
+            &job_amount,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+        client.raise_dispute(&user, &job_id);
+
+        let pre_user_balance = token_client.balance(&user);
+        let pre_freelancer_balance = token_client.balance(&freelancer);
+        let pre_oracle_balance = token_client.balance(&oracle_addr);
+        let pre_contract_balance = token_client.balance(&client.address);
+        let pre_escrow_balance = client.get_job_escrow_balance(&job_id);
+        let pre_assignment = client.get_assigned_oracle(&job_id);
+        assert!(pre_assignment.is_some());
+
+        let evidence = BytesN::from_array(&env, &[0x42; 32]);
+        let invalid_res = client.try_submit_verdict(
+            &oracle_addr,
+            &job_id,
+            &unrelated_winner,
+            &evidence,
+        );
+        assert_eq!(invalid_res, Err(Ok(soroban_sdk::Error::from_contract_error(Error::InvalidOracleWinner as u32))));
+
+        // Verify job status, oracle assignment, escrow accounting, and all balances are unchanged
+        let job_after = client.get_job(&job_id);
+        assert_eq!(job_after.status, JobStatus::Disputed);
+        assert_eq!(job_after.freelancer, Some(freelancer.clone()));
+        assert_eq!(client.get_assigned_oracle(&job_id), pre_assignment);
+        assert_eq!(client.get_job_escrow_balance(&job_id), pre_escrow_balance);
+        assert_eq!(token_client.balance(&user), pre_user_balance);
+        assert_eq!(token_client.balance(&freelancer), pre_freelancer_balance);
+        assert_eq!(token_client.balance(&oracle_addr), pre_oracle_balance);
+        assert_eq!(token_client.balance(&client.address), pre_contract_balance);
+
+        // Valid freelancer winner still succeeds and settles properly
+        client.submit_verdict(&oracle_addr, &job_id, &freelancer, &evidence);
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Completed);
+        assert!(client.get_assigned_oracle(&job_id).is_none());
+        assert_eq!(client.get_job_escrow_balance(&job_id), 0i128);
+        assert!(token_client.balance(&freelancer) > pre_freelancer_balance);
+        assert!(token_client.balance(&oracle_addr) > pre_oracle_balance);
     }
 }
