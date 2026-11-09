@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from "react";
 
-type Currency = "XLM" | "USD" | "EUR";
+export type Currency = "XLM" | "USD" | "EUR";
 
 const CURRENCY_SYMBOLS: Record<Currency, string> = {
   XLM: "\u20BF",
@@ -15,19 +15,19 @@ const XLM_TO_EUR = 0.11;
 const PLATFORM_FEE_BPS = 250;
 const HOURS_PER_MONTH = 160;
 
-function xlmToCurrency(xlm: number, currency: Currency): number {
+export function xlmToCurrency(xlm: number, currency: Currency): number {
   if (currency === "XLM") return xlm;
   const usd = xlm * XLM_TO_USD;
   return currency === "USD" ? usd : usd * (XLM_TO_EUR / XLM_TO_USD);
 }
 
-function formatCurrency(amount: number, currency: Currency): string {
+export function formatCurrency(amount: number, currency: Currency): string {
   const sym = CURRENCY_SYMBOLS[currency];
   const decimals = currency === "XLM" ? 2 : 2;
   return `${sym}${amount.toFixed(decimals).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}`;
 }
 
-interface Scenario {
+export interface Scenario {
   id: string;
   label: string;
   jobAmount: number;
@@ -36,24 +36,87 @@ interface Scenario {
   hoursPerJob: number;
 }
 
+export type StorageErrorType =
+  | "QuotaExceededError"
+  | "SecurityError"
+  | "UnknownError";
+
+export interface SaveScenariosResult {
+  persisted: boolean;
+  errorType: StorageErrorType | null;
+  errorMessage: string | null;
+}
+
 function generateId(): string {
   return Math.random().toString(36).slice(2, 9);
 }
 
-const SCENARIOS_KEY = "stellarwork:earnings-scenarios";
+export const SCENARIOS_KEY = "stellarwork:earnings-scenarios";
 
-function loadScenarios(): Scenario[] {
+export function classifyStorageError(error: unknown): {
+  errorType: StorageErrorType;
+  errorMessage: string;
+} {
+  const name = error instanceof Error ? error.name : "";
+  const message = error instanceof Error ? error.message : String(error ?? "");
+
+  if (
+    name === "QuotaExceededError" ||
+    name === "NS_ERROR_DOM_QUOTA_REACHED" ||
+    /quota/i.test(name) ||
+    /quota/i.test(message)
+  ) {
+    return {
+      errorType: "QuotaExceededError",
+      errorMessage:
+        "Browser storage is full (QuotaExceededError). Your scenario changes remain available in memory for this session, but could not be saved locally.",
+    };
+  }
+
+  if (
+    name === "SecurityError" ||
+    /security/i.test(name) ||
+    /security|denied|access|blocked/i.test(message)
+  ) {
+    return {
+      errorType: "SecurityError",
+      errorMessage:
+        "Browser storage access is blocked (SecurityError). Your scenario changes remain available in memory for this session, but could not be persisted.",
+    };
+  }
+
+  return {
+    errorType: "UnknownError",
+    errorMessage:
+      "Could not save scenarios to browser storage. Your scenario changes remain available in memory for this session.",
+  };
+}
+
+export function loadScenarios(): Scenario[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem(SCENARIOS_KEY);
-    return raw ? JSON.parse(raw) as Scenario[] : [];
+    return raw ? (JSON.parse(raw) as Scenario[]) : [];
   } catch {
     return [];
   }
 }
 
-function saveScenarios(scenarios: Scenario[]): void {
-  localStorage.setItem(SCENARIOS_KEY, JSON.stringify(scenarios));
+export function saveScenarios(scenarios: Scenario[]): SaveScenariosResult {
+  if (typeof window === "undefined") {
+    return { persisted: true, errorType: null, errorMessage: null };
+  }
+  try {
+    localStorage.setItem(SCENARIOS_KEY, JSON.stringify(scenarios));
+    return { persisted: true, errorType: null, errorMessage: null };
+  } catch (err) {
+    const { errorType, errorMessage } = classifyStorageError(err);
+    return {
+      persisted: false,
+      errorType,
+      errorMessage,
+    };
+  }
 }
 
 function EarningsCard({ scenario, currency }: { scenario: Scenario; currency: Currency }) {
@@ -129,6 +192,9 @@ export default function EarningsEstimatorPage() {
   const [currency, setCurrency] = useState<Currency>("XLM");
   const [scenarios, setScenarios] = useState<Scenario[]>(loadScenarios);
   const [scenarioLabel, setScenarioLabel] = useState("");
+  const [persistenceFailure, setPersistenceFailure] =
+    useState<SaveScenariosResult | null>(null);
+  const [exportedJson, setExportedJson] = useState<string | null>(null);
 
   const currentScenario: Scenario = {
     id: "current",
@@ -138,6 +204,15 @@ export default function EarningsEstimatorPage() {
     platformFeeBps,
     hoursPerJob,
   };
+
+  const applySaveResult = useCallback((result: SaveScenariosResult) => {
+    if (result.persisted) {
+      setPersistenceFailure(null);
+      setExportedJson(null);
+    } else {
+      setPersistenceFailure(result);
+    }
+  }, []);
 
   const saveCurrentScenario = useCallback(() => {
     const label = scenarioLabel.trim() || `Scenario ${scenarios.length + 1}`;
@@ -151,14 +226,44 @@ export default function EarningsEstimatorPage() {
     };
     const updated = [...scenarios, newScenario];
     setScenarios(updated);
-    saveScenarios(updated);
     setScenarioLabel("");
-  }, [scenarioLabel, scenarios, jobAmount, jobsPerMonth, platformFeeBps, hoursPerJob]);
+    const result = saveScenarios(updated);
+    applySaveResult(result);
+  }, [
+    scenarioLabel,
+    scenarios,
+    jobAmount,
+    jobsPerMonth,
+    platformFeeBps,
+    hoursPerJob,
+    applySaveResult,
+  ]);
 
-  const deleteScenario = useCallback((id: string) => {
-    const updated = scenarios.filter((s) => s.id !== id);
-    setScenarios(updated);
-    saveScenarios(updated);
+  const deleteScenario = useCallback(
+    (id: string) => {
+      const updated = scenarios.filter((s) => s.id !== id);
+      setScenarios(updated);
+      const result = saveScenarios(updated);
+      applySaveResult(result);
+    },
+    [scenarios, applySaveResult],
+  );
+
+  const retryPersistScenarios = useCallback(() => {
+    const result = saveScenarios(scenarios);
+    applySaveResult(result);
+  }, [scenarios, applySaveResult]);
+
+  const exportScenariosJson = useCallback(() => {
+    const json = JSON.stringify(scenarios, null, 2);
+    setExportedJson(json);
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        void navigator.clipboard.writeText(json).catch(() => {});
+      }
+    } catch {
+      // Ignore clipboard failures; exportedJson is also displayed for manual copy
+    }
   }, [scenarios]);
 
   return (
@@ -244,10 +349,60 @@ export default function EarningsEstimatorPage() {
       <EarningsCard scenario={currentScenario} currency={currency} />
 
       <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900">Compare Scenarios</h2>
-        <p className="mt-1 text-sm text-slate-500">
-          Save different scenarios to compare earnings side by side.
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">Compare Scenarios</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Save different scenarios to compare earnings side by side.
+            </p>
+          </div>
+          {persistenceFailure && (
+            <span
+              data-testid="unsaved-scenarios-badge"
+              className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-800"
+            >
+              Unsaved (in-memory only)
+            </span>
+          )}
+        </div>
+
+        {persistenceFailure && (
+          <div
+            role="alert"
+            data-testid="scenario-persistence-alert"
+            className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900"
+          >
+            <p className="font-medium">
+              {persistenceFailure.errorMessage}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                data-testid="retry-persist-scenarios"
+                onClick={retryPersistScenarios}
+                className="rounded-md bg-amber-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-900"
+              >
+                Retry Save
+              </button>
+              <button
+                type="button"
+                data-testid="export-scenarios-json"
+                onClick={exportScenariosJson}
+                className="rounded-md border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-900 hover:bg-amber-100"
+              >
+                Export JSON
+              </button>
+            </div>
+            {exportedJson && (
+              <pre
+                data-testid="exported-scenarios-json"
+                className="mt-3 max-h-40 overflow-auto rounded border border-amber-200 bg-white p-2 font-mono text-xs text-slate-800"
+              >
+                {exportedJson}
+              </pre>
+            )}
+          </div>
+        )}
 
         <div className="mt-4 flex gap-2">
           <input
