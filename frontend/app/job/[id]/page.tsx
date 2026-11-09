@@ -151,6 +151,15 @@ function getAutoApprovalCountdown(submittedAtStr: string | undefined) {
   };
 }
 
+export function canWalletAcceptJob(
+  job: Pick<Job, "status" | "client"> | null | undefined,
+  wallet: string | null | undefined,
+): boolean {
+  if (!wallet || !job) return false;
+  if (job.status !== "Open") return false;
+  return wallet !== job.client;
+}
+
 function JobDetailPageContent() {
   const params = useParams<{ id: string }>();
   const id = params.id;
@@ -396,9 +405,9 @@ useEffect(() => {
     };
   }, [id, wallet, isIdValid]);
 
-  const isClient = wallet && job && wallet === job.client;
-  const isFreelancer = wallet && job && wallet === job.freelancer;
-  const canAccept = Boolean(job && job.status === "Open");
+  const isClient = Boolean(wallet && job && wallet === job.client);
+  const isFreelancer = Boolean(wallet && job && wallet === job.freelancer);
+  const canAccept = canWalletAcceptJob(job, wallet);
   const canSubmit = Boolean(isFreelancer && job?.status === "InProgress");
   const canApprove = Boolean(isClient && job?.status === "SubmittedForReview");
   const canCancel = Boolean(isClient && job?.status === "Open");
@@ -422,6 +431,54 @@ useEffect(() => {
       canCancel ||
       canFreelancerCancel ||
       canTopUp;
+
+  useEffect(() => {
+    if (!canAccept && showAcceptModal) {
+      setShowAcceptModal(false);
+    }
+  }, [canAccept, showAcceptModal]);
+
+  async function handleAcceptJob() {
+    setShowAcceptModal(false);
+    if (!canWalletAcceptJob(job, wallet) || !wallet || !job) {
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      // If cover text provided, upload to IPFS and store mapping on-chain
+      if (coverText.trim()) {
+        const html = coverText;
+        const plain = htmlToPlainText(html);
+        const hash = await sha256Hex(plain);
+        const cid = await uploadToIpfs(html);
+        try {
+          await storeDescriptionCid(wallet, hash, cid);
+        } catch (err) {
+          // swallow mapping errors but continue
+          console.warn("storeDescriptionCid failed", err);
+        }
+        // Persist locally so the client can view the cover letter after accept
+        try {
+          localStorage.setItem(
+            `job-cover:${id}`,
+            JSON.stringify({ hash, cid, author: wallet }),
+          );
+        } catch {}
+      }
+      await handleAction(
+        () => acceptJob(wallet, id),
+        "Job accepted successfully.",
+        {
+          event: "job_accepted",
+          message: `You accepted Job #${id}.`,
+        },
+      );
+    } finally {
+      setLoading(false);
+      setCoverText("");
+    }
+  }
 
   async function handleAction(
     action: () => Promise<{ hash?: string }>,
@@ -1514,10 +1571,10 @@ useEffect(() => {
                 <button
                   className="min-w-0 flex-1 rounded-md border border-blue-600 bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-500 sm:flex-none sm:max-w-48 sm:py-2"
                   onClick={() => {
-                    if (!wallet) return;
+                    if (!canWalletAcceptJob(job, wallet)) return;
                     setShowAcceptModal(true);
                   }}
-                  disabled={!wallet || loading}
+                  disabled={!canAccept || loading}
                   title={
                     !wallet
                       ? "Connect your wallet to accept this job."
@@ -1532,7 +1589,7 @@ useEffect(() => {
               )}
 
                 {/* Accept Job modal with optional cover letter */}
-                {showAcceptModal && (
+                {canAccept && showAcceptModal && (
                   <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40">
                     <div className="max-w-xl w-full rounded-lg bg-white p-4 shadow-lg">
                       <h3 className="text-lg font-medium">Accept Job</h3>
@@ -1566,43 +1623,8 @@ useEffect(() => {
                         <button
                           type="button"
                           className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-                          disabled={loading}
-                          onClick={async () => {
-                            setShowAcceptModal(false);
-                            if (!wallet) return;
-                            setLoading(true);
-                            setError(null);
-                            try {
-                              // If cover text provided, upload to IPFS and store mapping on-chain
-                              if (coverText.trim()) {
-                                const html = coverText;
-                                const plain = htmlToPlainText(html);
-                                const hash = await sha256Hex(plain);
-                                const cid = await uploadToIpfs(html);
-                                try {
-                                  await storeDescriptionCid(wallet, hash, cid);
-                                } catch (err) {
-                                  // swallow mapping errors but continue
-                                  console.warn("storeDescriptionCid failed", err);
-                                }
-                                // Persist locally so the client can view the cover letter after accept
-                                try {
-                                  localStorage.setItem(`job-cover:${id}`, JSON.stringify({ hash, cid, author: wallet }));
-                                } catch {}
-                              }
-                              await handleAction(
-                                () => acceptJob(wallet, id),
-                                "Job accepted successfully.",
-                                {
-                                  event: "job_accepted",
-                                  message: `You accepted Job #${id}.`,
-                                },
-                              );
-                            } finally {
-                              setLoading(false);
-                              setCoverText("");
-                            }
-                          }}
+                          disabled={!canAccept || loading}
+                          onClick={() => void handleAcceptJob()}
                         >
                           {loading ? "Processing..." : "Accept Job"}
                         </button>

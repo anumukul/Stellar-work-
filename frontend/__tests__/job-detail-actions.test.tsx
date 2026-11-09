@@ -22,6 +22,9 @@ vi.mock("@/lib/contract", () => ({
   freelancerCancelJob: vi.fn(),
   getDescriptionCid: vi.fn(),
   storeDescriptionCid: vi.fn(),
+  getJobEscrowBalance: vi.fn().mockResolvedValue("10000000"),
+  getPlatformFeeRate: vi.fn().mockResolvedValue(250),
+  getActiveContractId: vi.fn().mockReturnValue("CCONTRACT"),
   getJobViews: vi.fn().mockResolvedValue(0),
   recordJobView: vi.fn().mockResolvedValue(undefined),
   rateJob: vi.fn(),
@@ -45,7 +48,14 @@ vi.mock("@/lib/notifications-context", () => ({
     addNotification: vi.fn(),
     markAsSeen: vi.fn(),
     markAllAsSeen: vi.fn(),
-    preferences: { job_accepted: true, work_submitted: true, work_approved: true, job_cancelled: true, dispute_raised: true, dispute_resolved: true },
+    preferences: {
+      job_accepted: true,
+      work_submitted: true,
+      work_approved: true,
+      job_cancelled: true,
+      dispute_raised: true,
+      dispute_resolved: true,
+    },
     setPreference: vi.fn(),
     clearNotifications: vi.fn(),
   }),
@@ -92,7 +102,7 @@ describe("Job detail action visibility", () => {
     });
   });
 
-  it("shows open-state actions correctly by role", async () => {
+  it("shows open-state client actions without exposing Accept Job to the job owner", async () => {
     mockGetJob.mockResolvedValue(makeJob({ status: "Open", client: "GWALLET" }));
     render(
       <ToastProvider>
@@ -101,7 +111,22 @@ describe("Job detail action visibility", () => {
     );
 
     await waitFor(() => expect(screen.getByText("Cancel Job")).toBeInTheDocument());
-    expect(screen.getByText("Accept Job")).toBeInTheDocument();
+    expect(screen.getByText("Add Funds")).toBeInTheDocument();
+    expect(screen.queryByText("Accept Job")).not.toBeInTheDocument();
+    expect(screen.queryByText("Submit Work")).not.toBeInTheDocument();
+    expect(screen.queryByText("Approve Work")).not.toBeInTheDocument();
+  });
+
+  it("shows Accept Job for non-client wallet on an open job", async () => {
+    mockGetJob.mockResolvedValue(makeJob({ status: "Open", client: "GCLIENT" }));
+    render(
+      <ToastProvider>
+        <JobDetailPage />
+      </ToastProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText("Accept Job")).toBeInTheDocument());
+    expect(screen.queryByText("Cancel Job")).not.toBeInTheDocument();
     expect(screen.queryByText("Submit Work")).not.toBeInTheDocument();
     expect(screen.queryByText("Approve Work")).not.toBeInTheDocument();
   });
