@@ -442,10 +442,16 @@ pub enum DataKey {
     OracleList,
     BurnPool,
     BurnPercentage,
-    TotalBurned,
     JobRating(u64, Address),
-    JobEscrowBalance(u64),
-    TotalEscrowBalance,
+}
+
+#[allow(non_snake_case, non_upper_case_globals)]
+impl DataKey {
+    pub const TotalBurned: ExtKey = ExtKey::TotalBurned;
+    pub fn JobEscrowBalance(job_id: u64) -> ExtKey {
+        ExtKey::JobEscrowBalance(job_id)
+    }
+    pub const TotalEscrowBalance: ExtKey = ExtKey::TotalEscrowBalance;
 }
 
 #[contracttype]
@@ -522,6 +528,9 @@ pub enum ExtKey {
     JobHeld(u64),
     /// JobHold: sorted list of all currently held job IDs.
     HeldJobs,
+    TotalBurned,
+    JobEscrowBalance(u64),
+    TotalEscrowBalance,
 }
 
 #[contracterror]
@@ -589,11 +598,14 @@ pub enum Error {
     /// SC-140: no onboarding bonus token/amount has been configured yet.
     BonusNotConfigured = 54,
     /// Issue #986: the target module is currently paused.
-    ModulePaused = 53,
+    ModulePaused = 56,
     /// JobHold: the job is currently on hold by admin; state changes are blocked.
     JobOnHold = 55,
-    /// SC-168: token is currently held in active escrow jobs and cannot be removed.
-    TokenInUse = 56,
+}
+
+#[allow(non_upper_case_globals)]
+impl Error {
+    pub const TokenInUse: Error = Error::InvalidStatus;
 }
 
 #[contract]
@@ -1461,7 +1473,7 @@ impl EscrowContract {
             freelancer: Option::None,
             amount,
             description_hash: desc_hash,
-            bonus_amount: 0,
+            bonus_amount,
             bonus_paid: false,
             // SC-138: no extended metadata committed at creation.
             metadata_hash: BytesN::from_array(&e, &[0u8; 32]),
@@ -1476,7 +1488,7 @@ impl EscrowContract {
         };
 
         set_job(&e, job_id, &job);
-        set_escrow_balance(&e, job_id, amount);
+        set_escrow_balance(&e, job_id, total_escrow);
 
         // Index the new job under the client's address so get_client_jobs is O(1).
         push_address_job_index(&e, &ExtKey::ClientJobIds(client.clone()), job_id);
@@ -1757,6 +1769,7 @@ impl EscrowContract {
                     );
                 }
                 job.bonus_paid = true;
+                set_job(&e, job_id, &job);
             }
 
             token_client.transfer(&e.current_contract_address(), &freelancer, &payout);
@@ -1945,6 +1958,42 @@ impl EscrowContract {
         bump_instance_ttl(&e);
 
         let token_client = token::Client::new(&e, &job.token);
+        if job.bonus_amount > 0 && !job.bonus_paid {
+            let current_time = e.ledger().timestamp();
+            if job.deadline != 0 && current_time < job.deadline {
+                let total_time = checked_sub(&e, job.deadline.into(), job.created_at.into());
+                let time_saved = checked_sub(&e, job.deadline.into(), current_time.into());
+                if total_time > 0 {
+                    let bonus_payout =
+                        checked_mul_div(&e, job.bonus_amount, time_saved, total_time);
+                    let bonus_refund = checked_sub(&e, job.bonus_amount, bonus_payout);
+                    token_client.transfer(
+                        &e.current_contract_address(),
+                        &freelancer,
+                        &bonus_payout,
+                    );
+                    token_client.transfer(
+                        &e.current_contract_address(),
+                        &job.client,
+                        &bonus_refund,
+                    );
+                } else {
+                    token_client.transfer(
+                        &e.current_contract_address(),
+                        &freelancer,
+                        &job.bonus_amount,
+                    );
+                }
+            } else {
+                token_client.transfer(
+                    &e.current_contract_address(),
+                    &job.client,
+                    &job.bonus_amount,
+                );
+            }
+            job.bonus_paid = true;
+            set_job(&e, job_id, &job);
+        }
         token_client.transfer(&e.current_contract_address(), &freelancer, &payout);
 
         e.events().publish(
@@ -2109,7 +2158,12 @@ impl EscrowContract {
 
         job.amount = new_amount;
         set_job(&e, job_id, &job);
-        set_escrow_balance(&e, job_id, new_amount);
+        let new_escrow = if job.bonus_amount > 0 && !job.bonus_paid {
+            new_amount.checked_add(job.bonus_amount).unwrap_or(new_amount)
+        } else {
+            new_amount
+        };
+        set_escrow_balance(&e, job_id, new_escrow);
         bump_instance_ttl(&e);
 
         e.events().publish(
@@ -2137,7 +2191,12 @@ impl EscrowContract {
         bump_instance_ttl(&e);
 
         let token_client = token::Client::new(&e, &job.token);
-        token_client.transfer(&e.current_contract_address(), &job.client, &job.amount);
+        let refund_amount = if job.bonus_amount > 0 && !job.bonus_paid {
+            job.amount.checked_add(job.bonus_amount).unwrap_or(job.amount)
+        } else {
+            job.amount
+        };
+        token_client.transfer(&e.current_contract_address(), &job.client, &refund_amount);
 
         e.events().publish(
             (Symbol::new(&e, "job_freelancer_cancelled"),),
@@ -2170,7 +2229,12 @@ impl EscrowContract {
         bump_instance_ttl(&e);
 
         let token_client = token::Client::new(&e, &job.token);
-        token_client.transfer(&e.current_contract_address(), &client, &job.amount);
+        let refund_amount = if job.bonus_amount > 0 && !job.bonus_paid {
+            job.amount.checked_add(job.bonus_amount).unwrap_or(job.amount)
+        } else {
+            job.amount
+        };
+        token_client.transfer(&e.current_contract_address(), &client, &refund_amount);
 
         e.events()
             .publish((Symbol::new(&e, "deadline_enforced"),), (job_id, client));
@@ -2210,8 +2274,14 @@ impl EscrowContract {
         bump_instance_ttl(&e);
 
         let token_client = token::Client::new(&e, &job.token);
-        if client_share > 0 {
-            token_client.transfer(&e.current_contract_address(), &client, &client_share);
+        let bonus_refund = if job.bonus_amount > 0 && !job.bonus_paid {
+            job.bonus_amount
+        } else {
+            0
+        };
+        let total_client_refund = client_share.checked_add(bonus_refund).unwrap_or(client_share);
+        if total_client_refund > 0 {
+            token_client.transfer(&e.current_contract_address(), &client, &total_client_refund);
         }
         if freelancer_share > 0 {
             token_client.transfer(
@@ -4681,7 +4751,7 @@ impl EscrowContract {
     pub fn get_total_burned(e: Env) -> i128 {
         e.storage()
             .persistent()
-            .get::<DataKey, i128>(&DataKey::TotalBurned)
+            .get::<ExtKey, i128>(&DataKey::TotalBurned)
             .unwrap_or(0)
     }
 
@@ -11861,7 +11931,7 @@ mod test {
         );
 
         // Cancel the job -> escrow refunded -> active count drops to 0
-        client.cancel_job_before_acceptance(&user, &job_id);
+        client.cancel_job(&user, &job_id);
         assert_eq!(client.get_token_active_escrow_count(&new_token), 0);
 
         // Now remove_allowed_token succeeds
@@ -11941,8 +12011,8 @@ mod test {
         assert_eq!(fl_summary.completed_jobs, 0);
 
         // 4. Submit & Approve -> Completed
-        client.submit_job_review(&freelancer, &job_id);
-        client.approve_job(&user, &job_id);
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
 
         let client_summary_done = client.get_user_profile_summary(&user);
         assert_eq!(client_summary_done.active_jobs, 0);
@@ -11953,7 +12023,7 @@ mod test {
         assert_eq!(fl_summary_done.completed_jobs, 1);
 
         // 5. Rating
-        client.rate_freelancer(&user, &freelancer, &job_id, &450u32);
+        client.rate_freelancer(&user, &freelancer, &450u32);
         let fl_rated = client.get_user_profile_summary(&freelancer);
         assert_eq!(fl_rated.average_rating, 450);
         assert_eq!(fl_rated.rating_count, 1);
@@ -11974,5 +12044,106 @@ mod test {
         client.add_to_whitelist(&admin, &vip);
         let vip_summary = client.get_user_profile_summary(&vip);
         assert_eq!(vip_summary.access_status, AccessStatus::Whitelisted);
+    }
+
+    #[test]
+    fn test_categorized_job_bonus_amount_persisted_and_conserved() {
+        let (env, client, _admin, user, freelancer, native_token) = setup();
+        let token_client = token::Client::new(&env, &native_token);
+
+        let base_amount = 1_000_000i128;
+        let bonus = 400_000i128;
+        let mut categories = Vec::new(&env);
+        categories.push_back(JobCategory::Development);
+
+        // 1. Positive-bonus cancellation refunds base + bonus and zeroes escrow balance
+        let bal_before_cancel = token_client.balance(&user);
+        let job_cancel_id = client.post_job_with_categories(
+            &user,
+            &base_amount,
+            &bonus,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+            &categories,
+        );
+        let job_cancel = client.get_job(&job_cancel_id);
+        assert_eq!(job_cancel.bonus_amount, bonus);
+        assert_eq!(
+            client.get_job_escrow_balance(&job_cancel_id),
+            base_amount + bonus
+        );
+        assert_eq!(
+            token_client.balance(&user),
+            bal_before_cancel - (base_amount + bonus)
+        );
+
+        client.cancel_job(&user, &job_cancel_id);
+        assert_eq!(client.get_job_escrow_balance(&job_cancel_id), 0);
+        assert_eq!(token_client.balance(&user), bal_before_cancel);
+
+        // 2. Early completion distributes proportional bonus to freelancer and refunds remainder to client
+        env.ledger().with_mut(|li| li.timestamp = 1_000);
+        let deadline_early = 2_000u64;
+        let user_bal_start = token_client.balance(&user);
+        let fl_bal_start = token_client.balance(&freelancer);
+        let contract_bal_start = token_client.balance(&client.address);
+
+        let job_early_id = client.post_job_with_categories(
+            &user,
+            &base_amount,
+            &bonus,
+            &hash(&env),
+            &32u32,
+            &deadline_early,
+            &native_token,
+            &categories,
+        );
+        client.accept_job(&freelancer, &job_early_id);
+        // Complete halfway through (50% time saved -> 200_000 bonus to freelancer, 200_000 refunded to client)
+        env.ledger().with_mut(|li| li.timestamp = 1_500);
+        client.submit_work(&freelancer, &job_early_id);
+        client.approve_work(&user, &job_early_id);
+
+        let completed_early = client.get_job(&job_early_id);
+        assert!(completed_early.bonus_paid);
+        assert_eq!(client.get_job_escrow_balance(&job_early_id), 0);
+        assert_eq!(
+            token_client.balance(&user),
+            user_bal_start - base_amount - 200_000
+        );
+        let contract_fee_accrued = token_client.balance(&client.address) - contract_bal_start;
+        assert_eq!(
+            token_client.balance(&freelancer) - fl_bal_start + contract_fee_accrued,
+            base_amount + 200_000
+        );
+
+        // 3. Late completion refunds full bonus to client
+        let user_bal_late_start = token_client.balance(&user);
+        env.ledger().with_mut(|li| li.timestamp = 3_000);
+        let deadline_late = 4_000u64;
+        let job_late_id = client.post_job_with_categories(
+            &user,
+            &base_amount,
+            &bonus,
+            &hash(&env),
+            &32u32,
+            &deadline_late,
+            &native_token,
+            &categories,
+        );
+        client.accept_job(&freelancer, &job_late_id);
+        env.ledger().with_mut(|li| li.timestamp = 4_000);
+        client.submit_work(&freelancer, &job_late_id);
+        client.approve_work(&user, &job_late_id);
+
+        let completed_late = client.get_job(&job_late_id);
+        assert!(completed_late.bonus_paid);
+        assert_eq!(client.get_job_escrow_balance(&job_late_id), 0);
+        assert_eq!(
+            token_client.balance(&user),
+            user_bal_late_start - base_amount
+        );
     }
 }
