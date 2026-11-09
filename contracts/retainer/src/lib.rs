@@ -9,6 +9,11 @@ const RATE_LIMIT_STATE_TTL_THRESHOLD: u32 = 17_280;
 const RATE_LIMIT_STATE_TTL_BUMP: u32 = 518_400;
 const MAX_RATE_LIMIT_WINDOW_SECONDS: u64 = 2_592_000;
 
+/// Minimum permitted renewal count when creating a retainer (at least 1 renewal).
+pub const MIN_RETAINER_RENEWALS: u32 = 1;
+/// Maximum permitted renewal count when creating a retainer (bounds agreement schedule).
+pub const MAX_RETAINER_RENEWALS: u32 = 1_000;
+
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -22,6 +27,9 @@ pub enum Error {
     NotInitialized = 7,
     InvalidRateLimitConfig = 8,
     RateLimitExceeded = 9,
+    InvalidAmount = 10,
+    InvalidInterval = 11,
+    InvalidMaxRenewals = 12,
 }
 
 #[contracttype]
@@ -194,6 +202,15 @@ impl RetainerContract {
         token: Address,
     ) -> Result<u64, Error> {
         client.require_auth();
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if interval_ledgers == 0 {
+            return Err(Error::InvalidInterval);
+        }
+        if !(MIN_RETAINER_RENEWALS..=MAX_RETAINER_RENEWALS).contains(&max_renewals) {
+            return Err(Error::InvalidMaxRenewals);
+        }
         enforce_rate_limit(&env, &client)?;
         let count: u64 = env
             .storage()
@@ -305,6 +322,13 @@ impl RetainerContract {
             .persistent()
             .get(&DataKey::Retainer(retainer_id))
             .expect("Retainer not found")
+    }
+
+    pub fn get_retainer_count(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&DataKey::RetainerCount)
+            .unwrap_or(0)
     }
 
     pub fn export_job(
@@ -449,8 +473,9 @@ impl RetainerContract {
 
 #[cfg(test)]
 mod test {
+    extern crate std;
     use super::*;
-    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::{Address as _, Ledger as _};
     use soroban_sdk::{Address, Env};
 
     fn setup() -> (
@@ -863,5 +888,64 @@ mod test {
             client.renew_retainer(&user, &rid);
         }));
         assert!(further_renew.is_err());
+    }
+
+    #[test]
+    fn test_create_retainer_rejects_invalid_amounts_intervals_and_renewal_bounds() {
+        let (env, client, _, user, freelancer) = setup();
+        let token = Address::generate(&env);
+
+        // Zero amount rejected
+        assert_eq!(
+            client.try_create_retainer(&user, &freelancer, &0i128, &100u64, &5u32, &token),
+            Err(Ok(Error::InvalidAmount))
+        );
+        // Negative amount rejected
+        assert_eq!(
+            client.try_create_retainer(&user, &freelancer, &-500_000i128, &100u64, &5u32, &token),
+            Err(Ok(Error::InvalidAmount))
+        );
+        // Zero interval_ledgers rejected
+        assert_eq!(
+            client.try_create_retainer(&user, &freelancer, &500_000i128, &0u64, &5u32, &token),
+            Err(Ok(Error::InvalidInterval))
+        );
+        // Zero max_renewals rejected
+        assert_eq!(
+            client.try_create_retainer(&user, &freelancer, &500_000i128, &100u64, &0u32, &token),
+            Err(Ok(Error::InvalidMaxRenewals))
+        );
+        // Excessive max_renewals (> MAX_RETAINER_RENEWALS) rejected
+        assert_eq!(
+            client.try_create_retainer(
+                &user,
+                &freelancer,
+                &500_000i128,
+                &100u64,
+                &(MAX_RETAINER_RENEWALS + 1),
+                &token,
+            ),
+            Err(Ok(Error::InvalidMaxRenewals))
+        );
+
+        // Counter and storage must remain completely untouched after rejected creations
+        assert_eq!(client.get_retainer_count(), 0u64);
+        let has_retainer_1 = env.as_contract(&client.address, || {
+            env.storage().persistent().has(&DataKey::Retainer(1u64))
+        });
+        assert!(!has_retainer_1);
+
+        // Valid creation after rejected calls starts cleanly at ID 1
+        let rid = client.create_retainer(
+            &user,
+            &freelancer,
+            &500_000i128,
+            &100u64,
+            &MAX_RETAINER_RENEWALS,
+            &token,
+        );
+        assert_eq!(rid, 1u64);
+        assert_eq!(client.get_retainer_count(), 1u64);
+        assert_eq!(client.get_retainer(&rid).amount, 500_000i128);
     }
 }
