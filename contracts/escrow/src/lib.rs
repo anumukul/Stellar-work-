@@ -5883,6 +5883,13 @@ fn checked_mul_div(e: &Env, left: i128, mul: i128, div: i128) -> i128 {
         .unwrap_or_else(|| panic_with_error!(e, Error::InsufficientFunds))
 }
 
+/// Select the fee rate (in basis points) for mount from configured fee tiers.
+///
+/// Among all tiers whose min_amount <= amount, the tier with the highest
+/// min_amount threshold is selected regardless of storage index order.
+/// Tie-breaking policy: if multiple qualifying tiers share the exact same
+/// min_amount, the lower ee_bps wins so tier ordering never changes the fee.
+/// If no tier qualifies (or no tiers are configured), falls back to the base FeeBps.
 fn calculate_fee_for_amount(e: &Env, amount: i128) -> i128 {
     let tier_count = e
         .storage()
@@ -5894,7 +5901,7 @@ fn calculate_fee_for_amount(e: &Env, amount: i128) -> i128 {
         return get_fee_bps_storage(e);
     }
 
-    let mut matched_bps: i128 = get_fee_bps_storage(e);
+    let mut best_tier: Option<(i128, i128)> = None;
 
     for i in 0..tier_count {
         if let Some(tier) = e
@@ -5903,12 +5910,26 @@ fn calculate_fee_for_amount(e: &Env, amount: i128) -> i128 {
             .get::<DataKey, FeeTier>(&DataKey::FeeTier(i))
         {
             if amount >= tier.min_amount {
-                matched_bps = tier.fee_bps;
+                best_tier = match best_tier {
+                    None => Some((tier.min_amount, tier.fee_bps)),
+                    Some((best_min, best_bps)) => {
+                        if tier.min_amount > best_min
+                            || (tier.min_amount == best_min && tier.fee_bps < best_bps)
+                        {
+                            Some((tier.min_amount, tier.fee_bps))
+                        } else {
+                            Some((best_min, best_bps))
+                        }
+                    }
+                };
             }
         }
     }
 
-    matched_bps
+    match best_tier {
+        Some((_, bps)) => bps,
+        None => get_fee_bps_storage(e),
+    }
 }
 
 fn get_fee_tier_count(e: &Env) -> u32 {
@@ -11974,5 +11995,65 @@ mod test {
         client.add_to_whitelist(&admin, &vip);
         let vip_summary = client.get_user_profile_summary(&vip);
         assert_eq!(vip_summary.access_status, AccessStatus::Whitelisted);
+    }
+
+    #[test]
+    fn test_fee_tier_selection_uses_highest_qualifying_threshold_regardless_of_index() {
+        let (env, client, admin, user, freelancer, native_token) = setup();
+        // Base fallback rate is 250 bps (2.5%)
+        client.update_fee_bps(&admin, &250i128);
+
+        // Configure tiers in descending (unsorted) order of min_amount:
+        // Tier 0: min_amount = 10_000_000 -> 100 bps (1.0%)
+        // Tier 1: min_amount =  1_000_000 -> 200 bps (2.0%)
+        client.update_fee_tier(&admin, &0u32, &10_000_000i128, &100i128);
+        client.update_fee_tier(&admin, &1u32, &1_000_000i128, &200i128);
+
+        // 1. Below all tiers (500_000 < 1_000_000) -> fallback 250 bps (fee = 12_500)
+        let job_below = client.post_job(&user, &500_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &job_below);
+        client.submit_work(&freelancer, &job_below);
+        client.approve_work(&user, &job_below);
+        assert_eq!(client.get_fees(&native_token), 12_500i128);
+
+        // 2. Exact lower boundary (1_000_000) -> 200 bps (fee = 20_000, cumulative = 32_500)
+        let job_low = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &job_low);
+        client.submit_work(&freelancer, &job_low);
+        client.approve_work(&user, &job_low);
+        assert_eq!(client.get_fees(&native_token), 32_500i128);
+
+        // 3. Exact higher boundary (10_000_000) with unsorted tiers -> must pick Tier 0 (100 bps => fee = 100_000, cumulative = 132_500)
+        let job_high = client.post_job(&user, &10_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &job_high);
+        client.submit_work(&freelancer, &job_high);
+        client.approve_work(&user, &job_high);
+        assert_eq!(client.get_fees(&native_token), 132_500i128);
+
+        // 4. Swap tier order (Tier 0 = 1_000_000 @ 200 bps, Tier 1 = 10_000_000 @ 100 bps) -> identical 100 bps fee on 10_000_000
+        client.update_fee_tier(&admin, &0u32, &1_000_000i128, &200i128);
+        client.update_fee_tier(&admin, &1u32, &10_000_000i128, &100i128);
+        let job_high_sorted = client.post_job(&user, &10_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &job_high_sorted);
+        client.submit_work(&freelancer, &job_high_sorted);
+        client.approve_work(&user, &job_high_sorted);
+        assert_eq!(client.get_fees(&native_token), 232_500i128);
+
+        // 5. Equal thresholds (Tier 0 = 5_000_000 @ 180 bps, Tier 1 = 5_000_000 @ 120 bps, and vice-versa) -> deterministic lower fee_bps (120 bps => fee = 60_000)
+        client.update_fee_tier(&admin, &0u32, &5_000_000i128, &180i128);
+        client.update_fee_tier(&admin, &1u32, &5_000_000i128, &120i128);
+        let job_tie_1 = client.post_job(&user, &5_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &job_tie_1);
+        client.submit_work(&freelancer, &job_tie_1);
+        client.approve_work(&user, &job_tie_1);
+        assert_eq!(client.get_fees(&native_token), 292_500i128);
+
+        client.update_fee_tier(&admin, &0u32, &5_000_000i128, &120i128);
+        client.update_fee_tier(&admin, &1u32, &5_000_000i128, &180i128);
+        let job_tie_2 = client.post_job(&user, &5_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &job_tie_2);
+        client.submit_work(&freelancer, &job_tie_2);
+        client.approve_work(&user, &job_tie_2);
+        assert_eq!(client.get_fees(&native_token), 352_500i128);
     }
 }
