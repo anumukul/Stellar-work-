@@ -73,6 +73,52 @@ export function sanitizeRichText(raw: string): string {
 // ─── Stellar address validation ────────────────────────────────────────────────
 
 const STELLAR_ADDRESS_RE = /^G[A-Z2-7]{55}$/;
+const STELLAR_CONTRACT_RE = /^C[A-Z2-7]{55}$/;
+const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+const STRKEY_CONTRACT_VERSION_BYTE = 2 << 3; // 16 ('C')
+
+function crc16Xmodem(bytes: Uint8Array): number {
+  let crc = 0x0000;
+  for (let i = 0; i < bytes.length; i++) {
+    crc ^= bytes[i]! << 8;
+    for (let bit = 0; bit < 8; bit++) {
+      if ((crc & 0x8000) !== 0) {
+        crc = ((crc << 1) ^ 0x1021) & 0xffff;
+      } else {
+        crc = (crc << 1) & 0xffff;
+      }
+    }
+  }
+  return crc;
+}
+
+function isValidContractStrKey(encoded: string): boolean {
+  if (!STELLAR_CONTRACT_RE.test(encoded)) return false;
+
+  const decoded = new Uint8Array(35);
+  let buffer = 0;
+  let bitsLeft = 0;
+  let byteIndex = 0;
+
+  for (let i = 0; i < encoded.length; i++) {
+    const val = BASE32_ALPHABET.indexOf(encoded[i]!);
+    if (val === -1) return false;
+    buffer = (buffer << 5) | val;
+    bitsLeft += 5;
+    if (bitsLeft >= 8) {
+      bitsLeft -= 8;
+      decoded[byteIndex++] = (buffer >> bitsLeft) & 0xff;
+    }
+  }
+
+  if (bitsLeft !== 0 || byteIndex !== 35) return false;
+  if (decoded[0] !== STRKEY_CONTRACT_VERSION_BYTE) return false;
+
+  const payloadWithVersion = decoded.subarray(0, 33);
+  const expectedChecksum = crc16Xmodem(payloadWithVersion);
+  const actualChecksum = decoded[33]! | (decoded[34]! << 8);
+  return expectedChecksum === actualChecksum;
+}
 
 export function validateStellarAddress(raw: string): string | null {
   if (typeof raw !== "string") return null;
@@ -83,6 +129,13 @@ export function validateStellarAddress(raw: string): string | null {
 
 export function sanitizeStellarAddress(raw: string): string {
   return validateStellarAddress(raw) ?? "";
+}
+
+export function validateContractAddress(raw: string): string | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim().toUpperCase();
+  if (!isValidContractStrKey(trimmed)) return null;
+  return trimmed;
 }
 
 // ─── Amount validation ─────────────────────────────────────────────────────────
@@ -236,7 +289,7 @@ export function sanitizeAnnouncementMessage(raw: string): string {
 // ─── Stellar contract address validation ───────────────────────────────────────
 
 export function validateTokenAddress(raw: string): string | null {
-  const addr = validateStellarAddress(raw);
-  if (!addr) return "Token address must be a valid Stellar contract address (G...).";
+  const addr = validateContractAddress(raw);
+  if (!addr) return "Token address must be a valid Stellar contract address (C...).";
   return null;
 }
