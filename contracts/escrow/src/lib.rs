@@ -73,6 +73,10 @@ fn module_paused_key(e: &Env, module_code: u32) -> (Symbol, u32) {
     (Symbol::new(e, "mod_pause"), module_code)
 }
 
+fn desc_cid_owner_key(e: &Env, desc_hash: &BytesN<32>) -> (Symbol, BytesN<32>) {
+    (Symbol::new(e, "desc_own"), desc_hash.clone())
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum JobStatus {
@@ -1477,6 +1481,16 @@ impl EscrowContract {
 
         set_job(&e, job_id, &job);
         set_escrow_balance(&e, job_id, amount);
+
+        let owner_key = desc_cid_owner_key(&e, &job.description_hash);
+        if !e.storage().persistent().has(&owner_key) {
+            e.storage().persistent().set(&owner_key, &client);
+            e.storage().persistent().extend_ttl(
+                &owner_key,
+                ACTIVE_JOB_LIFETIME_THRESHOLD,
+                INSTANCE_BUMP_AMOUNT,
+            );
+        }
 
         // Index the new job under the client's address so get_client_jobs is O(1).
         push_address_job_index(&e, &ExtKey::ClientJobIds(client.clone()), job_id);
@@ -3117,9 +3131,49 @@ impl EscrowContract {
     pub fn store_description_cid(e: Env, caller: Address, desc_hash: BytesN<32>, cid: String) {
         caller.require_auth();
         require_active_access(&e, &caller);
-        if cid.is_empty() {
+        if desc_hash == BytesN::from_array(&e, &[0u8; 32])
+            || cid.is_empty()
+            || !is_valid_cid_v1(&cid)
+        {
             panic_with_error!(&e, Error::InvalidDescriptionHash);
         }
+        let owner_key = desc_cid_owner_key(&e, &desc_hash);
+        if let Some(owner) = e
+            .storage()
+            .persistent()
+            .get::<(Symbol, BytesN<32>), Address>(&owner_key)
+        {
+            if owner != caller {
+                panic_with_error!(&e, Error::Unauthorized);
+            }
+        } else {
+            let total_jobs = get_jobs_count(&e);
+            let mut job_owner: Option<Address> = None;
+            let mut i = 1u64;
+            while i <= total_jobs {
+                if let Some(job) = e
+                    .storage()
+                    .persistent()
+                    .get::<DataKey, Job>(&DataKey::Job(i))
+                {
+                    if job.description_hash == desc_hash {
+                        if job.client != caller {
+                            panic_with_error!(&e, Error::Unauthorized);
+                        }
+                        job_owner = Some(job.client);
+                        break;
+                    }
+                }
+                i += 1;
+            }
+            let publisher = job_owner.unwrap_or_else(|| caller.clone());
+            e.storage().persistent().set(&owner_key, &publisher);
+        }
+        e.storage().persistent().extend_ttl(
+            &owner_key,
+            ACTIVE_JOB_LIFETIME_THRESHOLD,
+            INSTANCE_BUMP_AMOUNT,
+        );
         e.storage()
             .persistent()
             .set(&DataKey::DescriptionCidMapping(desc_hash.clone()), &cid);
@@ -9951,7 +10005,10 @@ mod test {
     fn store_and_get_description_cid_round_trip() {
         let (env, client, _, user, _, _) = setup();
         let desc_hash = BytesN::from_array(&env, &[0xAB; 32]);
-        let cid = String::from_str(&env, "QmTest123456789CIDValue");
+        let cid = String::from_str(
+            &env,
+            "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+        );
 
         client.store_description_cid(&user, &desc_hash, &cid);
 
@@ -9972,14 +10029,71 @@ mod test {
     fn store_description_cid_updates_existing() {
         let (env, client, _, user, _, _) = setup();
         let desc_hash = BytesN::from_array(&env, &[0xAB; 32]);
-        let cid1 = String::from_str(&env, "QmFirstCID123456789");
-        let cid2 = String::from_str(&env, "QmSecondCID987654321");
+        let cid1 = String::from_str(
+            &env,
+            "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+        );
+        let cid2 = String::from_str(
+            &env,
+            "bafybeihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku",
+        );
 
         client.store_description_cid(&user, &desc_hash, &cid1);
         client.store_description_cid(&user, &desc_hash, &cid2);
 
         let retrieved = client.get_description_cid(&desc_hash);
         assert_eq!(retrieved, cid2);
+    }
+
+    #[test]
+    fn store_description_cid_rejects_overwrite_by_second_user_and_invalid_cid() {
+        let (env, client, _, user_a, user_b, native_token) = setup();
+        let desc_hash = BytesN::from_array(&env, &[0xCD; 32]);
+        let valid_cid_a = String::from_str(
+            &env,
+            "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+        );
+        let valid_cid_b = String::from_str(
+            &env,
+            "bafybeihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku",
+        );
+
+        // Client A posts a job with desc_hash and stores its CID
+        client.post_job(
+            &user_a,
+            &1_000_000i128,
+            &desc_hash,
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.store_description_cid(&user_a, &desc_hash, &valid_cid_a);
+        assert_eq!(client.get_description_cid(&desc_hash), valid_cid_a);
+
+        // Active user B attempting to overwrite client A's description CID is rejected
+        let overwrite_res = client.try_store_description_cid(&user_b, &desc_hash, &valid_cid_b);
+        assert_eq!(
+            overwrite_res,
+            Err(Ok(soroban_sdk::Error::from_contract_error(
+                Error::Unauthorized as u32
+            )))
+        );
+        assert_eq!(client.get_description_cid(&desc_hash), valid_cid_a);
+
+        // Malformed / non-CIDv1 inputs are rejected by the CID validator
+        let unowned_hash = BytesN::from_array(&env, &[0xEF; 32]);
+        let bad_cid = String::from_str(&env, "not-a-valid-cid-v1");
+        let bad_res = client.try_store_description_cid(&user_a, &unowned_hash, &bad_cid);
+        assert_eq!(
+            bad_res,
+            Err(Ok(soroban_sdk::Error::from_contract_error(
+                Error::InvalidDescriptionHash as u32
+            )))
+        );
+        assert_eq!(
+            client.get_description_cid(&unowned_hash),
+            String::from_str(&env, "")
+        );
     }
 
     // ── SC-138: job extended metadata IPFS hash storage ──────────────────────
