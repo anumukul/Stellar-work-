@@ -5,15 +5,9 @@ import templatesData from "@/data/job-templates.json";
 import TemplateCard from "@/components/TemplateCard";
 import { useRouter } from "next/navigation";
 import { useWallet } from "@/lib/wallet-context";
+import { encodeSharedTemplate, type SharedTemplate } from "@/lib/shared-template";
 
-type Template = {
-  id: string;
-  title: string;
-  category: string;
-  amountMin?: string;
-  amountMax?: string;
-  description: string;
-};
+type Template = SharedTemplate;
 
 const CUSTOM_KEY = "stellarwork:templates:custom";
 const DRAFT_PREFIX = "stellarwork:post-job-draft:";
@@ -90,10 +84,9 @@ export default function TemplatesPage() {
 
   function handleShare(t: Template) {
     try {
-      const encoded = encodeURIComponent(btoa(JSON.stringify(t)));
+      const encoded = encodeSharedTemplate(t);
       const url = `${window.location.origin}/post-job?template=${encoded}`;
       navigator.clipboard.writeText(url);
-      // Small visual feedback could be added; keep minimal.
     } catch {
       // noop
     }
@@ -138,7 +131,7 @@ export default function TemplatesPage() {
         />
         <select
           value={category}
-          onChange={(e) => setCategory(e.target.value as any)}
+          onChange={(e) => setCategory(e.target.value as string)}
           className="rounded border px-3 py-2"
         >
           <option value="all">All</option>

@@ -19,6 +19,7 @@ import ContractRetryBanner from "@/components/ContractRetryBanner";
 import dynamic from "next/dynamic";
 import { getExplorerTxUrl, isValidStellarAddress, parseContractError, getNativeBalance, retryQueuedWrites, getCurrentOriginResult, type OriginValidationResult } from "@/lib/stellar";
 import { useWallet } from "@/lib/wallet-context";
+import * as nextNavigation from "next/navigation";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState } from "react";
 import {
@@ -37,6 +38,23 @@ import {
 import { JobCategorySelect } from "@/components/JobCategorySelect";
 import { embedLanguage } from "@/lib/language";
 import { StrKey } from "@stellar/stellar-sdk";
+import {
+  encodeSharedTemplate,
+  parseSharedTemplateParam,
+  SHARED_TEMPLATE_VERSION,
+  MAX_SHARED_TEMPLATE_PARAM_LENGTH,
+  type SharedTemplate,
+  type SharedTemplateParseResult,
+} from "@/lib/shared-template";
+
+export {
+  encodeSharedTemplate,
+  parseSharedTemplateParam,
+  SHARED_TEMPLATE_VERSION,
+  MAX_SHARED_TEMPLATE_PARAM_LENGTH,
+  type SharedTemplate,
+  type SharedTemplateParseResult,
+};
 
 const MIN_JOB_AMOUNT_XLM = 0.5;
 const DRAFT_STORAGE_KEY_PREFIX = "stellarwork:post-job-draft:";
@@ -242,13 +260,13 @@ const RichTextEditor = dynamic(
 
 interface DraftData {
   amount: string;
-  bonusAmount: string;
+  bonusAmount?: string;
   description: string;
   deadline: string;
   tokenAddress: string;
-  title: string;
-  category: string;
-  language: string;
+  title?: string;
+  category?: string;
+  language?: string;
   savedAt: number;
 }
 
@@ -282,10 +300,42 @@ function clearDraft(walletAddress: string | null): void {
   }
 }
 
+function useSafeTemplateSearchParam(): string | null {
+  let hookValue: string | null = null;
+  try {
+    const maybeUseSearchParams = (
+      nextNavigation as {
+        useSearchParams?: () => { get: (name: string) => string | null } | null;
+      }
+    ).useSearchParams;
+    if (typeof maybeUseSearchParams === "function") {
+      const searchParams = maybeUseSearchParams();
+      hookValue = searchParams?.get("template") ?? null;
+    }
+  } catch {
+    // Partial next/navigation mock in unit tests without useSearchParams
+  }
+
+  if (hookValue !== null) {
+    return hookValue;
+  }
+
+  if (typeof window !== "undefined" && window.location?.search) {
+    try {
+      return new URLSearchParams(window.location.search).get("template");
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
 import { sha256Hex, htmlToPlainText } from "@/lib/crypto";
 
 export default function PostJobPage() {
   const router = useRouter();
+  const rawTemplateParam = useSafeTemplateSearchParam();
   const { wallet, walletNetwork, connectWallet } = useWallet();
   const [amount, setAmount] = useState("");
   const [bonusAmount, setBonusAmount] = useState("");
@@ -330,12 +380,20 @@ export default function PostJobPage() {
     return sessionStorage.getItem("stellarwork:advanced-open") === "true";
   });
 
+  // Shared template state
+  const [sharedTemplate, setSharedTemplate] = useState<SharedTemplate | null>(null);
+  const [sharedTemplateStatus, setSharedTemplateStatus] = useState<
+    "idle" | "applied" | "conflict"
+  >("idle");
+  const [sharedTemplateError, setSharedTemplateError] = useState<string | null>(null);
+
   // Draft saving state
   const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
   const [hasDraft, setHasDraft] = useState(false);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const redirectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevWalletRef = useRef<string | null>(null);
+  const suppressAutoSaveRef = useRef(false);
 
   useEffect(() => {
     return () => {
@@ -346,8 +404,27 @@ export default function PostJobPage() {
   // Restore draft on mount and on wallet change
   useEffect(() => {
     const draft = loadDraft(wallet);
-    if (draft) {
+    const parsedResult = parseSharedTemplateParam(
+      rawTemplateParam,
+      maxDescPayloadBytes,
+    );
+
+    if (parsedResult.error) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSharedTemplateError(parsedResult.error);
+      setSharedTemplate(null);
+      setSharedTemplateStatus("idle");
+    } else if (parsedResult.template) {
+      setSharedTemplateError(null);
+      setSharedTemplate(parsedResult.template);
+    } else {
+      setSharedTemplateError(null);
+      setSharedTemplate(null);
+      setSharedTemplateStatus("idle");
+    }
+
+    if (draft) {
+      suppressAutoSaveRef.current = true;
       setAmount(draft.amount);
       setDescription(draft.description);
       setDeadline(draft.deadline);
@@ -359,13 +436,27 @@ export default function PostJobPage() {
       setLanguage(draft.language || "en");
       setDraftSavedAt(draft.savedAt);
       setHasDraft(true);
+      if (parsedResult.template) {
+        setSharedTemplateStatus("conflict");
+      }
+    } else if (parsedResult.template) {
+      suppressAutoSaveRef.current = true;
+      setAmount(parsedResult.template.amountMin ?? "");
+      setDescription(parsedResult.template.description);
+      setDeadline("");
+      setTokenAddress(process.env.NEXT_PUBLIC_NATIVE_TOKEN ?? "");
+      setTitle(parsedResult.template.title);
+      setCategory(parsedResult.template.category || "development");
+      setDraftSavedAt(null);
+      setHasDraft(false);
+      setSharedTemplateStatus("applied");
     } else {
       setHasDraft(false);
       setDraftSavedAt(null);
     }
     prevWalletRef.current = wallet;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [rawTemplateParam]);
 
   // When wallet address changes, clear current form and load draft for new wallet
   useEffect(() => {
@@ -381,6 +472,7 @@ export default function PostJobPage() {
     setHasDraft(false);
     const draft = loadDraft(wallet);
     if (draft) {
+      suppressAutoSaveRef.current = true;
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setAmount(draft.amount);
       setDescription(draft.description);
@@ -392,8 +484,18 @@ export default function PostJobPage() {
       setCategory(draft.category || "development");
       setDraftSavedAt(draft.savedAt);
       setHasDraft(true);
+      if (sharedTemplate) {
+        setSharedTemplateStatus("conflict");
+      }
+    } else if (sharedTemplate) {
+      suppressAutoSaveRef.current = true;
+      setAmount(sharedTemplate.amountMin ?? "");
+      setDescription(sharedTemplate.description);
+      setTitle(sharedTemplate.title);
+      setCategory(sharedTemplate.category || "development");
+      setSharedTemplateStatus("applied");
     }
-  }, [wallet]);
+  }, [wallet, sharedTemplate]);
 
   // BUG-28: token addresses differ per network, so drop a stale one on switch.
   const prevNetworkRef = useRef(walletNetwork);
@@ -454,6 +556,10 @@ export default function PostJobPage() {
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
     }
+    if (suppressAutoSaveRef.current) {
+      suppressAutoSaveRef.current = false;
+      return;
+    }
     const isEmpty =
       !amount.trim() && !htmlToPlainText(description).trim() && !deadline;
     if (isEmpty) return;
@@ -494,6 +600,41 @@ export default function PostJobPage() {
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [amount, description, deadline]);
+
+  function handleApplySharedTemplate() {
+    if (!sharedTemplate) return;
+    const nextAmount = sharedTemplate.amountMin ?? "";
+    const nextTitle = sharedTemplate.title;
+    const nextCategory = sharedTemplate.category || "development";
+    const nextDescription = sharedTemplate.description;
+
+    suppressAutoSaveRef.current = true;
+    setAmount(nextAmount);
+    setTitle(nextTitle);
+    setCategory(nextCategory);
+    setDescription(nextDescription);
+    setFieldErrors({});
+    setSharedTemplateStatus("applied");
+
+    const now = Date.now();
+    saveDraft(wallet, {
+      amount: nextAmount,
+      bonusAmount,
+      description: nextDescription,
+      deadline,
+      tokenAddress,
+      title: nextTitle,
+      category: nextCategory,
+      language,
+      savedAt: now,
+    });
+    setDraftSavedAt(now);
+    setHasDraft(true);
+  }
+
+  function handleDismissSharedTemplate() {
+    setSharedTemplateStatus("idle");
+  }
 
   function handleClearDraft() {
     clearDraft(wallet);
@@ -732,6 +873,86 @@ export default function PostJobPage() {
           }
         }}
       />
+
+      {sharedTemplateError && (
+        <div
+          role="alert"
+          data-testid="shared-template-error"
+          className="flex items-center justify-between rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
+        >
+          <span>{sharedTemplateError}</span>
+          <button
+            type="button"
+            onClick={() => setSharedTemplateError(null)}
+            className="ml-4 rounded px-2 py-0.5 text-xs font-medium text-red-700 hover:bg-red-100"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {sharedTemplate && sharedTemplateStatus === "conflict" && (
+        <div
+          role="region"
+          aria-label="Shared template review"
+          data-testid="shared-template-conflict-banner"
+          className="rounded-md border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900"
+        >
+          <p className="font-medium">
+            Shared template ready: {sharedTemplate.title}
+          </p>
+          <p className="mt-1 text-xs text-sky-800">
+            Your existing local draft was kept so you do not lose unsaved work. Choose whether to apply the shared template or keep your local draft.
+          </p>
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              onClick={handleApplySharedTemplate}
+              className="rounded bg-sky-600 px-3 py-1 text-xs font-medium text-white hover:bg-sky-700"
+            >
+              Apply shared template
+            </button>
+            <button
+              type="button"
+              onClick={handleDismissSharedTemplate}
+              className="rounded border border-sky-300 bg-white px-3 py-1 text-xs font-medium text-sky-800 hover:bg-sky-100"
+            >
+              Keep local draft
+            </button>
+          </div>
+        </div>
+      )}
+
+      {sharedTemplate && sharedTemplateStatus === "applied" && (
+        <div
+          role="status"
+          aria-live="polite"
+          data-testid="shared-template-applied-banner"
+          className="flex items-center justify-between rounded-md border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900"
+        >
+          <div>
+            <p className="font-medium">
+              Prefilled from shared template: {sharedTemplate.title}
+            </p>
+            <p className="mt-0.5 text-xs text-sky-800">
+              Review the prefilled fields ({sharedTemplate.category}
+              {sharedTemplate.amountMin && sharedTemplate.amountMax
+                ? `, suggested ${sharedTemplate.amountMin}–${sharedTemplate.amountMax} XLM`
+                : sharedTemplate.amountMin
+                  ? `, suggested ${sharedTemplate.amountMin} XLM`
+                  : ""}
+              ) before submitting.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleDismissSharedTemplate}
+            className="ml-4 rounded px-2 py-0.5 text-xs font-medium text-sky-700 hover:bg-sky-100"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {hasDraft && draftSavedAt && (
         <div className="flex items-center justify-between rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
