@@ -184,6 +184,11 @@ impl RetainerContract {
         Ok(())
     }
 
+    /// Creates a new recurring retainer agreement.
+    ///
+    /// Zero-renewal policy: max_renewals must be at least 1. Attempting to create
+    /// a retainer with max_renewals == 0 is rejected with [Error::MaxRenewalsReached]
+    /// before advancing the retainer counter or writing to storage.
     pub fn create_retainer(
         env: Env,
         client: Address,
@@ -194,6 +199,9 @@ impl RetainerContract {
         token: Address,
     ) -> Result<u64, Error> {
         client.require_auth();
+        if max_renewals == 0 {
+            return Err(Error::MaxRenewalsReached);
+        }
         enforce_rate_limit(&env, &client)?;
         let count: u64 = env
             .storage()
@@ -248,18 +256,13 @@ impl RetainerContract {
             return Err(Error::IntervalNotPassed);
         }
         if retainer.current_renewal >= retainer.max_renewals {
-            retainer.status = RetainerStatus::Completed;
-            env.storage()
-                .persistent()
-                .set(&DataKey::Retainer(retainer_id), &retainer);
-            env.events().publish(
-                (symbol_short!("ret_cmpl"),),
-                (retainer_id, retainer.client, retainer.freelancer),
-            );
-            return Ok(retainer_id);
+            return Err(Error::MaxRenewalsReached);
         }
         retainer.current_renewal += 1;
         retainer.last_renewed_at = now;
+        if retainer.current_renewal >= retainer.max_renewals {
+            retainer.status = RetainerStatus::Completed;
+        }
         env.storage()
             .persistent()
             .set(&DataKey::Retainer(retainer_id), &retainer);
@@ -267,11 +270,17 @@ impl RetainerContract {
             (symbol_short!("ret_rnwd"),),
             (
                 retainer_id,
-                retainer.client,
-                retainer.freelancer,
+                retainer.client.clone(),
+                retainer.freelancer.clone(),
                 retainer.amount,
             ),
         );
+        if retainer.status == RetainerStatus::Completed {
+            env.events().publish(
+                (symbol_short!("ret_cmpl"),),
+                (retainer_id, retainer.client, retainer.freelancer),
+            );
+        }
         Ok(retainer_id)
     }
 
@@ -449,8 +458,9 @@ impl RetainerContract {
 
 #[cfg(test)]
 mod test {
+    extern crate std;
     use super::*;
-    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::{Address as _, Ledger as _};
     use soroban_sdk::{Address, Env};
 
     fn setup() -> (
@@ -863,5 +873,41 @@ mod test {
             client.renew_retainer(&user, &rid);
         }));
         assert!(further_renew.is_err());
+    }
+
+    #[test]
+    fn test_final_renewal_immediately_completes_and_zero_renewal_policy_rejected() {
+        let (env, client, _, user, freelancer) = setup();
+        let token = Address::generate(&env);
+
+        // Zero-renewal creation is explicitly rejected with MaxRenewalsReached
+        assert_eq!(
+            client.try_create_retainer(&user, &freelancer, &500_000i128, &10u64, &0u32, &token),
+            Err(Ok(Error::MaxRenewalsReached))
+        );
+
+        // Single-renewal retainer moves to Completed on the very first renewal
+        let rid = client.create_retainer(&user, &freelancer, &500_000i128, &10u64, &1u32, &token);
+        env.ledger().with_mut(|li| {
+            li.timestamp = 25;
+        });
+        client.renew_retainer(&user, &rid);
+
+        let retainer = client.get_retainer(&rid);
+        assert_eq!(retainer.current_renewal, 1u32);
+        assert_eq!(retainer.status, RetainerStatus::Completed);
+
+        // Subsequent cancellation or renewal fails immediately without needing another interval
+        assert_eq!(
+            client.try_cancel_retainer(&user, &rid),
+            Err(Ok(Error::InvalidStatus))
+        );
+        env.ledger().with_mut(|li| {
+            li.timestamp = 100;
+        });
+        assert_eq!(
+            client.try_renew_retainer(&user, &rid),
+            Err(Ok(Error::InvalidStatus))
+        );
     }
 }
