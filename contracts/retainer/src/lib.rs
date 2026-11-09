@@ -61,9 +61,15 @@ pub struct Retainer {
     pub last_renewed_at: u64,
 }
 
+pub const CROSS_CHAIN_JOB_SCHEMA_VERSION: u32 = 2;
+pub const SOURCE_CHAIN_STELLAR: &str = "stellar";
+
+/// Legacy V1 cross-chain record layout prior to schema version 2.
+/// In V1, origin_contract erroneously stored the destination contract address
+/// and 	arget_chain was only emitted in j_xport events rather than persisted.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CrossChainJob {
+pub struct LegacyCrossChainJobV1 {
     pub source_chain: String,
     pub source_job_id: u64,
     pub origin_contract: Address,
@@ -72,6 +78,48 @@ pub struct CrossChainJob {
     pub token: Address,
     pub exported: bool,
     pub imported: bool,
+}
+
+/// Versioned cross-chain job record (schema version 2+).
+///
+/// Compatibility for existing V1 exports:
+/// - Schema version 2 separates source metadata (source_chain, source_job_id,
+///   origin_contract) from destination metadata (	arget_chain, 	arget_contract).
+/// - Legacy V1 records can be migrated via [LegacyCrossChainJobV1::into_v2], which
+///   restores origin_contract to the local contract address and moves the V1
+///   origin_contract value into 	arget_contract with ersion = 1.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CrossChainJob {
+    pub version: u32,
+    pub source_chain: String,
+    pub source_job_id: u64,
+    pub origin_contract: Address,
+    pub target_chain: String,
+    pub target_contract: Address,
+    pub freelancer: Address,
+    pub amount: i128,
+    pub token: Address,
+    pub exported: bool,
+    pub imported: bool,
+}
+
+impl LegacyCrossChainJobV1 {
+    pub fn into_v2(self, local_contract: Address, fallback_target_chain: String) -> CrossChainJob {
+        CrossChainJob {
+            version: 1,
+            source_chain: self.source_chain,
+            source_job_id: self.source_job_id,
+            origin_contract: local_contract,
+            target_chain: fallback_target_chain,
+            target_contract: self.origin_contract,
+            freelancer: self.freelancer,
+            amount: self.amount,
+            token: self.token,
+            exported: self.exported,
+            imported: self.imported,
+        }
+    }
 }
 
 #[contracttype]
@@ -327,10 +375,15 @@ impl RetainerContract {
         env.storage()
             .instance()
             .set(&DataKey::CrossChainJobCount, &cc_id);
+        let source_chain = String::from_str(&env, SOURCE_CHAIN_STELLAR);
+        let origin_contract = env.current_contract_address();
         let cross = CrossChainJob {
-            source_chain: String::from_str(&env, "stellar"),
+            version: CROSS_CHAIN_JOB_SCHEMA_VERSION,
+            source_chain: source_chain.clone(),
             source_job_id,
-            origin_contract: target_contract,
+            origin_contract: origin_contract.clone(),
+            target_chain: target_chain.clone(),
+            target_contract: target_contract.clone(),
             freelancer: freelancer.clone(),
             amount,
             token: token.clone(),
@@ -342,7 +395,16 @@ impl RetainerContract {
             .set(&DataKey::CrossChainJob(cc_id), &cross);
         env.events().publish(
             (symbol_short!("j_xport"),),
-            (cc_id, source_job_id, freelancer, amount, target_chain),
+            (
+                cc_id,
+                source_chain,
+                source_job_id,
+                origin_contract,
+                freelancer,
+                amount,
+                target_chain,
+                target_contract,
+            ),
         );
         Ok(cc_id)
     }
@@ -449,9 +511,10 @@ impl RetainerContract {
 
 #[cfg(test)]
 mod test {
+    extern crate std;
     use super::*;
-    use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::{Address, Env};
+    use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
+    use soroban_sdk::{Address, Env, TryFromVal};
 
     fn setup() -> (
         Env,
@@ -863,5 +926,104 @@ mod test {
             client.renew_retainer(&user, &rid);
         }));
         assert!(further_renew.is_err());
+    }
+
+    #[test]
+    fn test_export_job_separates_origin_and_target_across_two_destinations() {
+        let (env, client, admin, _, freelancer) = setup();
+        let token_a = Address::generate(&env);
+        let token_b = Address::generate(&env);
+        let target_contract_a = Address::generate(&env);
+        let target_contract_b = Address::generate(&env);
+        let target_chain_a = String::from_str(&env, "ethereum");
+        let target_chain_b = String::from_str(&env, "polygon");
+
+        let cc_id_a = client.export_job(
+            &admin,
+            &101u64,
+            &freelancer,
+            &1_500_000i128,
+            &token_a,
+            &target_chain_a,
+            &target_contract_a,
+        );
+        let cc_id_b = client.export_job(
+            &admin,
+            &202u64,
+            &freelancer,
+            &2_750_000i128,
+            &token_b,
+            &target_chain_b,
+            &target_contract_b,
+        );
+
+        let record_a = client.get_cross_chain_job(&cc_id_a);
+        assert_eq!(record_a.version, CROSS_CHAIN_JOB_SCHEMA_VERSION);
+        assert_eq!(record_a.source_chain, String::from_str(&env, "stellar"));
+        assert_eq!(record_a.source_job_id, 101u64);
+        assert_eq!(record_a.origin_contract, client.address);
+        assert_ne!(record_a.origin_contract, target_contract_a);
+        assert_eq!(record_a.target_chain, target_chain_a);
+        assert_eq!(record_a.target_contract, target_contract_a);
+        assert_eq!(record_a.freelancer, freelancer);
+        assert_eq!(record_a.amount, 1_500_000i128);
+        assert_eq!(record_a.token, token_a);
+        assert!(record_a.exported);
+        assert!(!record_a.imported);
+
+        let record_b = client.get_cross_chain_job(&cc_id_b);
+        assert_eq!(record_b.version, CROSS_CHAIN_JOB_SCHEMA_VERSION);
+        assert_eq!(record_b.source_chain, String::from_str(&env, "stellar"));
+        assert_eq!(record_b.source_job_id, 202u64);
+        assert_eq!(record_b.origin_contract, client.address);
+        assert_ne!(record_b.origin_contract, target_contract_b);
+        assert_eq!(record_b.target_chain, target_chain_b);
+        assert_eq!(record_b.target_contract, target_contract_b);
+        assert_ne!(record_a.target_contract, record_b.target_contract);
+        assert_ne!(record_a.target_chain, record_b.target_chain);
+
+        let events = env.events().all();
+        assert!(events.len() >= 2);
+        let last_event = events.get(events.len() - 1).unwrap();
+        let decoded_event: (
+            u64,
+            String,
+            u64,
+            Address,
+            Address,
+            i128,
+            String,
+            Address,
+        ) = TryFromVal::try_from_val(&env, &last_event.2).unwrap();
+        assert_eq!(
+            decoded_event,
+            (
+                cc_id_b,
+                String::from_str(&env, "stellar"),
+                202u64,
+                client.address.clone(),
+                freelancer.clone(),
+                2_750_000i128,
+                target_chain_b.clone(),
+                target_contract_b.clone(),
+            )
+        );
+
+        // Verify legacy V1 migration helper preserves origin/destination separation
+        let legacy = LegacyCrossChainJobV1 {
+            source_chain: String::from_str(&env, "stellar"),
+            source_job_id: 55u64,
+            origin_contract: target_contract_a.clone(),
+            freelancer: freelancer.clone(),
+            amount: 900_000i128,
+            token: token_a,
+            exported: true,
+            imported: false,
+        };
+        let migrated = legacy.into_v2(client.address.clone(), target_chain_a.clone());
+        assert_eq!(migrated.version, 1);
+        assert_eq!(migrated.origin_contract, client.address);
+        assert_eq!(migrated.target_contract, target_contract_a);
+        assert_eq!(migrated.target_chain, target_chain_a);
     }
 }
