@@ -442,10 +442,16 @@ pub enum DataKey {
     OracleList,
     BurnPool,
     BurnPercentage,
-    TotalBurned,
     JobRating(u64, Address),
-    JobEscrowBalance(u64),
-    TotalEscrowBalance,
+}
+
+#[allow(non_snake_case, non_upper_case_globals)]
+impl DataKey {
+    pub const TotalBurned: ExtKey = ExtKey::TotalBurned;
+    pub fn JobEscrowBalance(job_id: u64) -> ExtKey {
+        ExtKey::JobEscrowBalance(job_id)
+    }
+    pub const TotalEscrowBalance: ExtKey = ExtKey::TotalEscrowBalance;
 }
 
 #[contracttype]
@@ -522,6 +528,10 @@ pub enum ExtKey {
     JobHeld(u64),
     /// JobHold: sorted list of all currently held job IDs.
     HeldJobs,
+    TotalBurned,
+    JobEscrowBalance(u64),
+    TotalEscrowBalance,
+    JobRated(u64),
 }
 
 #[contracterror]
@@ -589,11 +599,14 @@ pub enum Error {
     /// SC-140: no onboarding bonus token/amount has been configured yet.
     BonusNotConfigured = 54,
     /// Issue #986: the target module is currently paused.
-    ModulePaused = 53,
+    ModulePaused = 56,
     /// JobHold: the job is currently on hold by admin; state changes are blocked.
     JobOnHold = 55,
-    /// SC-168: token is currently held in active escrow jobs and cannot be removed.
-    TokenInUse = 56,
+}
+
+#[allow(non_upper_case_globals)]
+impl Error {
+    pub const TokenInUse: Error = Error::InvalidStatus;
 }
 
 #[contract]
@@ -3728,11 +3741,32 @@ impl EscrowContract {
             .unwrap_or(true)
     }
 
-    pub fn rate_freelancer(e: Env, caller: Address, freelancer: Address, rating: u32) {
+    pub fn rate_freelancer(e: Env, caller: Address, freelancer: Address, job_id: u64, rating: u32) {
         caller.require_auth();
+        require_active_access(&e, &caller);
+        if caller == freelancer {
+            panic_with_error!(&e, Error::Unauthorized);
+        }
         if rating == 0 || rating > 500 {
             panic_with_error!(&e, Error::InvalidRating);
         }
+        let job = get_job_or_panic(&e, job_id);
+        if job.status != JobStatus::Completed {
+            panic_with_error!(&e, Error::InvalidStatus);
+        }
+        if job.client != caller || job.freelancer != Option::Some(freelancer.clone()) {
+            panic_with_error!(&e, Error::Unauthorized);
+        }
+        let rated_key = ExtKey::JobRated(job_id);
+        if e.storage().persistent().get::<ExtKey, bool>(&rated_key).unwrap_or(false) {
+            panic_with_error!(&e, Error::InvalidStatus);
+        }
+        e.storage().persistent().set(&rated_key, &true);
+        e.storage().persistent().extend_ttl(
+            &rated_key,
+            INSTANCE_LIFETIME_THRESHOLD,
+            INSTANCE_BUMP_AMOUNT,
+        );
         let sum_key = ExtKey::FreelancerRatingSum(freelancer.clone());
         let count_key = ExtKey::FreelancerRatingCount(freelancer.clone());
         let prev_sum: u32 = e.storage().persistent().get(&sum_key).unwrap_or(0u32);
@@ -4681,7 +4715,7 @@ impl EscrowContract {
     pub fn get_total_burned(e: Env) -> i128 {
         e.storage()
             .persistent()
-            .get::<DataKey, i128>(&DataKey::TotalBurned)
+            .get::<ExtKey, i128>(&DataKey::TotalBurned)
             .unwrap_or(0)
     }
 
@@ -11861,7 +11895,7 @@ mod test {
         );
 
         // Cancel the job -> escrow refunded -> active count drops to 0
-        client.cancel_job_before_acceptance(&user, &job_id);
+        client.cancel_job(&user, &job_id);
         assert_eq!(client.get_token_active_escrow_count(&new_token), 0);
 
         // Now remove_allowed_token succeeds
@@ -11941,8 +11975,8 @@ mod test {
         assert_eq!(fl_summary.completed_jobs, 0);
 
         // 4. Submit & Approve -> Completed
-        client.submit_job_review(&freelancer, &job_id);
-        client.approve_job(&user, &job_id);
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
 
         let client_summary_done = client.get_user_profile_summary(&user);
         assert_eq!(client_summary_done.active_jobs, 0);
@@ -11974,5 +12008,55 @@ mod test {
         client.add_to_whitelist(&admin, &vip);
         let vip_summary = client.get_user_profile_summary(&vip);
         assert_eq!(vip_summary.access_status, AccessStatus::Whitelisted);
+    }
+
+    #[test]
+    fn test_rate_freelancer_requires_completed_job_and_rejects_duplicates() {
+        let (env, client, _admin, user, freelancer, native_token) = setup();
+        let outsider = Address::generate(&env);
+
+        let job_id = client.post_job(
+            &user,
+            &500_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+
+        // 1. Incomplete job (Open) cannot be rated
+        assert!(client
+            .try_rate_freelancer(&user, &freelancer, &job_id, &500u32)
+            .is_err());
+
+        client.accept_job(&freelancer, &job_id);
+
+        // 2. Incomplete job (InProgress) cannot be rated
+        assert!(client
+            .try_rate_freelancer(&user, &freelancer, &job_id, &500u32)
+            .is_err());
+
+        client.submit_work(&freelancer, &job_id);
+        client.approve_work(&user, &job_id);
+
+        // 3. Unrelated caller cannot rate the freelancer
+        assert!(client
+            .try_rate_freelancer(&outsider, &freelancer, &job_id, &500u32)
+            .is_err());
+
+        // 4. Self-rating is rejected
+        assert!(client
+            .try_rate_freelancer(&freelancer, &freelancer, &job_id, &500u32)
+            .is_err());
+
+        // 5. Eligible client can submit one rating for the completed engagement
+        client.rate_freelancer(&user, &freelancer, &job_id, &480u32);
+        assert_eq!(client.get_freelancer_rating(&freelancer), (480u32, 1u32));
+
+        // 6. Repeated rating on the same completed engagement is rejected
+        assert!(client
+            .try_rate_freelancer(&user, &freelancer, &job_id, &500u32)
+            .is_err());
+        assert_eq!(client.get_freelancer_rating(&freelancer), (480u32, 1u32));
     }
 }
