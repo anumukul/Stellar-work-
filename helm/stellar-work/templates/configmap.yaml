@@ -6,7 +6,9 @@ metadata:
     {{- include "stellar-work.labels" . | nindent 4 }}
 data:
   NEXT_PUBLIC_CONTRACT_ID: {{ .Values.env.NEXT_PUBLIC_CONTRACT_ID | quote }}
-  NEXT_PUBLIC_STELLAR_NETWORK: {{ .Values.env.NEXT_PUBLIC_STELLAR_NETWORK | quote }}
+  NEXT_PUBLIC_NETWORK: {{ .Values.env.NEXT_PUBLIC_NETWORK | default .Values.env.NEXT_PUBLIC_STELLAR_NETWORK | default "testnet" | quote }}
+  NEXT_PUBLIC_STELLAR_NETWORK: {{ .Values.env.NEXT_PUBLIC_STELLAR_NETWORK | default .Values.env.NEXT_PUBLIC_NETWORK | default "testnet" | quote }}
   NEXT_PUBLIC_HORIZON_URL: {{ .Values.env.NEXT_PUBLIC_HORIZON_URL | quote }}
-  NEXT_PUBLIC_SOROBAN_RPC_URL: {{ .Values.env.NEXT_PUBLIC_SOROBAN_RPC_URL | quote }}
+  NEXT_PUBLIC_SOROBAN_RPC: {{ .Values.env.NEXT_PUBLIC_SOROBAN_RPC | default .Values.env.NEXT_PUBLIC_SOROBAN_RPC_URL | quote }}
+  NEXT_PUBLIC_SOROBAN_RPC_URL: {{ .Values.env.NEXT_PUBLIC_SOROBAN_RPC_URL | default .Values.env.NEXT_PUBLIC_SOROBAN_RPC | quote }}
   NEXT_PUBLIC_ADMIN_ADDRESS: {{ .Values.env.NEXT_PUBLIC_ADMIN_ADDRESS | quote }}

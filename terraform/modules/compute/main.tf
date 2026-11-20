@@ -162,6 +162,13 @@ resource "aws_ecs_service" "main" {
   desired_count   = var.app_count
   launch_type     = "FARGATE"
 
+  deployment_circuit_breaker {
+    enable   = var.enable_deployment_circuit_breaker
+    rollback = var.enable_deployment_rollback
+  }
+
+  health_check_grace_period_seconds = var.health_check_grace_period_seconds
+
   network_configuration {
     security_groups  = [var.ecs_tasks_security_group_id]
     subnets          = var.private_subnet_ids

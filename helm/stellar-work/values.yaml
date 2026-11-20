@@ -60,20 +60,29 @@ podDisruptionBudget:
   enabled: false
   minAvailable: 1
 
+startupProbe:
+  httpGet:
+    path: /api/health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 30
+
 livenessProbe:
   httpGet:
-    path: /
+    path: /api/health
     port: http
-  initialDelaySeconds: 30
+  initialDelaySeconds: 0
   periodSeconds: 10
   timeoutSeconds: 5
   failureThreshold: 3
 
 readinessProbe:
   httpGet:
-    path: /
+    path: /api/health
     port: http
-  initialDelaySeconds: 10
+  initialDelaySeconds: 0
   periodSeconds: 5
   timeoutSeconds: 3
   failureThreshold: 3
@@ -81,10 +90,13 @@ readinessProbe:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+topologySpreadConstraints: []
 
 env:
   NEXT_PUBLIC_CONTRACT_ID: ""
+  NEXT_PUBLIC_NETWORK: testnet
   NEXT_PUBLIC_STELLAR_NETWORK: testnet
   NEXT_PUBLIC_HORIZON_URL: "https://horizon-testnet.stellar.org"
+  NEXT_PUBLIC_SOROBAN_RPC: "https://soroban-testnet.stellar.org"
   NEXT_PUBLIC_SOROBAN_RPC_URL: "https://soroban-testnet.stellar.org"
   NEXT_PUBLIC_ADMIN_ADDRESS: ""
