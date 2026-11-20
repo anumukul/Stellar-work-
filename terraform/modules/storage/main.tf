@@ -89,7 +89,7 @@ resource "aws_s3_bucket_public_access_block" "backups" {
   restrict_public_buckets = true
 }
 
-# Lifecycle rules to transition backups to Glacier after 30 days and delete after 90 days
+# Lifecycle rules to transition backups to Glacier after 30 days and delete after 90 days for current and noncurrent versions
 resource "aws_s3_bucket_lifecycle_configuration" "backups" {
   bucket = aws_s3_bucket.backups.id
 
@@ -103,7 +103,17 @@ resource "aws_s3_bucket_lifecycle_configuration" "backups" {
     }
 
     expiration {
-      days = 90
+      days                         = 90
+      expired_object_delete_marker = true
+    }
+
+    noncurrent_version_transition {
+      noncurrent_days = 30
+      storage_class   = "GLACIER"
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 90
     }
   }
 }

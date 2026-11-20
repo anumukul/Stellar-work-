@@ -86,7 +86,7 @@ resource "aws_ecs_task_definition" "app" {
         logDriver = "awslogs"
         options = {
           "awslogs-group"         = aws_cloudwatch_log_group.ecs_log_group.name
-          "awslogs-region"        = "us-east-1"
+          "awslogs-region"        = var.aws_region
           "awslogs-stream-prefix" = "frontend"
         }
       }
@@ -142,11 +142,41 @@ resource "aws_lb_target_group" "app" {
   }
 }
 
-# Redirect HTTP to HTTPS (for production, but here set up simply as HTTP forwarder to container)
+# HTTP Listener - Redirects to HTTPS in production or when certificate is configured, else forwards
 resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.main.arn
   port              = "80"
   protocol          = "HTTP"
+
+  dynamic "default_action" {
+    for_each = var.certificate_arn != "" || var.environment == "prod" ? [1] : []
+    content {
+      type = "redirect"
+      redirect {
+        port        = "443"
+        protocol    = "HTTPS"
+        status_code = "HTTP_301"
+      }
+    }
+  }
+
+  dynamic "default_action" {
+    for_each = var.certificate_arn == "" && var.environment != "prod" ? [1] : []
+    content {
+      type             = "forward"
+      target_group_arn = aws_lb_target_group.app.arn
+    }
+  }
+}
+
+# HTTPS Listener (terminates TLS at ALB when certificate_arn is configured)
+resource "aws_lb_listener" "https" {
+  count             = var.certificate_arn != "" ? 1 : 0
+  load_balancer_arn = aws_lb.main.arn
+  port              = "443"
+  protocol          = "HTTPS"
+  ssl_policy        = var.ssl_policy
+  certificate_arn   = var.certificate_arn
 
   default_action {
     type             = "forward"
@@ -174,7 +204,7 @@ resource "aws_ecs_service" "main" {
     container_port   = var.container_port
   }
 
-  depends_on = [aws_lb_listener.http]
+  depends_on = [aws_lb_listener.http, aws_lb_listener.https]
 
   tags = {
     Environment = var.environment

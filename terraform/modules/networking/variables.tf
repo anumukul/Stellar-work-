@@ -20,3 +20,9 @@ variable "private_subnet_cidrs" {
   description = "CIDR blocks for private subnets"
   default     = ["10.0.10.0/24", "10.0.11.0/24"]
 }
+
+variable "container_port" {
+  type        = number
+  description = "Port exposed by the container and allowed from ALB"
+  default     = 3000
+}

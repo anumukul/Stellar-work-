@@ -57,3 +57,21 @@ variable "app_count" {
   description = "Number of ECS tasks to run"
   default     = 2
 }
+
+variable "aws_region" {
+  type        = string
+  description = "AWS region for logging and resources"
+  default     = "us-east-1"
+}
+
+variable "certificate_arn" {
+  type        = string
+  description = "ARN of the ACM certificate for HTTPS listener"
+  default     = ""
+}
+
+variable "ssl_policy" {
+  type        = string
+  description = "SSL Policy for HTTPS listener"
+  default     = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+}

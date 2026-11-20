@@ -75,7 +75,7 @@ resource "aws_cloudwatch_dashboard" "main" {
           ]
           period = 300
           stat   = "Average"
-          region = "us-east-1"
+          region = var.aws_region
           title  = "ECS Service Resource Utilization"
         }
       },
@@ -91,7 +91,7 @@ resource "aws_cloudwatch_dashboard" "main" {
           ]
           period = 300
           stat   = "Sum"
-          region = "us-east-1"
+          region = var.aws_region
           title  = "ALB Request Count"
         }
       }

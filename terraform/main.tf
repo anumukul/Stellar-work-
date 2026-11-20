@@ -12,9 +12,10 @@ module "github_oidc" {
 }
 
 module "networking" {
-  source      = "./modules/networking"
-  environment = var.environment
-  vpc_cidr    = var.vpc_cidr
+  source         = "./modules/networking"
+  environment    = var.environment
+  vpc_cidr       = var.vpc_cidr
+  container_port = var.container_port
 }
 
 module "compute" {
@@ -26,7 +27,10 @@ module "compute" {
   alb_security_group_id       = module.networking.alb_security_group_id
   ecs_tasks_security_group_id = module.networking.ecs_tasks_security_group_id
   container_image             = var.container_image
+  container_port              = var.container_port
   app_count                   = var.app_count
+  aws_region                  = var.aws_region
+  certificate_arn             = var.certificate_arn
 }
 
 module "storage" {
@@ -40,4 +44,5 @@ module "monitoring" {
   ecs_cluster_name = module.compute.ecs_cluster_name
   ecs_service_name = module.compute.ecs_service_name
   email_recipient  = var.email_recipient
+  aws_region       = var.aws_region
 }

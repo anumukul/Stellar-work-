@@ -63,3 +63,15 @@ variable "create_oidc_provider" {
   EOT
   default     = true
 }
+
+variable "container_port" {
+  type        = number
+  description = "Port exposed by the Next.js container and target group"
+  default     = 3000
+}
+
+variable "certificate_arn" {
+  type        = string
+  description = "ARN of the ACM certificate for HTTPS listener"
+  default     = ""
+}
