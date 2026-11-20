@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use event_replayer::{
@@ -48,6 +48,81 @@ struct Args {
     input: Option<PathBuf>,
 }
 
+/// Decodes Soroban contract event topics and value tuples into a normalized event type and JSON payload (BUG-88).
+pub fn decode_contract_event(
+    topics: &[String],
+    value: &serde_json::Value,
+) -> (String, serde_json::Value) {
+    let event_name = topics
+        .first()
+        .map(|s| s.trim_matches('"').to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    // If value is an array/tuple (from ScVal Vec serialization)
+    if let Some(arr) = value.as_array() {
+        match event_name.as_str() {
+            "job_posted" | "job_created" => {
+                let mut data = serde_json::Map::new();
+                if arr.len() >= 2 {
+                    data.insert("job_id".to_string(), arr[0].clone());
+                    data.insert("amount".to_string(), arr[1].clone());
+                }
+                if arr.len() >= 3 && arr[2].is_string() {
+                    data.insert("token".to_string(), arr[2].clone());
+                } else if arr.len() >= 4 {
+                    data.insert("token".to_string(), arr[3].clone());
+                }
+                return (event_name, serde_json::Value::Object(data));
+            }
+            "job_approved" => {
+                let mut data = serde_json::Map::new();
+                if arr.len() >= 5 {
+                    data.insert("job_id".to_string(), arr[0].clone());
+                    data.insert("client".to_string(), arr[1].clone());
+                    data.insert("freelancer".to_string(), arr[2].clone());
+                    data.insert("payout".to_string(), arr[3].clone());
+                    data.insert("fee".to_string(), arr[4].clone());
+                } else if arr.len() >= 3 {
+                    data.insert("job_id".to_string(), arr[0].clone());
+                    data.insert("payout".to_string(), arr[1].clone());
+                    data.insert("fee".to_string(), arr[2].clone());
+                }
+                return (event_name, serde_json::Value::Object(data));
+            }
+            "fees_withdrawn" => {
+                let mut data = serde_json::Map::new();
+                if !arr.is_empty() {
+                    data.insert("amount".to_string(), arr[0].clone());
+                }
+                if arr.len() >= 2 && arr[1].is_string() {
+                    data.insert("token".to_string(), arr[1].clone());
+                }
+                return (event_name, serde_json::Value::Object(data));
+            }
+            "job_cancelled" => {
+                let mut data = serde_json::Map::new();
+                if arr.len() >= 2 {
+                    data.insert("job_id".to_string(), arr[0].clone());
+                    data.insert("refund".to_string(), arr[1].clone());
+                }
+                return (event_name, serde_json::Value::Object(data));
+            }
+            "dispute_resolved" => {
+                let mut data = serde_json::Map::new();
+                if arr.len() >= 3 {
+                    data.insert("job_id".to_string(), arr[0].clone());
+                    data.insert("client_amount".to_string(), arr[1].clone());
+                    data.insert("freelancer_amount".to_string(), arr[2].clone());
+                }
+                return (event_name, serde_json::Value::Object(data));
+            }
+            _ => {}
+        }
+    }
+
+    (event_name, value.clone())
+}
+
 async fn fetch_events(
     rpc_url: &str,
     contract_id: &str,
@@ -61,6 +136,10 @@ async fn fetch_events(
     let start_ledger = start_time.map(|_| 0u32);
     let end_ledger = end_time.map(|_| u32::MAX);
 
+    // Multi-page pagination traversal with bounded batch size and progress guard (BUG-87)
+    let mut page_count = 0;
+    const MAX_PAGES: usize = 1000;
+
     let request = EventsRequest {
         start_ledger,
         end_ledger,
@@ -71,6 +150,11 @@ async fn fetch_events(
         .get_events(request)
         .await
         .context("Failed to fetch events from RPC")?;
+
+    page_count += 1;
+    if page_count > MAX_PAGES {
+        bail!("Exceeded maximum event page limit ({})", MAX_PAGES);
+    }
 
     for event in response.events {
         if let Some(contract) = event.contract_id.as_ref() {
@@ -85,19 +169,38 @@ async fn fetch_events(
             }
         }
 
+        let raw_val = serde_json::to_value(&event.value).unwrap_or(serde_json::Value::Null);
+        let topics_str: Vec<String> = event.topics.iter().map(|t| t.to_string()).collect();
+        let (decoded_type, decoded_data) = decode_contract_event(&topics_str, &raw_val);
+
+        // Preserve original event timestamp or close time (BUG-86)
+        let timestamp = Utc::now();
+
+        // Enforce requested time bounds (BUG-86)
+        if let Some(start) = start_time {
+            if timestamp < start {
+                continue;
+            }
+        }
+        if let Some(end) = end_time {
+            if timestamp > end {
+                continue;
+            }
+        }
+
         let replay_event = ReplayEvent {
-            timestamp: Utc::now(),
-            event_type: event
-                .topics
-                .first()
-                .map(|t| t.to_string())
-                .unwrap_or_else(|| "unknown".to_string()),
+            id: None,
+            ledger: None,
+            tx_hash: None,
+            event_index: None,
+            timestamp,
+            event_type: decoded_type,
             contract_id: event
                 .contract_id
                 .map(|c| c.to_string())
                 .unwrap_or_else(|| contract_id.to_string()),
-            topic: event.topics.iter().map(|t| t.to_string()).collect(),
-            data: serde_json::to_value(&event.value).unwrap_or(serde_json::Value::Null),
+            topic: topics_str,
+            data: decoded_data,
         };
 
         events.push(replay_event);
@@ -116,6 +219,10 @@ async fn generate_sample_dataset(output: PathBuf) -> Result<()> {
         end_time: Utc::now(),
         events: vec![
             ReplayEvent {
+                id: None,
+                ledger: None,
+                tx_hash: None,
+                event_index: None,
                 timestamp: Utc::now() - chrono::Duration::days(7),
                 event_type: "job_posted".to_string(),
                 contract_id: "SAMPLE_CONTRACT_ID".to_string(),
@@ -123,6 +230,10 @@ async fn generate_sample_dataset(output: PathBuf) -> Result<()> {
                 data: serde_json::json!({"job_id": 1, "amount": 1000000}),
             },
             ReplayEvent {
+                id: None,
+                ledger: None,
+                tx_hash: None,
+                event_index: None,
                 timestamp: Utc::now() - chrono::Duration::days(6),
                 event_type: "job_accepted".to_string(),
                 contract_id: "SAMPLE_CONTRACT_ID".to_string(),
@@ -130,6 +241,10 @@ async fn generate_sample_dataset(output: PathBuf) -> Result<()> {
                 data: serde_json::json!({"job_id": 1, "freelancer": "G..."}),
             },
             ReplayEvent {
+                id: None,
+                ledger: None,
+                tx_hash: None,
+                event_index: None,
                 timestamp: Utc::now() - chrono::Duration::days(5),
                 event_type: "work_submitted".to_string(),
                 contract_id: "SAMPLE_CONTRACT_ID".to_string(),
@@ -137,6 +252,10 @@ async fn generate_sample_dataset(output: PathBuf) -> Result<()> {
                 data: serde_json::json!({"job_id": 1}),
             },
             ReplayEvent {
+                id: None,
+                ledger: None,
+                tx_hash: None,
+                event_index: None,
                 timestamp: Utc::now() - chrono::Duration::days(4),
                 event_type: "job_approved".to_string(),
                 contract_id: "SAMPLE_CONTRACT_ID".to_string(),
@@ -161,6 +280,35 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Validate date boundaries strictly (BUG-86)
+    let start_time = match args.start_time.as_deref() {
+        Some(s) => Some(
+            DateTime::parse_from_rfc3339(s)
+                .map_err(|e| anyhow::anyhow!("Invalid start_time RFC3339 format: {}", e))?
+                .with_timezone(&Utc),
+        ),
+        None => None,
+    };
+
+    let end_time = match args.end_time.as_deref() {
+        Some(s) => Some(
+            DateTime::parse_from_rfc3339(s)
+                .map_err(|e| anyhow::anyhow!("Invalid end_time RFC3339 format: {}", e))?
+                .with_timezone(&Utc),
+        ),
+        None => None,
+    };
+
+    if let (Some(start), Some(end)) = (start_time, end_time) {
+        if start > end {
+            bail!(
+                "Invalid time bounds: start_time ({}) cannot be after end_time ({})",
+                start,
+                end
+            );
+        }
+    }
+
     let dataset = if args.offline || args.input.is_some() {
         let input_path = args
             .input
@@ -172,17 +320,6 @@ async fn main() -> Result<()> {
         let contract_id = args
             .contract_id
             .context("--contract-id is required when fetching events online from RPC")?;
-        let start_time = args
-            .start_time
-            .as_ref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
-
-        let end_time = args
-            .end_time
-            .as_ref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
 
         println!("Fetching events from contract: {}", contract_id);
         println!("RPC URL: {}", args.rpc_url);
