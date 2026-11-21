@@ -28,7 +28,7 @@
     "test:visual:update": "playwright test e2e/visual-regression.spec.ts --project=chromium --update-snapshots"
   },
   "dependencies": {
-    "@sentry/nextjs": "^9.0.0",
+    "@sentry/nextjs": "^11.14.0",
     "@dnd-kit/core": "^5.0.0",
     "@dnd-kit/sortable": "^6.0.0",
     "@ledgerhq/hw-app-str": "^6.28.0",
