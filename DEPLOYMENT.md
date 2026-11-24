@@ -1,6 +1,6 @@
 # Kubernetes Deployment with Helm
 
-This guide explains how to deploy StellarWork on a Kubernetes cluster using the included Helm chart.
+This guide explains how to deploy StellarWork on a Kubernetes cluster using the included Helm chart.  
 
 ## Prerequisites
 
