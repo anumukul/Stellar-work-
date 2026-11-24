@@ -21,7 +21,7 @@ stellarwork
 ```
 
 ## Local DevNet (Isolated Testing)
-
+ 
 For fully isolated contract testing without relying on public testnets, use the devnet scripts:
 
 ```bash
