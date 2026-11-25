@@ -51,9 +51,7 @@ export default function ComparePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Sizes the loading skeleton to the number of jobs actually requested,
-  // same slice/filter as the real ids parsing below, so it doesn't flash a
-  // different column count than what's about to render.
+  
   const requestedIdCount = (searchParams.get("ids") ?? "")
     .split(",")
     .map((s) => parseInt(s.trim(), 10))
