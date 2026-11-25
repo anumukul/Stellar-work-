@@ -1,7 +1,4 @@
-/**
- * Unified Wallet Provider
- * Supports Freighter, WalletConnect, and Ledger hardware wallets
- */
+
 
 export type WalletType = 'freighter' | 'walletconnect' | 'ledger';
 
