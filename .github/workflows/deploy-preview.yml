@@ -12,17 +12,7 @@ concurrency:
   group: preview-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
-# ── Permissions ───────────────────────────────────────────────────────────────
-# Minimal baseline. Preview deployments run on pull requests, including those
-# from forks. id-token: write is intentionally absent at workflow level and
-# added only to the deploy-preview job.
-#
-# Note on fork PRs: GitHub does not issue OIDC tokens for workflows triggered
-# by pull_request events from forks when the forked repo is not trusted. In
-# that case the configure-aws-credentials step will be skipped gracefully —
-# preview deployments from forks go to Vercel only, which is fine because
-# VERCEL_TOKEN is a project-scoped secret and the environment gate is not set
-# for the preview environment.
+
 permissions:
   contents: read
   pull-requests: write
