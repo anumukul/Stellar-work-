@@ -24,3 +24,9 @@ variable "email_recipient" {
   description = "Email address to receive alerts"
   default     = "alerts@stellarwork.io"
 }
+
+variable "aws_region" {
+  type        = string
+  description = "AWS region for dashboard metrics and monitoring"
+  default     = "us-east-1"
+}

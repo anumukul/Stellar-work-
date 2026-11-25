@@ -58,6 +58,33 @@ variable "app_count" {
   default     = 2
 }
 
+variable "aws_region" {
+  type        = string
+  description = "AWS region for logging and resources"
+  default     = "us-east-1"
+}
+
+variable "certificate_arn" {
+  type        = string
+  description = "ARN of the ACM certificate for HTTPS listener"
+  default     = ""
+}
+
+variable "ssl_policy" {
+  type        = string
+  description = "SSL Policy for HTTPS listener"
+  default     = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+}
+  description = "Fargate instance memory (MiB)"
+  default     = "512"
+}
+
+variable "app_count" {
+  type        = number
+  description = "Number of ECS tasks to run"
+  default     = 2
+}
+
 variable "enable_deployment_circuit_breaker" {
   type        = bool
   description = "Enable deployment circuit breaker for ECS service"
