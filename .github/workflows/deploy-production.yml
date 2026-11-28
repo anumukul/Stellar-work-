@@ -89,7 +89,7 @@ jobs:
       # The ECS deploy role is assumed here with short-lived credentials.
       # No AWS_ACCESS_KEY_ID or AWS_SECRET_ACCESS_KEY are stored anywhere.
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.0.2
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v4.0.2
         with:
           role-to-assume: ${{ vars.TERRAFORM_APPLY_ROLE_ARN }}
           aws-region: us-east-1
